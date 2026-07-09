@@ -1,0 +1,1361 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Guardias · Dr. Balmis</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#F0F4F8;min-height:100vh;color:#1a1a2e}
+  :root{
+    --blue-dark:#1F4E79;--blue:#2E75B6;--blue-light:#5BA3D0;--blue-pale:#EBF3FB;
+    --green:#375623;--green-light:#E2EFDA;--green-mid:#70AD47;
+    --orange:#C55A11;--orange-light:#FCE4D6;
+    --yellow:#FFE699;--yellow-light:#FFFDE7;
+    --red:#C00000;--red-light:#FCE4D6;
+    --gray:#F5F7FA;--gray-mid:#E0E7EF;--gray-dark:#6B7280;
+    --radius:12px;--radius-sm:8px;
+    --shadow:0 2px 12px rgba(31,78,121,0.10);
+    --shadow-lg:0 8px 32px rgba(31,78,121,0.16);
+  }
+  input,select,textarea{font-family:inherit;font-size:15px}
+  button{font-family:inherit;cursor:pointer}
+  /* scrollbar */
+  ::-webkit-scrollbar{width:4px;height:4px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:#C0CCD8;border-radius:4px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState, useEffect, useCallback, useRef, createContext, useContext} = React;
+
+// ─────────────────────────────────────────────
+// CONFIG (user fills these in Settings)
+// ─────────────────────────────────────────────
+const DEFAULT_CONFIG = {
+  airtableToken: "",
+  airtableBaseId: "",
+  googleClientId: "",
+  // Table names in Airtable
+  tableResidentes: "Residentes",
+  tablePreferencias: "Preferencias",
+  tableCuadrante: "Cuadrante",
+};
+
+// ─────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────
+const ANOS = ["R4","R3","R2","R1"];
+const MESES = ["Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre","Enero","Febrero","Marzo","Abril","Mayo"];
+const DIAS_SEMANA = ["L","M","X","J","V","S","D"];
+const DIAS_NOMBRE = {L:"Lunes",M:"Martes",X:"Miércoles",J:"Jueves",V:"Viernes",S:"Sábado",D:"Domingo"};
+const CODE_COLORS = {G:"#C6EFCE",GF:"#FCE4D6","3P":"#DEEAF1",V:"#FFE699",R:"#E2EFDA",B:"#D9D9D9"};
+const CODE_LABELS = {G:"Guardia",GF:"G. Festiva","3P":"3.º Puesto",V:"Vacaciones",R:"Rotación",B:"Baja"};
+const CODES_CYCLE = ["G","GF","3P","V","R","B",""];
+const ANO_COLORS = {R4:"#1F4E79",R3:"#2E75B6",R2:"#5BA3D0",R1:"#9DC3E6"};
+const ANO_TEXT   = {R4:"#fff",R3:"#fff",R2:"#fff",R1:"#1F4E79"};
+
+// ─────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────
+function getDaysInMonth(mes, ano) {
+  const idx = MESES.indexOf(mes);
+  const realMonth = idx < 6 ? idx + 6 : idx - 6;
+  return new Date(ano, realMonth + 1, 0).getDate();
+}
+function getWeekday(day, mes, ano) {
+  const idx = MESES.indexOf(mes);
+  const realMonth = idx < 6 ? idx + 6 : idx - 6;
+  return new Date(ano, realMonth, day).getDay(); // 0=Sun
+}
+function weekdayAbbr(day, mes, ano) {
+  return ["D","L","M","X","J","V","S"][getWeekday(day, mes, ano)];
+}
+function isWeekend(day, mes, ano) {
+  const w = getWeekday(day, mes, ano);
+  return w === 0 || w === 6;
+}
+function isViernes(day, mes, ano) { return getWeekday(day, mes, ano) === 5; }
+function isDomingo(day, mes, ano) { return getWeekday(day, mes, ano) === 0; }
+function nextAno(ano) { return {R1:"R2",R2:"R3",R3:"R4",R4:"R4"}[ano]; }
+function fmtDate(d) { return d ? new Date(d).toLocaleDateString("es-ES") : "—"; }
+function cls(...args) { return args.filter(Boolean).join(" "); }
+
+// ─────────────────────────────────────────────
+// AIRTABLE API
+// ─────────────────────────────────────────────
+async function airtableReq(cfg, method, path, body) {
+  if (!cfg.airtableToken || !cfg.airtableBaseId) throw new Error("Airtable no configurado");
+  const url = `https://api.airtable.com/v0/${cfg.airtableBaseId}/${encodeURIComponent(path)}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      "Authorization": `Bearer ${cfg.airtableToken}`,
+      "Content-Type": "application/json",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function atList(cfg, table, formula) {
+  let records = [], offset;
+  do {
+    const params = new URLSearchParams();
+    if (formula) params.set("filterByFormula", formula);
+    if (offset) params.set("offset", offset);
+    const data = await airtableReq(cfg, "GET", `${table}?${params}`);
+    records.push(...(data.records || []));
+    offset = data.offset;
+  } while (offset);
+  return records;
+}
+async function atCreate(cfg, table, fields) {
+  return airtableReq(cfg, "POST", table, { records: [{ fields }] });
+}
+async function atUpdate(cfg, table, id, fields) {
+  return airtableReq(cfg, "PATCH", `${table}/${id}`, { fields });
+}
+async function atDelete(cfg, table, id) {
+  return airtableReq(cfg, "DELETE", `${table}/${id}`);
+}
+
+// ─────────────────────────────────────────────
+// CONTEXT
+// ─────────────────────────────────────────────
+const AppCtx = createContext(null);
+function useApp() { return useContext(AppCtx); }
+
+// ─────────────────────────────────────────────
+// MAIN APP
+// ─────────────────────────────────────────────
+function App() {
+  const [cfg, setCfg] = useState(() => {
+    try { return {...DEFAULT_CONFIG, ...JSON.parse(localStorage.getItem("guardias_cfg")||"{}")}; }
+    catch { return DEFAULT_CONFIG; }
+  });
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("guardias_user")||"null"); }
+    catch { return null; }
+  });
+  const [residentes, setResidentes] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState("home");
+  const [toast, setToast] = useState(null);
+  const [mes, setMes] = useState("Junio");
+  const [ano, setAno] = useState(2026);
+
+  const saveCfg = useCallback(newCfg => {
+    setCfg(newCfg);
+    localStorage.setItem("guardias_cfg", JSON.stringify(newCfg));
+  }, []);
+
+  const saveUser = useCallback(u => {
+    setUser(u);
+    if (u) localStorage.setItem("guardias_user", JSON.stringify(u));
+    else localStorage.removeItem("guardias_user");
+  }, []);
+
+  const showToast = useCallback((msg, type="ok") => {
+    setToast({msg, type});
+    setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  const loadResidentes = useCallback(async () => {
+    if (!cfg.airtableToken || !cfg.airtableBaseId) return;
+    setLoading(true);
+    try {
+      const recs = await atList(cfg, cfg.tableResidentes);
+      setResidentes(recs.map(r => ({id: r.id, ...r.fields})));
+    } catch(e) {
+      showToast("Error cargando residentes: " + e.message, "err");
+    }
+    setLoading(false);
+  }, [cfg, showToast]);
+
+  useEffect(() => { loadResidentes(); }, [cfg.airtableToken, cfg.airtableBaseId]);
+
+  const isAdmin = user?.rol === "admin";
+  const myResidente = residentes.find(r => r.email === user?.email);
+
+  const ctx = {cfg, saveCfg, user, saveUser, residentes, setResidentes, loadResidentes,
+               loading, setLoading, showToast, tab, setTab, mes, setMes, ano, setAno,
+               isAdmin, myResidente};
+
+  return (
+    <AppCtx.Provider value={ctx}>
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:"var(--gray)"}}>
+        {/* HEADER */}
+        <Header />
+        {/* CONTENT */}
+        <div style={{flex:1,padding:"0 0 80px"}}>
+          {!user ? <LoginScreen /> :
+           tab==="home" ? <HomeScreen /> :
+           tab==="prefs" ? <PrefsScreen /> :
+           tab==="calendar" ? <CalendarScreen /> :
+           tab==="admin" ? <AdminScreen /> :
+           tab==="settings" ? <SettingsScreen /> :
+           tab==="ai" ? <AIScreen /> : null}
+        </div>
+        {/* BOTTOM NAV */}
+        {user && <BottomNav />}
+        {/* TOAST */}
+        {toast && <Toast msg={toast.msg} type={toast.type} />}
+      </div>
+    </AppCtx.Provider>
+  );
+}
+
+// ─────────────────────────────────────────────
+// HEADER
+// ─────────────────────────────────────────────
+function Header() {
+  const {user, saveUser, setTab, isAdmin} = useApp();
+  return (
+    <div style={{background:"var(--blue-dark)",color:"#fff",padding:"14px 16px 10px",
+                 position:"sticky",top:0,zIndex:100,
+                 boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div>
+          <div style={{fontSize:17,fontWeight:700,letterSpacing:.3}}>🏥 Guardias · Dr. Balmis</div>
+          {user && <div style={{fontSize:11,opacity:.75,marginTop:1}}>
+            {user.name} · {isAdmin ? "👑 Admin" : user.email}
+          </div>}
+        </div>
+        {user && (
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <button onClick={()=>setTab("settings")} style={iconBtn}>⚙️</button>
+            <button onClick={()=>saveUser(null)} style={iconBtn} title="Cerrar sesión">↩️</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+const iconBtn = {background:"rgba(255,255,255,0.15)",border:"none",borderRadius:8,
+                 padding:"6px 10px",color:"#fff",fontSize:18,cursor:"pointer"};
+
+// ─────────────────────────────────────────────
+// BOTTOM NAV
+// ─────────────────────────────────────────────
+function BottomNav() {
+  const {tab, setTab, isAdmin} = useApp();
+  const items = [
+    {id:"home", icon:"🏠", label:"Inicio"},
+    {id:"prefs", icon:"⚙️", label:"Preferencias"},
+    {id:"calendar", icon:"📅", label:"Cuadrante"},
+    {id:"ai", icon:"🤖", label:"IA"},
+    ...(isAdmin ? [{id:"admin", icon:"👑", label:"Admin"}] : []),
+  ];
+  return (
+    <nav style={{position:"fixed",bottom:0,left:0,right:0,background:"#fff",
+                 borderTop:"1px solid var(--gray-mid)",display:"flex",zIndex:100,
+                 boxShadow:"0 -2px 12px rgba(0,0,0,0.08)"}}>
+      {items.map(it => (
+        <button key={it.id} onClick={()=>setTab(it.id)} style={{
+          flex:1,padding:"10px 4px 8px",border:"none",background:"transparent",
+          display:"flex",flexDirection:"column",alignItems:"center",gap:3,
+          color: tab===it.id ? "var(--blue)" : "var(--gray-dark)",
+          fontSize:11,fontWeight: tab===it.id ? 700 : 400,
+          borderTop: tab===it.id ? "2px solid var(--blue)" : "2px solid transparent",
+        }}>
+          <span style={{fontSize:20}}>{it.icon}</span>
+          {it.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+// ─────────────────────────────────────────────
+// LOGIN
+// ─────────────────────────────────────────────
+function LoginScreen() {
+  const {cfg, saveUser, showToast} = useApp();
+  const [demoEmail, setDemoEmail] = useState("");
+  const [demoName, setDemoName] = useState("");
+  const [showDemo, setShowDemo] = useState(false);
+
+  const loginGoogle = () => {
+    if (!cfg.googleClientId) {
+      showToast("Configura primero el Google Client ID en Ajustes", "err");
+      return;
+    }
+    const params = new URLSearchParams({
+      client_id: cfg.googleClientId,
+      redirect_uri: window.location.href.split("?")[0],
+      response_type: "token",
+      scope: "email profile",
+      prompt: "select_account",
+    });
+    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+  };
+
+  // Handle OAuth redirect
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.includes("access_token")) {
+      const params = new URLSearchParams(hash.slice(1));
+      const token = params.get("access_token");
+      fetch(`https://www.googleapis.com/oauth2/v3/userinfo?access_token=${token}`)
+        .then(r => r.json())
+        .then(info => {
+          saveUser({name: info.name, email: info.email, picture: info.picture, rol:"residente"});
+          window.history.replaceState({}, "", window.location.pathname);
+        })
+        .catch(() => showToast("Error con Google OAuth", "err"));
+    }
+  }, []);
+
+  const loginDemo = () => {
+    if (!demoEmail || !demoName) return;
+    saveUser({name: demoName, email: demoEmail, picture: null,
+              rol: demoEmail.includes("admin") ? "admin" : "residente"});
+  };
+
+  return (
+    <div style={{minHeight:"80vh",display:"flex",flexDirection:"column",alignItems:"center",
+                 justifyContent:"center",padding:24}}>
+      <div style={{width:"100%",maxWidth:380}}>
+        {/* Logo */}
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{fontSize:56,marginBottom:8}}>🏥</div>
+          <div style={{fontSize:22,fontWeight:800,color:"var(--blue-dark)"}}>Guardias</div>
+          <div style={{fontSize:14,color:"var(--gray-dark)",marginTop:4}}>Hospital Dr. Balmis · Radiodiagnóstico</div>
+        </div>
+
+        <Card>
+          <button onClick={loginGoogle} style={{
+            width:"100%",padding:"14px",borderRadius:10,border:"1.5px solid var(--gray-mid)",
+            background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",
+            gap:10,fontSize:15,fontWeight:600,color:"#333",cursor:"pointer",marginBottom:16,
+            boxShadow:"0 2px 8px rgba(0,0,0,0.06)"
+          }}>
+            <svg width="20" height="20" viewBox="0 0 48 48">
+              <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.2l6.7-6.7C35.7 2.4 30.2 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.8 6C12.3 13 17.7 9.5 24 9.5z"/>
+              <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4 7.1-10 7.1-17z"/>
+              <path fill="#FBBC05" d="M10.4 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.8-6A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.7l7.8-6z"/>
+              <path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7.5-5.8c-2 1.4-4.7 2.3-7.7 2.3-6.3 0-11.6-4.2-13.5-10l-7.8 6C6.6 42.6 14.6 48 24 48z"/>
+            </svg>
+            Entrar con Google
+          </button>
+
+          <div style={{textAlign:"center",marginBottom:12}}>
+            <button onClick={()=>setShowDemo(!showDemo)} style={{
+              background:"none",border:"none",color:"var(--blue)",fontSize:13,
+              textDecoration:"underline",cursor:"pointer"
+            }}>
+              {showDemo ? "Ocultar" : "Entrar en modo demo (sin Google)"}
+            </button>
+          </div>
+
+          {showDemo && (
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              <input value={demoName} onChange={e=>setDemoName(e.target.value)}
+                placeholder="Tu nombre completo" style={inputStyle} />
+              <input value={demoEmail} onChange={e=>setDemoEmail(e.target.value)}
+                placeholder="tu@email.com (pon 'admin' para acceso admin)" style={inputStyle} />
+              <Btn onClick={loginDemo} disabled={!demoEmail||!demoName}>
+                Entrar en demo
+              </Btn>
+            </div>
+          )}
+        </Card>
+
+        <div style={{textAlign:"center",marginTop:20,fontSize:12,color:"var(--gray-dark)",lineHeight:1.6}}>
+          Acceso exclusivo para residentes de Radiodiagnóstico<br/>del Hospital Dr. Balmis
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// HOME
+// ─────────────────────────────────────────────
+function HomeScreen() {
+  const {user, myResidente, residentes, mes, ano, setTab, isAdmin} = useApp();
+  const nDias = getDaysInMonth(mes, ano);
+
+  const counts = {R4:0,R3:0,R2:0,R1:0};
+  residentes.forEach(r => { if(counts[r.ano] !== undefined) counts[r.ano]++; });
+
+  return (
+    <div style={{padding:16,display:"flex",flexDirection:"column",gap:14,maxWidth:480,margin:"0 auto"}}>
+      {/* Saludo */}
+      <Card>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          {user?.picture
+            ? <img src={user.picture} style={{width:48,height:48,borderRadius:24,objectFit:"cover"}} />
+            : <div style={{width:48,height:48,borderRadius:24,background:"var(--blue)",
+                           display:"flex",alignItems:"center",justifyContent:"center",
+                           color:"#fff",fontSize:20,fontWeight:700}}>
+                {user?.name?.[0]}
+              </div>
+          }
+          <div>
+            <div style={{fontSize:17,fontWeight:700,color:"var(--blue-dark)"}}>
+              Hola, {user?.name?.split(" ")[0]} 👋
+            </div>
+            {myResidente
+              ? <div style={{fontSize:13,color:"var(--gray-dark)",marginTop:2}}>
+                  <span style={{background:ANO_COLORS[myResidente.ano],color:ANO_TEXT[myResidente.ano],
+                                padding:"2px 8px",borderRadius:6,fontWeight:700,fontSize:12}}>
+                    {myResidente.ano}
+                  </span>
+                  {" · "}{myResidente.nombre}
+                </div>
+              : <div style={{fontSize:13,color:"var(--orange)"}}>
+                  No vinculado a ningún residente — pide al admin que te añada
+                </div>
+            }
+          </div>
+        </div>
+      </Card>
+
+      {/* Mes actual */}
+      <Card title="📅 Mes en curso">
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+          <div style={{fontSize:18,fontWeight:700,color:"var(--blue-dark)"}}>{mes} {ano}</div>
+          <button onClick={()=>setTab("calendar")} style={pillBtn("var(--blue)")}>Ver cuadrante</button>
+        </div>
+        <div style={{fontSize:13,color:"var(--gray-dark)"}}>
+          {nDias} días · Residentes activos: {residentes.length}
+        </div>
+      </Card>
+
+      {/* Mis preferencias */}
+      <Card title="⚙️ Mis preferencias del mes">
+        <div style={{fontSize:13,color:"var(--gray-dark)",marginBottom:10,lineHeight:1.5}}>
+          Registra tus días no disponibles, vacaciones y preferencias para que el asignador IA las tenga en cuenta.
+        </div>
+        <button onClick={()=>setTab("prefs")} style={pillBtn("var(--blue)")}>
+          Editar preferencias →
+        </button>
+      </Card>
+
+      {/* Equipo */}
+      <Card title="👥 Equipo">
+        {ANOS.map(ano2 => (
+          <div key={ano2} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+            <span style={{background:ANO_COLORS[ano2],color:ANO_TEXT[ano2],
+                          padding:"2px 8px",borderRadius:6,fontWeight:700,fontSize:12,minWidth:32,textAlign:"center"}}>
+              {ano2}
+            </span>
+            <span style={{fontSize:13,color:"var(--blue-dark)"}}>
+              {residentes.filter(r=>r.ano===ano2).map(r=>r.nombre.split(" ")[0]).join(", ") || "—"}
+            </span>
+          </div>
+        ))}
+      </Card>
+
+      {/* Accesos rápidos */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <QuickCard icon="🤖" label="Generar cuadrante con IA" onClick={()=>setTab("ai")} color="var(--blue)" />
+        {isAdmin && <QuickCard icon="👑" label="Panel de administración" onClick={()=>setTab("admin")} color="var(--orange)" />}
+        <QuickCard icon="📊" label="Ver cuadrante completo" onClick={()=>setTab("calendar")} color="var(--green-mid)" />
+      </div>
+    </div>
+  );
+}
+
+function QuickCard({icon,label,onClick,color}) {
+  return (
+    <button onClick={onClick} style={{
+      background:"#fff",border:"none",borderRadius:var_radius,padding:14,
+      display:"flex",flexDirection:"column",alignItems:"flex-start",gap:8,
+      boxShadow:"var(--shadow)",cursor:"pointer",textAlign:"left",width:"100%",
+      borderLeft:`4px solid ${color}`
+    }}>
+      <span style={{fontSize:24}}>{icon}</span>
+      <span style={{fontSize:12,fontWeight:600,color:"var(--blue-dark)",lineHeight:1.3}}>{label}</span>
+    </button>
+  );
+}
+const var_radius = "var(--radius)";
+
+// ─────────────────────────────────────────────
+// PREFS SCREEN
+// ─────────────────────────────────────────────
+function PrefsScreen() {
+  const {cfg, myResidente, mes, ano, showToast, setLoading} = useApp();
+  const nDias = getDaysInMonth(mes, ano);
+  const [prefs, setPrefs] = useState({
+    maxGuardias: 5,
+    preferDobles: false,
+    diasPreferidos: [],
+    diasEvitar: [],
+    rotDe: "", rotHasta: "",
+    vacDe: "", vacHasta: "",
+    notas: "",
+  });
+  const [saved, setSaved] = useState(false);
+  const [existingId, setExistingId] = useState(null);
+
+  useEffect(() => {
+    if (!myResidente || !cfg.airtableToken) return;
+    atList(cfg, cfg.tablePreferencias,
+      `AND({residenteId}="${myResidente.id}",{mes}="${mes}",{ano}="${ano}")`)
+      .then(recs => {
+        if (recs[0]) {
+          setExistingId(recs[0].id);
+          const f = recs[0].fields;
+          setPrefs({
+            maxGuardias: f.maxGuardias || 5,
+            preferDobles: f.preferDobles || false,
+            diasPreferidos: f.diasPreferidos ? f.diasPreferidos.split(",").filter(Boolean) : [],
+            diasEvitar: f.diasEvitar ? f.diasEvitar.split(",").filter(Boolean) : [],
+            rotDe: f.rotDe || "", rotHasta: f.rotHasta || "",
+            vacDe: f.vacDe || "", vacHasta: f.vacHasta || "",
+            notas: f.notas || "",
+          });
+        }
+      }).catch(()=>{});
+  }, [myResidente?.id, mes, ano]);
+
+  const toggle = (arr, val) => arr.includes(val) ? arr.filter(x=>x!==val) : [...arr, val];
+
+  const save = async () => {
+    if (!myResidente) { showToast("No estás vinculado a ningún residente","err"); return; }
+    if (!cfg.airtableToken) { showToast("Configura Airtable en Ajustes","err"); return; }
+    setLoading(true);
+    try {
+      const fields = {
+        residenteId: myResidente.id,
+        residenteNombre: myResidente.nombre,
+        mes, ano: String(ano),
+        maxGuardias: prefs.maxGuardias,
+        preferDobles: prefs.preferDobles,
+        diasPreferidos: prefs.diasPreferidos.join(","),
+        diasEvitar: prefs.diasEvitar.join(","),
+        rotDe: prefs.rotDe, rotHasta: prefs.rotHasta,
+        vacDe: prefs.vacDe, vacHasta: prefs.vacHasta,
+        notas: prefs.notas,
+      };
+      if (existingId) await atUpdate(cfg, cfg.tablePreferencias, existingId, fields);
+      else await atCreate(cfg, cfg.tablePreferencias, fields);
+      setSaved(true);
+      showToast("Preferencias guardadas ✓");
+      setTimeout(()=>setSaved(false), 3000);
+    } catch(e) { showToast("Error: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{padding:16,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
+      <SectionTitle>⚙️ Mis preferencias · {mes} {ano}</SectionTitle>
+
+      {!myResidente && (
+        <div style={{background:"var(--orange-light)",border:"1px solid var(--orange)",
+                     borderRadius:10,padding:12,fontSize:13,color:"var(--orange)"}}>
+          No estás vinculado a ningún residente. Pide al administrador que te añada.
+        </div>
+      )}
+
+      <Card title="Guardias por mes">
+        <label style={labelStyle}>Máximo de guardias este mes</label>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginTop:6}}>
+          <button onClick={()=>setPrefs(p=>({...p,maxGuardias:Math.max(4,p.maxGuardias-1)}))} style={counterBtn}>−</button>
+          <span style={{fontSize:22,fontWeight:700,color:"var(--blue-dark)",minWidth:28,textAlign:"center"}}>
+            {prefs.maxGuardias}
+          </span>
+          <button onClick={()=>setPrefs(p=>({...p,maxGuardias:Math.min(6,p.maxGuardias+1)}))} style={counterBtn}>+</button>
+          <span style={{fontSize:12,color:"var(--gray-dark)"}}>(normativa: 4–6)</span>
+        </div>
+      </Card>
+
+      <Card title="Dobletes viernes-domingo">
+        <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+          <div onClick={()=>setPrefs(p=>({...p,preferDobles:!p.preferDobles}))}
+               style={{width:44,height:24,borderRadius:12,position:"relative",
+                       background:prefs.preferDobles?"var(--blue)":"var(--gray-mid)",transition:"background .2s",
+                       cursor:"pointer"}}>
+            <div style={{position:"absolute",top:3,left:prefs.preferDobles?22:3,
+                         width:18,height:18,borderRadius:9,background:"#fff",
+                         transition:"left .2s",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}/>
+          </div>
+          <span style={{fontSize:14,color:"var(--blue-dark)"}}>
+            Prefiero viernes-domingo frente a sábados aislados
+          </span>
+        </label>
+      </Card>
+
+      <Card title="Días preferidos de la semana">
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:6}}>
+          {DIAS_SEMANA.map(d=>(
+            <button key={d} onClick={()=>setPrefs(p=>({...p,diasPreferidos:toggle(p.diasPreferidos,d)}))}
+              style={{...dayToggleBtn, background:prefs.diasPreferidos.includes(d)?"var(--blue)":"#fff",
+                      color:prefs.diasPreferidos.includes(d)?"#fff":"var(--blue)",
+                      border:`1.5px solid var(--blue)`}}>
+              {DIAS_NOMBRE[d].slice(0,3)}
+            </button>
+          ))}
+        </div>
+        <div style={{fontSize:11,color:"var(--gray-dark)"}}>La IA intentará asignarte guardias estos días</div>
+      </Card>
+
+      <Card title="Días a evitar">
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:6}}>
+          {DIAS_SEMANA.map(d=>(
+            <button key={d} onClick={()=>setPrefs(p=>({...p,diasEvitar:toggle(p.diasEvitar,d)}))}
+              style={{...dayToggleBtn, background:prefs.diasEvitar.includes(d)?"var(--orange)":"#fff",
+                      color:prefs.diasEvitar.includes(d)?"#fff":"var(--orange)",
+                      border:`1.5px solid var(--orange)`}}>
+              {DIAS_NOMBRE[d].slice(0,3)}
+            </button>
+          ))}
+        </div>
+      </Card>
+
+      <Card title="Rotación externa (días sin guardia obligatoria)">
+        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+          <div style={{display:"flex",flexDirection:"column",gap:4,flex:1}}>
+            <label style={labelStyle}>Desde el día</label>
+            <input type="number" min={1} max={nDias} value={prefs.rotDe}
+              onChange={e=>setPrefs(p=>({...p,rotDe:e.target.value}))}
+              placeholder="—" style={{...inputStyle,width:"100%"}} />
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:4,flex:1}}>
+            <label style={labelStyle}>Hasta el día</label>
+            <input type="number" min={1} max={nDias} value={prefs.rotHasta}
+              onChange={e=>setPrefs(p=>({...p,rotHasta:e.target.value}))}
+              placeholder="—" style={{...inputStyle,width:"100%"}} />
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Vacaciones">
+        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+          <div style={{display:"flex",flexDirection:"column",gap:4,flex:1}}>
+            <label style={labelStyle}>Desde el día</label>
+            <input type="number" min={1} max={nDias} value={prefs.vacDe}
+              onChange={e=>setPrefs(p=>({...p,vacDe:e.target.value}))}
+              placeholder="—" style={{...inputStyle,width:"100%"}} />
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:4,flex:1}}>
+            <label style={labelStyle}>Hasta el día</label>
+            <input type="number" min={1} max={nDias} value={prefs.vacHasta}
+              onChange={e=>setPrefs(p=>({...p,vacHasta:e.target.value}))}
+              placeholder="—" style={{...inputStyle,width:"100%"}} />
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Notas adicionales">
+        <textarea value={prefs.notas} onChange={e=>setPrefs(p=>({...p,notas:e.target.value}))}
+          placeholder="Cualquier otra restricción o preferencia para este mes..."
+          rows={3} style={{...inputStyle,width:"100%",resize:"vertical"}} />
+      </Card>
+
+      <Btn onClick={save} color="var(--blue)">
+        {saved ? "✓ Guardado" : "💾 Guardar preferencias"}
+      </Btn>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// CALENDAR SCREEN
+// ─────────────────────────────────────────────
+function CalendarScreen() {
+  const {cfg, residentes, mes, setMes, ano, setAno, showToast, setLoading} = useApp();
+  const [cuadrante, setCuadrante] = useState({});
+  const [loadingCuad, setLoadingCuad] = useState(false);
+
+  const nDias = getDaysInMonth(mes, ano);
+  const key = `${mes}|${ano}`;
+
+  const loadCuadrante = useCallback(async () => {
+    if (!cfg.airtableToken) return;
+    setLoadingCuad(true);
+    try {
+      const recs = await atList(cfg, cfg.tableCuadrante, `AND({mes}="${mes}",{ano}="${ano}")`);
+      const data = {};
+      recs.forEach(r => {
+        const f = r.fields;
+        if (!data[f.nombre]) data[f.nombre] = {id: r.id};
+        for (let d = 1; d <= 31; d++) {
+          if (f[`d${d}`]) data[f.nombre][d] = f[`d${d}`];
+        }
+      });
+      setCuadrante(prev => ({...prev, [key]: data}));
+    } catch(e) { showToast("Error cargando cuadrante", "err"); }
+    setLoadingCuad(false);
+  }, [mes, ano, cfg]);
+
+  useEffect(() => { loadCuadrante(); }, [mes, ano]);
+
+  const getCell = (nombre, dia) => cuadrante[key]?.[nombre]?.[dia] || "";
+  const setCell = (nombre, dia, val) => {
+    setCuadrante(prev => {
+      const m = {...(prev[key]||{})};
+      m[nombre] = {...(m[nombre]||{}), [dia]: val};
+      return {...prev, [key]: m};
+    });
+  };
+  const cycleCell = (nombre, dia) => {
+    const cur = getCell(nombre, dia);
+    const idx = CODES_CYCLE.indexOf(cur);
+    setCell(nombre, dia, CODES_CYCLE[(idx+1) % CODES_CYCLE.length]);
+  };
+
+  const saveCuadrante = async () => {
+    if (!cfg.airtableToken) { showToast("Configura Airtable","err"); return; }
+    setLoading(true);
+    try {
+      const monthData = cuadrante[key] || {};
+      for (const [nombre, dias] of Object.entries(monthData)) {
+        const fields = {nombre, mes, ano: String(ano)};
+        for (let d = 1; d <= 31; d++) {
+          if (dias[d]) fields[`d${d}`] = dias[d];
+        }
+        if (dias.id) await atUpdate(cfg, cfg.tableCuadrante, dias.id, fields);
+        else {
+          const rec = await atCreate(cfg, cfg.tableCuadrante, fields);
+          setCell(nombre, "id", rec.records[0].id);
+        }
+      }
+      showToast("Cuadrante guardado en Airtable ✓");
+    } catch(e) { showToast("Error: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  const navMes = (delta) => {
+    const idx = MESES.indexOf(mes);
+    let ni = idx + delta;
+    let na = ano;
+    if (ni < 0) { ni = 11; na--; }
+    if (ni > 11) { ni = 0; na++; }
+    setMes(MESES[ni]); setAno(na);
+  };
+
+  const countG = (nombre) => {
+    let c=0;
+    for(let d=1;d<=nDias;d++){const v=getCell(nombre,d);if(v==="G"||v==="GF")c++;}
+    return c;
+  };
+
+  return (
+    <div style={{padding:"12px 0",maxWidth:600,margin:"0 auto"}}>
+      {/* Nav mes */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px",marginBottom:12}}>
+        <button onClick={()=>navMes(-1)} style={navBtn}>◀</button>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:17,fontWeight:700,color:"var(--blue-dark)"}}>{mes} {ano}</div>
+          <div style={{fontSize:11,color:"var(--gray-dark)"}}>Toca una celda para cambiar</div>
+        </div>
+        <button onClick={()=>navMes(1)} style={navBtn}>▶</button>
+      </div>
+
+      {/* Leyenda compacta */}
+      <div style={{display:"flex",gap:6,padding:"0 16px",marginBottom:10,flexWrap:"wrap"}}>
+        {Object.entries(CODE_LABELS).map(([code,label])=>(
+          <span key={code} style={{display:"flex",alignItems:"center",gap:3,fontSize:10}}>
+            <span style={{width:18,height:14,background:CODE_COLORS[code],borderRadius:3,
+                          display:"inline-block",border:"1px solid #ddd"}}/>
+            <span style={{color:"var(--gray-dark)"}}>{code}</span>
+          </span>
+        ))}
+      </div>
+
+      {/* Tabla */}
+      {loadingCuad
+        ? <div style={{textAlign:"center",padding:32,color:"var(--gray-dark)"}}>Cargando...</div>
+        : <div style={{overflowX:"auto",paddingBottom:8}}>
+            <table style={{borderCollapse:"collapse",fontSize:10,minWidth:500}}>
+              <thead>
+                <tr>
+                  <th style={{...th,width:16,background:"var(--blue-dark)",color:"#fff",fontSize:9}}>Año</th>
+                  <th style={{...th,width:90,background:"var(--blue-dark)",color:"#fff",textAlign:"left",paddingLeft:6}}>Residente</th>
+                  <th style={{...th,width:20,background:"var(--blue)",color:"#fff"}}>G</th>
+                  {Array.from({length:nDias},(_,i)=>{
+                    const d=i+1;
+                    const abbr=weekdayAbbr(d,mes,ano);
+                    const isWE=isWeekend(d,mes,ano);
+                    return (
+                      <th key={d} style={{...th,width:20,
+                          background:isWE?"var(--green-light)":"var(--blue-dark)",
+                          color:isWE?"var(--green)":"#fff",fontSize:9,lineHeight:1.2}}>
+                        <div>{d}</div><div style={{fontWeight:400,opacity:.8}}>{abbr}</div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {ANOS.map(ano2 =>
+                  residentes.filter(r=>r.ano===ano2).map((res,i)=>(
+                    <tr key={res.id} style={{background:i%2?"var(--blue-pale)":"#fff"}}>
+                      <td style={{...td,background:ANO_COLORS[ano2],color:ANO_TEXT[ano2],
+                                  fontWeight:700,fontSize:9,textAlign:"center"}}>{ano2}</td>
+                      <td style={{...td,paddingLeft:6,fontSize:11,fontWeight:500,whiteSpace:"nowrap"}}>
+                        {res.nombre.split(" ")[0]}
+                      </td>
+                      <td style={{...td,textAlign:"center",fontWeight:700,color:"var(--blue)",fontSize:11}}>
+                        {countG(res.nombre)}
+                      </td>
+                      {Array.from({length:nDias},(_,i)=>{
+                        const d=i+1;
+                        const v=getCell(res.nombre,d);
+                        return (
+                          <td key={d} onClick={()=>cycleCell(res.nombre,d)} style={{
+                            ...td,textAlign:"center",cursor:"pointer",
+                            background:v?CODE_COLORS[v]:"transparent",
+                            fontWeight:v?700:400,fontSize:9,color:"#333",
+                            userSelect:"none",minWidth:20
+                          }}>
+                            {v||"·"}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+      }
+
+      <div style={{padding:"12px 16px",display:"flex",gap:8}}>
+        <Btn onClick={saveCuadrante} color="var(--blue)">💾 Guardar en Airtable</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// AI SCREEN
+// ─────────────────────────────────────────────
+function AIScreen() {
+  const {cfg, residentes, mes, ano, showToast, setTab} = useApp();
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [prefs, setPrefs] = useState([]);
+
+  useEffect(() => {
+    if (!cfg.airtableToken) return;
+    atList(cfg, cfg.tablePreferencias, `AND({mes}="${mes}",{ano}="${ano}")`)
+      .then(recs => setPrefs(recs.map(r=>r.fields)))
+      .catch(()=>{});
+  }, [mes, ano]);
+
+  const run = async () => {
+    setLoading(true); setResult(null); setError(null);
+    const nDias = getDaysInMonth(mes, ano);
+    const prefsStr = prefs.map(p =>
+      `${p.residenteNombre}: maxGuardias=${p.maxGuardias||5}, preferDobles=${p.preferDobles||false}, ` +
+      `diasPreferidos=[${p.diasPreferidos||""}], diasEvitar=[${p.diasEvitar||""}]` +
+      (p.rotDe?`, rotación días ${p.rotDe}-${p.rotHasta}`:"") +
+      (p.vacDe?`, vacaciones días ${p.vacDe}-${p.vacHasta}`:"") +
+      (p.notas?`, notas: ${p.notas}`:"")
+    ).join("\n");
+
+    const prompt = `Eres un experto en organización de guardias médicas hospitalarias en España.
+
+TAREA: Genera el cuadrante de guardias de Radiodiagnóstico del Hospital Dr. Balmis para ${mes} ${ano} (${nDias} días).
+
+RESIDENTES:
+${ANOS.map(a => `${a}: ${residentes.filter(r=>r.ano===a).map(r=>r.nombre).join(", ")}`).join("\n")}
+
+PREFERENCIAS REGISTRADAS:
+${prefsStr || "Ninguna registrada aún"}
+
+NORMAS ESTRICTAS (obligatorias, en orden de prioridad):
+1. Cada día: exactamente 1 Residente Mayor (R3/R4) Y 1 Residente Pequeño (R1/R2). Nunca 2 mayores ni 2 pequeños juntos.
+2. Guardias por residente: entre 4 y 6 al mes (mín 4, máx 6).
+3. Diferencia máxima entre residentes del mismo año al cerrar el mes: 1 guardia.
+4. Priorizar dobletes viernes-domingo para reducir fines de semana. Diferencia máxima de dobletes entre compañeros del mismo año: 1.
+5. Festivos nacionales y de la Comunitat Valenciana: marcar como GF en lugar de G.
+6. Residentes con rotación externa no hacen guardia esos días (salvo norma de rotación en provincia Alicante).
+7. Residentes de vacaciones no hacen guardia esos días.
+
+FESTIVOS ${mes.toUpperCase()} ${ano} COMUNITAT VALENCIANA: identifícalos tú según el calendario oficial.
+
+RESPONDE SOLO con JSON válido, sin texto adicional, sin markdown:
+{
+  "razonamiento": "explicación breve de decisiones clave y cómo se han respetado las normas",
+  "cuadrante": {
+    "NOMBRE_RESIDENTE": {"1":"G","5":"GF","12":"G",...},
+    ...
+  },
+  "resumen": {
+    "NOMBRE_RESIDENTE": {"total":N,"gf":N,"fs":N,"dobles":N},
+    ...
+  },
+  "alertas": ["texto alerta 1", ...],
+  "festivos": [1,8,...]
+}`;
+
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-6",
+          max_tokens:4000,
+          messages:[{role:"user",content:prompt}]
+        })
+      });
+      const data = await res.json();
+      const text = data.content?.find(b=>b.type==="text")?.text||"";
+      const clean = text.replace(/```json|```/g,"").trim();
+      setResult(JSON.parse(clean));
+    } catch(e) { setError("Error: "+e.message); }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{padding:16,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
+      <SectionTitle>🤖 Asignador IA · {mes} {ano}</SectionTitle>
+
+      <Card>
+        <div style={{fontSize:13,color:"var(--gray-dark)",lineHeight:1.6,marginBottom:12}}>
+          Claude genera el cuadrante completo respetando todas las normas de la reglamentación
+          y las preferencias que cada residente ha registrado en la app.
+          {prefs.length > 0 && <span style={{color:"var(--blue)",fontWeight:600}}>
+            {" "}{prefs.length} preferencias cargadas.
+          </span>}
+        </div>
+        <Btn onClick={run} disabled={loading} color="var(--blue)">
+          {loading ? "Generando..." : "Generar cuadrante con IA"}
+        </Btn>
+      </Card>
+
+      {error && <div style={{background:"var(--red-light)",border:"1px solid var(--red)",
+                              borderRadius:10,padding:12,fontSize:13,color:"var(--red)"}}>{error}</div>}
+
+      {result && (
+        <>
+          <Card title="💡 Razonamiento">
+            <div style={{fontSize:13,color:"var(--blue-dark)",lineHeight:1.6}}>{result.razonamiento}</div>
+          </Card>
+
+          {result.alertas?.length > 0 && (
+            <Card title="⚠️ Alertas">
+              {result.alertas.map((a,i)=>(
+                <div key={i} style={{fontSize:13,color:"var(--orange)",display:"flex",gap:6,
+                                     marginBottom:4,paddingBottom:4,borderBottom:"1px solid var(--orange-light)"}}>
+                  <span>⚠</span><span>{a}</span>
+                </div>
+              ))}
+            </Card>
+          )}
+
+          {result.festivos?.length > 0 && (
+            <Card title="🎉 Festivos detectados">
+              <div style={{fontSize:13,color:"var(--gray-dark)"}}>
+                Días: {result.festivos.join(", ")}
+              </div>
+            </Card>
+          )}
+
+          <Card title="📊 Resumen por residente">
+            {ANOS.map(ano2 => (
+              <div key={ano2} style={{marginBottom:12}}>
+                <div style={{fontSize:11,fontWeight:700,color:"var(--gray-dark)",
+                             textTransform:"uppercase",marginBottom:6}}>{ano2}</div>
+                {residentes.filter(r=>r.ano===ano2).map(res=>{
+                  const s = result.resumen?.[res.nombre]||{};
+                  const ok = (s.total||0) >= 4 && (s.total||0) <= 6;
+                  return (
+                    <div key={res.id} style={{display:"flex",alignItems:"center",gap:8,
+                                              marginBottom:4,padding:"6px 8px",borderRadius:8,
+                                              background: ok?"var(--green-light)":"var(--orange-light)"}}>
+                      <span style={{flex:1,fontSize:13,fontWeight:500}}>{res.nombre.split(" ")[0]}</span>
+                      <span style={{fontSize:12,color:"var(--blue-dark)"}}>
+                        <b>{s.total||0}</b>G · <b>{s.gf||0}</b>GF · <b>{s.fs||0}</b>FS · <b>{s.dobles||0}</b>D
+                      </span>
+                      <span>{ok?"✅":"⚠️"}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </Card>
+
+          <Btn onClick={()=>setTab("calendar")} color="var(--green-mid)">
+            Ver en calendario →
+          </Btn>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// ADMIN SCREEN
+// ─────────────────────────────────────────────
+function AdminScreen() {
+  const {cfg, residentes, loadResidentes, showToast, setLoading} = useApp();
+  const [subTab, setSubTab] = useState("lista");
+  const [newRes, setNewRes] = useState({nombre:"",email:"",ano:"R1"});
+  const [confirm, setConfirm] = useState(null); // {action, res}
+
+  const addResidente = async () => {
+    if (!newRes.nombre || !newRes.email) { showToast("Nombre y email obligatorios","err"); return; }
+    setLoading(true);
+    try {
+      await atCreate(cfg, cfg.tableResidentes, {
+        nombre: newRes.nombre,
+        email: newRes.email,
+        ano: newRes.ano,
+        fechaAlta: new Date().toISOString().split("T")[0],
+      });
+      await loadResidentes();
+      setNewRes({nombre:"",email:"",ano:"R1"});
+      showToast(`${newRes.nombre} añadido como ${newRes.ano} ✓`);
+      setSubTab("lista");
+    } catch(e) { showToast("Error: "+e.message,"err"); }
+    setLoading(false);
+  };
+
+  const subirCategoria = async (res) => {
+    const nuevoAno = nextAno(res.ano);
+    if (nuevoAno === res.ano) { showToast("Ya es R4, no puede subir más","err"); return; }
+    setLoading(true);
+    try {
+      await atUpdate(cfg, cfg.tableResidentes, res.id, {ano: nuevoAno});
+      await loadResidentes();
+      showToast(`${res.nombre} → ${nuevoAno} ✓`);
+    } catch(e) { showToast("Error: "+e.message,"err"); }
+    setLoading(false);
+    setConfirm(null);
+  };
+
+  const eliminarResidente = async (res) => {
+    setLoading(true);
+    try {
+      await atDelete(cfg, cfg.tableResidentes, res.id);
+      await loadResidentes();
+      showToast(`${res.nombre} eliminado`);
+    } catch(e) { showToast("Error: "+e.message,"err"); }
+    setLoading(false);
+    setConfirm(null);
+  };
+
+  return (
+    <div style={{padding:16,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
+      <SectionTitle>👑 Panel de Administración</SectionTitle>
+
+      {/* Sub-tabs */}
+      <div style={{display:"flex",gap:6,background:"var(--gray-mid)",borderRadius:10,padding:3}}>
+        {[["lista","👥 Residentes"],["add","➕ Añadir"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setSubTab(id)} style={{
+            flex:1,padding:"8px 4px",border:"none",borderRadius:8,fontSize:13,fontWeight:600,
+            background:subTab===id?"#fff":"transparent",
+            color:subTab===id?"var(--blue-dark)":"var(--gray-dark)",
+            boxShadow:subTab===id?"0 1px 4px rgba(0,0,0,0.1)":"none",cursor:"pointer"
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {/* LISTA */}
+      {subTab==="lista" && (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {ANOS.map(ano2 => {
+            const grupo = residentes.filter(r=>r.ano===ano2);
+            return (
+              <Card key={ano2}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                  <span style={{background:ANO_COLORS[ano2],color:ANO_TEXT[ano2],
+                                padding:"3px 10px",borderRadius:6,fontWeight:700,fontSize:13}}>
+                    {ano2}
+                  </span>
+                  <span style={{fontSize:12,color:"var(--gray-dark)"}}>{grupo.length} residentes</span>
+                </div>
+                {grupo.length === 0
+                  ? <div style={{fontSize:13,color:"var(--gray-dark)",fontStyle:"italic"}}>Sin residentes</div>
+                  : grupo.map(res=>(
+                    <div key={res.id} style={{display:"flex",alignItems:"center",gap:8,
+                                              padding:"8px 0",borderBottom:"1px solid var(--gray-mid)"}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:14,fontWeight:600,color:"var(--blue-dark)"}}>{res.nombre}</div>
+                        <div style={{fontSize:11,color:"var(--gray-dark)"}}>{res.email||"sin email"}</div>
+                      </div>
+                      <div style={{display:"flex",gap:6}}>
+                        {res.ano !== "R4" && (
+                          <button onClick={()=>setConfirm({action:"subir",res})}
+                            style={{...smallBtn,"background":"var(--green-light)","color":"var(--green)"}}>
+                            ⬆ {nextAno(res.ano)}
+                          </button>
+                        )}
+                        <button onClick={()=>setConfirm({action:"eliminar",res})}
+                          style={{...smallBtn,background:"var(--red-light)",color:"var(--red)"}}>
+                          🗑
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                }
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* AÑADIR */}
+      {subTab==="add" && (
+        <Card title="Nuevo residente">
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div>
+              <label style={labelStyle}>Nombre completo *</label>
+              <input value={newRes.nombre} onChange={e=>setNewRes(p=>({...p,nombre:e.target.value}))}
+                placeholder="Nombre Apellido Apellido" style={{...inputStyle,width:"100%",marginTop:4}} />
+            </div>
+            <div>
+              <label style={labelStyle}>Email (Google) *</label>
+              <input value={newRes.email} onChange={e=>setNewRes(p=>({...p,email:e.target.value}))}
+                placeholder="residente@gmail.com" type="email"
+                style={{...inputStyle,width:"100%",marginTop:4}} />
+            </div>
+            <div>
+              <label style={labelStyle}>Año de residencia</label>
+              <select value={newRes.ano} onChange={e=>setNewRes(p=>({...p,ano:e.target.value}))}
+                style={{...inputStyle,width:"100%",marginTop:4}}>
+                {ANOS.map(a=><option key={a}>{a}</option>)}
+              </select>
+            </div>
+            <Btn onClick={addResidente} color="var(--blue)">Añadir residente</Btn>
+          </div>
+        </Card>
+      )}
+
+      {/* CONFIRM MODAL */}
+      {confirm && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",
+                     display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:20}}>
+          <div style={{background:"#fff",borderRadius:16,padding:24,maxWidth:320,width:"100%",
+                       boxShadow:"var(--shadow-lg)"}}>
+            {confirm.action==="subir" ? (
+              <>
+                <div style={{fontSize:16,fontWeight:700,color:"var(--blue-dark)",marginBottom:8}}>
+                  Subir categoría
+                </div>
+                <div style={{fontSize:14,color:"var(--gray-dark)",marginBottom:20,lineHeight:1.5}}>
+                  ¿Subir a <b>{confirm.res.nombre}</b> de <b>{confirm.res.ano}</b> a <b>{nextAno(confirm.res.ano)}</b>?
+                  <br/><span style={{fontSize:12,color:"var(--orange)"}}>
+                    Esto cambia su rol en el contaje de guardias.
+                  </span>
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <Btn onClick={()=>setConfirm(null)} color="var(--gray-mid)" textColor="var(--gray-dark)">Cancelar</Btn>
+                  <Btn onClick={()=>subirCategoria(confirm.res)} color="var(--green-mid)">Confirmar ⬆</Btn>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{fontSize:16,fontWeight:700,color:"var(--red)",marginBottom:8}}>
+                  Eliminar residente
+                </div>
+                <div style={{fontSize:14,color:"var(--gray-dark)",marginBottom:20,lineHeight:1.5}}>
+                  ¿Eliminar a <b>{confirm.res.nombre}</b>? Esta acción no se puede deshacer.
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <Btn onClick={()=>setConfirm(null)} color="var(--gray-mid)" textColor="var(--gray-dark)">Cancelar</Btn>
+                  <Btn onClick={()=>eliminarResidente(confirm.res)} color="var(--red)">Eliminar</Btn>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// SETTINGS SCREEN
+// ─────────────────────────────────────────────
+function SettingsScreen() {
+  const {cfg, saveCfg, showToast} = useApp();
+  const [local, setLocal] = useState(cfg);
+  const [show, setShow] = useState(false);
+
+  const save = () => {
+    saveCfg(local);
+    showToast("Ajustes guardados ✓");
+  };
+
+  return (
+    <div style={{padding:16,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
+      <SectionTitle>⚙️ Configuración</SectionTitle>
+
+      <Card title="🔑 Airtable">
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          <div>
+            <label style={labelStyle}>Personal Access Token</label>
+            <div style={{display:"flex",gap:6,marginTop:4}}>
+              <input type={show?"text":"password"} value={local.airtableToken}
+                onChange={e=>setLocal(p=>({...p,airtableToken:e.target.value}))}
+                placeholder="patXXXXXXXXXXXXXX.XXXX..." style={{...inputStyle,flex:1}} />
+              <button onClick={()=>setShow(!show)} style={{...smallBtn,background:"var(--blue-pale)",color:"var(--blue)"}}>
+                {show?"🙈":"👁"}
+              </button>
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>Base ID</label>
+            <input value={local.airtableBaseId}
+              onChange={e=>setLocal(p=>({...p,airtableBaseId:e.target.value}))}
+              placeholder="appXXXXXXXXXXXXXX" style={{...inputStyle,width:"100%",marginTop:4}} />
+          </div>
+          <div style={{background:"var(--blue-pale)",borderRadius:8,padding:10,fontSize:12,color:"var(--blue-dark)",lineHeight:1.6}}>
+            <b>Cómo obtenerlos:</b><br/>
+            1. airtable.com → Developer Hub → Personal access tokens → Create token<br/>
+            Scopes: data.records:read, data.records:write, schema.bases:read<br/>
+            2. Base ID: abre tu base en Airtable → Help → API → aparece el ID
+          </div>
+        </div>
+      </Card>
+
+      <Card title="🔐 Google OAuth">
+        <div>
+          <label style={labelStyle}>Google Client ID</label>
+          <input value={local.googleClientId}
+            onChange={e=>setLocal(p=>({...p,googleClientId:e.target.value}))}
+            placeholder="XXXXXXXXXX.apps.googleusercontent.com"
+            style={{...inputStyle,width:"100%",marginTop:4}} />
+        </div>
+        <div style={{background:"var(--blue-pale)",borderRadius:8,padding:10,fontSize:12,color:"var(--blue-dark)",lineHeight:1.6,marginTop:10}}>
+          <b>Cómo obtenerlo:</b><br/>
+          1. console.cloud.google.com → Nuevo proyecto<br/>
+          2. APIs → OAuth 2.0 → Crear credencial → Aplicación web<br/>
+          3. Authorized origins: URL donde alojes este archivo<br/>
+          4. Copia el Client ID
+        </div>
+      </Card>
+
+      <Card title="📋 Nombres de tablas en Airtable">
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {[["tableResidentes","Tabla de residentes"],["tablePreferencias","Tabla de preferencias"],["tableCuadrante","Tabla de cuadrante"]].map(([key,label])=>(
+            <div key={key}>
+              <label style={labelStyle}>{label}</label>
+              <input value={local[key]} onChange={e=>setLocal(p=>({...p,[key]:e.target.value}))}
+                style={{...inputStyle,width:"100%",marginTop:3}} />
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Btn onClick={save} color="var(--blue)">Guardar ajustes</Btn>
+
+      <Card title="📥 Macro VBA Excel — Sincronizar desde Airtable">
+        <div style={{fontSize:12,color:"var(--gray-dark)",lineHeight:1.7,fontFamily:"monospace",
+                     background:"var(--gray)",padding:10,borderRadius:8,overflowX:"auto",whiteSpace:"pre"}}>
+{`Sub SincronizarDesdeAirtable()
+  Dim token As String
+  Dim baseId As String
+  Dim tabla As String
+  token  = "TU_TOKEN"  ' <-- pon tu token
+  baseId = "TU_BASE_ID"
+  tabla  = "Cuadrante"
+  
+  Dim url As String
+  url = "https://api.airtable.com/v0/" & _
+        baseId & "/" & tabla
+  
+  Dim http As Object
+  Set http = CreateObject("MSXML2.XMLHTTP")
+  http.Open "GET", url, False
+  http.setRequestHeader _
+    "Authorization", "Bearer " & token
+  http.send
+  
+  If http.Status = 200 Then
+    MsgBox "Datos recibidos. " & _
+    "Parsea http.responseText con " & _
+    "tu parser JSON preferido."
+  Else
+    MsgBox "Error: " & http.Status
+  End If
+End Sub`}
+        </div>
+        <div style={{fontSize:11,color:"var(--gray-dark)",marginTop:8,lineHeight:1.5}}>
+          Copia este código en un módulo VBA y adapta token y Base ID. 
+          En Mac, usa <b>Microsoft.XMLHTTP</b> en lugar de MSXML2.XMLHTTP si da error.
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// SHARED UI COMPONENTS
+// ─────────────────────────────────────────────
+function Card({title, children}) {
+  return (
+    <div style={{background:"#fff",borderRadius:"var(--radius)",padding:16,
+                 boxShadow:"var(--shadow)"}}>
+      {title && <div style={{fontSize:13,fontWeight:700,color:"var(--blue-dark)",
+                              marginBottom:12,textTransform:"uppercase",letterSpacing:.4,
+                              paddingBottom:8,borderBottom:"1px solid var(--gray-mid)"}}>{title}</div>}
+      {children}
+    </div>
+  );
+}
+
+function SectionTitle({children}) {
+  return <div style={{fontSize:16,fontWeight:800,color:"var(--blue-dark)",
+                      paddingBottom:4}}>{children}</div>;
+}
+
+function Btn({onClick, children, disabled, color="var(--blue)", textColor="#fff"}) {
+  return (
+    <button onClick={onClick} disabled={disabled} style={{
+      background: disabled ? "var(--gray-mid)" : color,
+      color: disabled ? "var(--gray-dark)" : textColor,
+      border:"none",borderRadius:10,padding:"13px 20px",
+      fontSize:15,fontWeight:700,cursor:disabled?"default":"pointer",
+      width:"100%",transition:"opacity .15s",
+      opacity: disabled ? .7 : 1,
+    }}>{children}</button>
+  );
+}
+
+function Toast({msg, type}) {
+  return (
+    <div style={{position:"fixed",bottom:90,left:"50%",transform:"translateX(-50%)",
+                 background: type==="err" ? "var(--red)" : "var(--blue-dark)",
+                 color:"#fff",padding:"11px 20px",borderRadius:10,fontSize:14,fontWeight:600,
+                 boxShadow:"var(--shadow-lg)",zIndex:300,whiteSpace:"nowrap",
+                 animation:"fadeIn .2s ease"}}>
+      {msg}
+    </div>
+  );
+}
+
+const inputStyle = {
+  padding:"10px 12px",borderRadius:8,border:"1.5px solid var(--gray-mid)",
+  fontSize:14,outline:"none",background:"#fff",
+  WebkitAppearance:"none",
+};
+const labelStyle = {fontSize:12,fontWeight:600,color:"var(--gray-dark)",textTransform:"uppercase",letterSpacing:.4};
+const smallBtn = {padding:"6px 10px",border:"none",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer"};
+const dayToggleBtn = {padding:"7px 10px",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",transition:"all .15s"};
+const counterBtn = {width:36,height:36,borderRadius:10,border:"1.5px solid var(--blue)",
+                    background:"var(--blue-pale)",color:"var(--blue)",fontSize:20,fontWeight:700,
+                    cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"};
+const navBtn = {background:"var(--blue-pale)",border:"none",borderRadius:8,padding:"8px 14px",
+                color:"var(--blue)",fontSize:16,fontWeight:700,cursor:"pointer"};
+const pillBtn = (color) => ({background:color,color:"#fff",border:"none",borderRadius:8,
+                              padding:"7px 14px",fontSize:13,fontWeight:600,cursor:"pointer"});
+const th = {padding:"4px 3px",border:"1px solid #C0CCD8",textAlign:"center",whiteSpace:"nowrap",position:"sticky",top:0};
+const td = {padding:"3px 2px",border:"1px solid #E0E7EF"};
+
+// ─────────────────────────────────────────────
+// RENDER
+// ─────────────────────────────────────────────
+ReactDOM.render(<App />, document.getElementById("root"));
+</script>
+</body>
+</html>
