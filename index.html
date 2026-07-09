@@ -91,7 +91,7 @@ function cls(...args) { return args.filter(Boolean).join(" "); }
 // ─────────────────────────────────────────────
 async function airtableReq(cfg, method, path, body) {
   if (!cfg.airtableToken || !cfg.airtableBaseId) throw new Error("Airtable no configurado");
-  const url = `https://api.airtable.com/v0/${cfg.airtableBaseId}/${encodeURIComponent(path)}`;
+  const url = `https://api.airtable.com/v0/${cfg.airtableBaseId}/${path}`;
   const res = await fetch(url, {
     method,
     headers: {
