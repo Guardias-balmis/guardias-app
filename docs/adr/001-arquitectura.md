@@ -9,13 +9,13 @@
 
 ## 0. Resumen para quien tiene prisa
 
-Stack Google confirmado: **Google Sheets** (dato + entregable) con **pestañas de datos normalizadas por UUID** y **una pestaña por mes** como proyección; **la SPA React actual en GitHub Pages** (ya sirve en `molecule97.github.io/guardias-app`); **Google OAuth** solo con scopes básicos; **Airtable retirado**.
+Stack Google confirmado: **Google Sheets** (dato + entregable) con **pestañas de datos normalizadas por UUID** y **una pestaña por mes** como proyección; **la SPA React actual en GitHub Pages** (ya sirve en `guardias-balmis.github.io/guardias-app`); **Google OAuth** solo con scopes básicos; **Airtable retirado**.
 
 Tres decisiones del autor cambian la revisión 1:
 
 1. **No habrá API de Anthropic, nunca** (no se financia). El generador IA pasa de «botón con fallback» a **diseño principal por «prompt portátil»**: la app monta el prompt con todo el contexto (contaje acumulado del año, bloqueos, normas), el responsable lo pega en claude.ai con su propia cuenta, pega la respuesta JSON de vuelta, y **el validador de invariantes (Fase 1) la comprueba antes de aceptarla**. Esto *mejora* la durabilidad: desaparece el único secreto de terceros y el único coste recurrente.
 2. **Existe una cuenta Google del servicio** (departamental, no personal). Acceso pendiente de protocolo con los compañeros. El Sheet vivirá ahí **sea cual sea la variante de backend** — es la única identidad Google duradera disponible.
-3. **El repo es `github.com/Molecule97/guardias-app`** (público, personal, con Pages activo sobre `main`). Trabajo directo ahí para que los compañeros puedan editar.
+3. **El repo es `github.com/Guardias-balmis/guardias-app`** (público, personal, con Pages activo sobre `main`). Trabajo directo ahí para que los compañeros puedan editar.
 
 Con (1) y (2), la comparación backend cambia respecto a la revisión 1: **Apps Script bajo la cuenta del servicio (variante A′) logra CERO secretos almacenados** — el script escribe en su propio Sheet sin credencial material alguna — mientras que el proxy serverless (Plan B, preferencia inicial del autor) **no elimina la dependencia de la cuenta Google** (el Sheet la necesita igual) y **añade** una cuenta Cloudflare más una clave JSON de service account de larga vida. Recomendación: **A′**, con B documentado como plan de contingencia (§4).
 
@@ -54,7 +54,7 @@ Sistema de diseño extraído a `docs/auditoria/cliente-sistema-diseno.json` (pal
 |---|---|---|
 | D-A | **Sin API de Anthropic, definitivo** | Generador por «prompt portátil» (§6). Cero secretos de terceros en todo el sistema. La IA es asistente opcional; el validador es el que manda. |
 | D-B | **Cuenta Google del servicio disponible** (acceso pendiente de protocolo) | El Sheet y (en A′) el script viven ahí. Desbloquea el «gate de propiedad» de la revisión 1. |
-| D-C | **Repo público personal `Molecule97/guardias-app`**, main = producción Pages | Desarrollo de v2 sin tocar `index.html` hasta el corte (§7-R7). Colaboradores por invitación; decisión pendiente sobre org (§7-R6). |
+| D-C | **Repo en la organización `Guardias-balmis/guardias-app`** (transferido el 2026-07-16), main = producción Pages en `guardias-balmis.github.io/guardias-app` | Desarrollo de v2 sin tocar `index.html` hasta el corte (§7-R7). Sobrevive a cualquier cuenta individual (§7-R6 resuelto). |
 
 ---
 
@@ -128,7 +128,7 @@ Propiedades: cero coste, cero secretos, funciona con cualquier LLM futuro (el pr
 | R3 | Proyecto GCP borrado = client ID muerto sin recuperación a los 30 días (A-5) | OAuth client en proyecto GCP **de la cuenta del servicio**; considerar segundo owner del proyecto |
 | R4 | `tokeninfo` es endpoint «de debugging» con throttling posible (A-1) | Reintentos + sesión HMAC (1 llamada por login, no por request). Desviación documentada |
 | R5 | Triggers de Apps Script se desactivan solos con el tiempo | **Nada crítico depende de triggers**: promoción derivada en lectura, publicación por evento (al validar). Un trigger muerto no rompe nada |
-| R6 | **Transferir el repo a una org NO redirige la URL de Pages** (A-6, refutado el supuesto de la rev. 1) | Decidir **ahora**, antes de que existan marcadores: (a) crear org gratuita ya y mover el repo (la URL cambia hoy, que no duele), o (b) quedarse en la cuenta personal + **configurar sucesor** en GitHub Settings y ≥1 colaborador con write. GitHub **no** borra cuentas por inactividad (A-6) |
+| R6 | ~~Transferir el repo a una org NO redirige la URL de Pages~~ (A-6) | **RESUELTO 2026-07-16**: repo transferido a la org `Guardias-balmis` mientras la URL aún no la tenía nadie guardada. Nueva URL `guardias-balmis.github.io/guardias-app` (200); la antigua da 404 sin redirect, como se preveía. Pendiente: añadir ≥2 owners a la org (factor bus) |
 | R7 | `main` = producción Pages | v2 se desarrolla en rama `v2` (o subcarpeta `v2/`); `index.html` de producción no se toca hasta el corte final |
 | R8 | Sheets no transaccional | Único escritor (Apps Script) + `LockService` |
 | R9 | `MAXIFS`/`SUMPRODUCT` matricial al portar a Sheets | Verificación explícita en Fase 7; la red de seguridad real es el validador, no las fórmulas |
