@@ -98,11 +98,20 @@ function CalendarScreen() {
     }
   };
 
-  const validar = () => {
+  const [validando, setValidando] = useState(false);
+
+  const validar = async () => {
+    setValidando(true);
+    // INV-5/6/7 dependen de los bloqueos DURO de TODO el equipo (vacaciones/rotación/baja),
+    // no solo de quien pulsa Validar — listBloqueos (a diferencia de misBloqueos) los trae todos.
+    const rBloqueos = await app.api.listBloqueos(anio, mes);
+    setValidando(false);
+    if (!rBloqueos.ok) { showToast("Error cargando bloqueos para validar: " + rBloqueos.error, "err"); return; }
     const ctx = {
       mes, anio,
       residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
       asignaciones: residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo }))),
+      bloqueos: rBloqueos.bloqueos,
     };
     setViolaciones(validateMonth(ctx));
   };
@@ -125,7 +134,7 @@ function CalendarScreen() {
           <button style={pillBtn(COLOR.blue)} onClick={guardar} disabled={guardando}>
             {guardando ? "Guardando…" : `💾 Guardar${cambios.length ? ` (${cambios.length})` : ""}`}
           </button>
-          <button style={pillBtn(COLOR.greenMid)} onClick={validar}>✅ Validar</button>
+          <button style={pillBtn(COLOR.greenMid)} onClick={validar} disabled={validando}>{validando ? "Validando…" : "✅ Validar"}</button>
         </div>
 
         <div style={{ overflowX: "auto" }}>

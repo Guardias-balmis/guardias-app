@@ -93,16 +93,14 @@ export function handleRequest(rawBody, deps) {
         });
 
       case "misBloqueos":
-        return authed(req, deps, (session) => {
-          const prefix = monthPrefix(req.anio, req.mes);
-          const monthStart = `${prefix}-01`;
-          const monthEnd = `${prefix}-31`; // comparación lexicográfica ISO: basta un tope holgado
-          const all = deps.store.readLatest("bloqueos", (r) => r.id);
-          const mios = all.filter((b) =>
-            b.residenteId === session.sub && b.activo === true && b.desde <= monthEnd && b.hasta >= monthStart
-          );
-          return { ok: true, bloqueos: mios };
-        });
+        return authed(req, deps, (session) =>
+          ({ ok: true, bloqueos: activeBloqueosInMonth(deps, req.anio, req.mes).filter((b) => b.residenteId === session.sub) }));
+
+      // A diferencia de misBloqueos (alcance propio, para Preferencias), esta acción
+      // devuelve los bloqueos de TODO el equipo: el validador de CalendarScreen (INV-5/6/7)
+      // necesita conocer los bloqueos de todos los residentes, no solo de quien valida.
+      case "listBloqueos":
+        return authed(req, deps, () => ({ ok: true, bloqueos: activeBloqueosInMonth(deps, req.anio, req.mes) }));
 
       case "cancelarBloqueo":
         return authed(req, deps, (session) => {
@@ -181,6 +179,15 @@ function handleAlta(req, deps) {
 /** Prefijo "YYYY-MM" de una fecha ISO, para filtrar asignaciones de un mes concreto. */
 function monthPrefix(anio, mes) {
   return `${anio}-${String(mes).padStart(2, "0")}`;
+}
+
+/** Bloqueos activos (de cualquier residente) que solapan el mes dado. */
+function activeBloqueosInMonth(deps, anio, mes) {
+  const prefix = monthPrefix(anio, mes);
+  const monthStart = `${prefix}-01`;
+  const monthEnd = `${prefix}-31`; // comparación lexicográfica ISO: basta un tope holgado
+  return deps.store.readLatest("bloqueos", (r) => r.id)
+    .filter((b) => b.activo === true && b.desde <= monthEnd && b.hasta >= monthStart);
 }
 
 /** Valida la sesión y ejecuta `fn(payload)`, o devuelve el error de sesión. */

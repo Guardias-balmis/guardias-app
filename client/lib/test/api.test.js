@@ -82,6 +82,15 @@ test("makeApi.altaResidente soporta idToken+nonce o pendingToken", async () => {
   assert.equal(sent.idToken, undefined);
 });
 
+test("makeApi.listBloqueos y misBloqueos mandan la action correcta", async () => {
+  const fetchImpl = fakeFetch(200, { ok: true, bloqueos: [] });
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "s" });
+  await api.listBloqueos(2026, 8);
+  assert.equal(JSON.parse(fetchImpl.calls[0].init.body).action, "listBloqueos");
+  await api.misBloqueos(2026, 8);
+  assert.equal(JSON.parse(fetchImpl.calls[1].init.body).action, "misBloqueos");
+});
+
 test("makeApi.guardarAsignaciones manda el array de cambios", async () => {
   const fetchImpl = fakeFetch(200, { ok: true, guardados: 2 });
   const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "s" });
