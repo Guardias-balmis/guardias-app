@@ -9,7 +9,7 @@
 | Fase | Contenido | Estado |
 |---|---|---|
 | 0 | ADR de arquitectura ([docs/adr/001-arquitectura.md](docs/adr/001-arquitectura.md)) | ✅ **Aceptada** (2026-07-16): stack Google, variante A′ (Apps Script en cuenta del servicio), sin API de Anthropic (generador «prompt portátil»), org de GitHub |
-| 1 | **Núcleo de dominio, TDD estricto** — `calendar`, `residents` (nivel/grupo), `tally` (contaje), `validate` (INV-1..11). Cero I/O | 🔄 En curso (rama `v2`): calendar + residents en verde; tally y validate pendientes |
+| 1 | **Núcleo de dominio, TDD estricto** — `calendar`, `residents` (nivel/grupo), `tally` (contaje), `validate`/`thirdpost`/`equity` (INV-1..11). Cero I/O | ✅ **Completa** (rama `v2`): 118 tests en verde, cero dependencias. Pendiente puerta de consistencia y aprobación del autor para Fase 2 |
 | 2 | Backend Apps Script: verificación de identidad (tokeninfo + sesión HMAC), roles derivados, adaptador de Sheets, `LockService`. Spike CORS | ⬜ Requiere: acceso a cuenta del servicio para desplegar (el desarrollo no) |
 | 3 | Cliente: trocear `index.html`, eliminar AdminScreen y todo secreto, alta con fechas, código GP, conservar diseño ([docs/auditoria/cliente-sistema-diseno.json](docs/auditoria/cliente-sistema-diseno.json)) | ⬜ Decisión pendiente: módulos sin build (candidata: ES modules + htm) |
 | 4 | Preferencias como calendario de fechas concretas, DURO vs BLANDO en UI | ⬜ |

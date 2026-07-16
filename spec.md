@@ -151,5 +151,7 @@ degradan a AVISO solo donde la normativa lo permite (columna "Excepciones").
 - [x] `v2/domain/residents.js` — periodos, nivel, grupo, activo (S-2, S-3)
 - [x] `v2/domain/tally.js` — contaje (§4), 19 tests
 - [x] `v2/domain/validate.js` — `validateMonth`: INV-1,2,5,6,7,9,10,11 (§5), 45 tests
-- [ ] `v2/domain/equity.js` — INV-3 (equidad al cierre del año de residencia)
-- [ ] `v2/domain/thirdpost.js` — INV-8 (rotación y equidad del tercer puesto)
+- [x] `v2/domain/thirdpost.js` — `validateThirdPost`: INV-8 (rotación, equidad, mochila), 19 tests
+- [x] `v2/domain/equity.js` — `validateResidencyYearClose`: INV-3 + INV-4 (cierre de año), 14 tests
+
+**Núcleo de dominio completo: 118 tests en verde, cero dependencias, cero I/O.**
