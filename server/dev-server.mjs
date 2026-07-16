@@ -88,7 +88,7 @@ window.google = { accounts: { id: {
   initialize(cfg) { window.__devGisCfg = cfg; },
   renderButton(el) {
     const cfg = window.__devGisCfg;
-    const users = ["ana@gmail.com (R3, ya vinculada)", "nueva@gmail.com (SIN vincular — prueba el alta)"];
+    const users = ["ana@gmail.com (ya vinculada)", "nueva@gmail.com (SIN vincular — prueba el alta)"];
     el.innerHTML = "";
     users.forEach((label) => {
       const email = label.split(" ")[0];
@@ -126,9 +126,16 @@ const server = http.createServer(async (req, res) => {
     const ext = path.extname(abs);
     let out = data;
     if (filePath === "/index.html") {
-      // Inyecta el stub de GIS justo antes del script del cliente real; ni index.html ni
-      // ningún fichero del repo se tocan — esto solo pasa en la respuesta HTTP.
-      out = Buffer.from(data.toString("utf8").replace("</head>", GOOGLE_STUB + "\n</head>")
+      // Quita el script REAL de Google (si hay red, cargaría de verdad y pisaría el stub
+      // por ser async) e inyecta el stub justo antes de los scripts del cliente. Ni
+      // index.html ni ningún fichero del repo se tocan — esto solo pasa en la respuesta HTTP.
+      out = Buffer.from(data.toString("utf8")
+        .replace(/<script src="https:\/\/accounts\.google\.com\/gsi\/client"[^>]*><\/script>/, "")
+        .replace("</head>", GOOGLE_STUB + "\n</head>"));
+    } else if (filePath === "/client/config.js") {
+      // client/config.js trae las constantes de despliegue sin rellenar (README-deploy
+      // paso 5); aquí, y SOLO en la respuesta HTTP del dev-server, se sustituyen.
+      out = Buffer.from(data.toString("utf8")
         .replace('EXEC_URL = "PENDIENTE_DE_DESPLIEGUE"', 'EXEC_URL = "http://127.0.0.1:' + PORT + '/exec"')
         .replace('GOOGLE_CLIENT_ID = "PENDIENTE_DE_DESPLIEGUE"', 'GOOGLE_CLIENT_ID = "' + DEV_CLIENT_ID + '"'));
     }

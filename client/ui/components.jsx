@@ -2,7 +2,7 @@
 // como <script type="text/babel" data-type="module"> y se publican en window.UI — los
 // ficheros .jsx no pueden importarse entre sí (ver decisión C-1, plan.md), así que las
 // pantallas consumen estos componentes vía el namespace global, nunca con `import`.
-import { COLOR, RADIUS, SHADOW } from "../lib/design-tokens.js";
+import { COLOR, RADIUS, SHADOW } from "./client/lib/design-tokens.js";
 
 function Card({ title, children }) {
   return (

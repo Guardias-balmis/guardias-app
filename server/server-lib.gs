@@ -380,32 +380,48 @@ function sessionFor(residente, deps) {
   return { ok: true, session, residente: { id: residente.id, nombre: residente.nombre, rol } };
 }
 
+const PENDING_TTL = 300; // 5 min: solo para completar el alta tras un login fallido por email desconocido.
+
 function handleLogin(req, deps) {
   const v = verifyIdentity(req, deps);
   if (!v.ok) return { ok: false, error: v.reason };
 
   const residente = deps.store.readRecords("residentes").find((r) => (r.email || "").toLowerCase() === v.email);
-  if (!residente) return { ok: false, error: "email no vinculado a ningún residente" };
+  if (!residente) {
+    // El email SÍ quedó verificado con Google (aud/iss/email_verified/exp ya comprobados);
+    // se emite un token de corta vida para que el cliente pueda completar el alta sin
+    // repetir el login de Google (y sin el problema de reusar un nonce ya consumido).
+    const pendingToken = issueSession({ pending: true, email: v.email }, { now: deps.now, ttlSeconds: PENDING_TTL, secret: deps.sessionSecret, crypto: deps.crypto });
+    return { ok: false, error: "email no vinculado a ningún residente", pendingToken };
+  }
 
   return sessionFor(residente, deps);
 }
 
 /**
- * Alta autoservicio (DoD-1: "un R1 nuevo se da de alta solo"). Verifica el ID token de
- * Google como login, pero en vez de exigir un residente ya vinculado, CREA uno — siempre
- * que el email no esté ya vinculado (evita duplicados). El nivel R1-R4 no se pide: se
- * deriva de `fechaInicio`/`fechaFin` (spec.md S-2).
+ * Alta autoservicio (DoD-1: "un R1 nuevo se da de alta solo"). Verifica identidad de dos
+ * formas posibles: (a) un `idToken`+`nonce` frescos (como login), o (b) un `pendingToken`
+ * emitido por un login previo que falló solo por "email no vinculado" — evita un segundo
+ * popup de Google. El nivel R1-R4 no se pide: se deriva de `fechaInicio`/`fechaFin` (S-2).
  */
 function handleAlta(req, deps) {
-  const v = verifyIdentity(req, deps);
-  if (!v.ok) return { ok: false, error: v.reason };
+  let email;
+  if (req.pendingToken) {
+    const s = verifySession(req.pendingToken, { now: deps.now, secret: deps.sessionSecret, crypto: deps.crypto });
+    if (!s.valid || !s.payload.pending) return { ok: false, error: "pendingToken inválido o caducado" };
+    email = s.payload.email;
+  } else {
+    const v = verifyIdentity(req, deps);
+    if (!v.ok) return { ok: false, error: v.reason };
+    email = v.email;
+  }
 
   if (!req.nombre || !req.fechaInicio || !req.fechaFin) return { ok: false, error: "nombre, fechaInicio y fechaFin son obligatorios" };
 
-  const yaExiste = deps.store.readRecords("residentes").some((r) => (r.email || "").toLowerCase() === v.email);
+  const yaExiste = deps.store.readRecords("residentes").some((r) => (r.email || "").toLowerCase() === email);
   if (yaExiste) return { ok: false, error: "ese email ya está vinculado a un residente" };
 
-  const id = deps.store.appendRecord("residentes", { nombre: req.nombre, email: v.email, fechaInicio: req.fechaInicio, fechaFin: req.fechaFin });
+  const id = deps.store.appendRecord("residentes", { nombre: req.nombre, email, fechaInicio: req.fechaInicio, fechaFin: req.fechaFin });
   return sessionFor({ id, nombre: req.nombre }, deps);
 }
 

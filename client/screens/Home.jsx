@@ -1,9 +1,9 @@
 // HomeScreen — dashboard. El nivel R1-R4 de cada residente se DERIVA aquí de sus fechas
 // (nunca se lee un campo "ano" almacenado — ese campo no existe ya, spec.md S-2).
-import { COLOR, ANOS, ANO_COLORS, ANO_TEXT } from "../lib/design-tokens.js";
-import { defaultTrainingPeriods, levelOn } from "../../v2/domain/residents.js";
-import { addDays, addYears } from "../../v2/domain/calendar.js";
-import { todayISO } from "../lib/dates.js";
+import { COLOR, ANOS, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js";
+import { defaultTrainingPeriods, levelOn } from "./v2/domain/residents.js";
+import { addDays, addYears } from "./v2/domain/calendar.js";
+import { todayISO } from "./client/lib/dates.js";
 
 const { Card, QuickCard } = window.UI;
 

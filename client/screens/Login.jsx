@@ -1,11 +1,11 @@
 // LoginScreen — Sign in with Google real (GIS + ID token verificado), sin implicit flow,
 // sin modo demo, sin backdoor de rol (bugs del v1 — ver docs/auditoria). Un residente sin
 // vincular ve aquí mismo el formulario de alta autoservicio (DoD-1).
-import { COLOR } from "../lib/design-tokens.js";
-import { setupGoogleSignIn, submitAlta } from "../lib/auth.js";
-import { GOOGLE_CLIENT_ID } from "../config.js";
-import { addDays, addYears, compareISO } from "../../v2/domain/calendar.js";
-import { todayISO } from "../lib/dates.js";
+import { COLOR } from "./client/lib/design-tokens.js";
+import { setupGoogleSignIn, submitAlta } from "./client/lib/auth.js";
+import { GOOGLE_CLIENT_ID } from "./client/config.js";
+import { addDays, addYears, compareISO } from "./v2/domain/calendar.js";
+import { todayISO } from "./client/lib/dates.js";
 
 const { useState, useEffect, useRef } = React;
 const { Card, Btn, Aviso } = window.UI;

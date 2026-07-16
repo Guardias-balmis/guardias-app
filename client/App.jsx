@@ -2,13 +2,13 @@
 // derivado, nunca un flag editable), sin token en localStorage (auth.js usa
 // sessionStorage), sin selector de mes/año en texto (mes/anio son números 1-12, no
 // "Junio"/"2026" — mata la clase de bug de desfase del v1).
-import { COLOR, S } from "./lib/design-tokens.js";
-import { makeApi } from "./lib/api.js";
-import { getSession, clearSession } from "./lib/auth.js";
-import { todayISO } from "./lib/dates.js";
-import { EXEC_URL } from "./config.js";
-import { defaultTrainingPeriods, levelOn, groupOf } from "../v2/domain/residents.js";
-import { addDays, addYears } from "../v2/domain/calendar.js";
+import { COLOR, S } from "./client/lib/design-tokens.js";
+import { makeApi } from "./client/lib/api.js";
+import { getSession, clearSession } from "./client/lib/auth.js";
+import { todayISO } from "./client/lib/dates.js";
+import { EXEC_URL } from "./client/config.js";
+import { defaultTrainingPeriods, levelOn, groupOf } from "./v2/domain/residents.js";
+import { addDays, addYears } from "./v2/domain/calendar.js";
 
 const { useState, useEffect, useCallback, createContext, useContext } = React;
 
@@ -37,6 +37,7 @@ function App() {
     clearSession();
     setAuth(null);
     setResidentes([]);
+    setTab("home"); // si no, el siguiente login hereda la pestaña de la sesión anterior
   }, []);
 
   const loadResidentes = useCallback(async () => {

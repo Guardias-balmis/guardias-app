@@ -3,10 +3,10 @@
 // prompt de texto para pegar en el asistente que el usuario prefiera y valida LOCALMENTE
 // (validateMonth, sin red) la respuesta que devuelva — "la IA propone, el validador dispone"
 // (spec.md §5), mismo esquema visual de violaciones que CalendarScreen.
-import { COLOR, S, ANOS } from "../lib/design-tokens.js";
-import { defaultTrainingPeriods, levelOn, groupOf } from "../../v2/domain/residents.js";
-import { addDays, addYears, toISO } from "../../v2/domain/calendar.js";
-import { validateMonth } from "../../v2/domain/validate.js";
+import { COLOR, S, ANOS } from "./client/lib/design-tokens.js";
+import { defaultTrainingPeriods, levelOn, groupOf } from "./v2/domain/residents.js";
+import { addDays, addYears, toISO } from "./v2/domain/calendar.js";
+import { validateMonth } from "./v2/domain/validate.js";
 
 const { useState, useMemo } = React;
 const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;

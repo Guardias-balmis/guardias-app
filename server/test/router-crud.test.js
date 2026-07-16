@@ -79,6 +79,26 @@ test("altaResidente valida campos obligatorios", () => {
   assert.equal(r.ok, false);
 });
 
+test("altaResidente acepta un pendingToken de un login fallido, sin volver a verificar con Google (evita un segundo popup)", () => {
+  const deps = makeDeps({ fetchTokeninfo: () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "nuevo2@gmail.com", email_verified: "true", exp: String(2_000_000) }) });
+  const nonce = call({ action: "getNonce" }, deps).nonce;
+  deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "nuevo2@gmail.com", email_verified: "true", exp: String(2_000_000), nonce });
+  const fallo = call({ action: "login", idToken: "jwt", nonce }, deps);
+  assert.equal(fallo.ok, false);
+  assert.ok(fallo.pendingToken);
+
+  // segunda llamada SIN idToken, solo con el pendingToken de la primera
+  const r = call({ action: "altaResidente", pendingToken: fallo.pendingToken, nombre: "Nuevo Dos", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(deps.store.readRecords("residentes").find((x) => x.email === "nuevo2@gmail.com").nombre, "Nuevo Dos");
+});
+
+test("altaResidente rechaza un pendingToken caducado o manipulado", () => {
+  const deps = makeDeps();
+  const r = call({ action: "altaResidente", pendingToken: "firma.falsa", nombre: "X", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  assert.equal(r.ok, false);
+});
+
 test("altaResidente con aud incorrecta se rechaza (misma protección que login)", () => {
   const deps = makeDeps({ fetchTokeninfo: () => ({ aud: "otra.apps.googleusercontent.com", iss: "https://accounts.google.com", email: "x@gmail.com", email_verified: "true", exp: String(2_000_000) }) });
   const r = call({ action: "altaResidente", idToken: "jwt", nombre: "X", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);

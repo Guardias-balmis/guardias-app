@@ -22,20 +22,14 @@
 <div id="root"></div>
 
 <!--
-  Sin build (ADR-001 R11 / plan.md decisión C-1). Los .jsx se transpilan en el navegador
-  (Babel Standalone) y se registran en window.UI.* / window.Screens.* — no pueden
-  importarse entre sí, así que el ORDEN aquí no importa para la composición (boot.js
-  espera activamente a que todos existan), pero sí conviene mantenerlo por legibilidad:
-  componentes compartidos primero, pantallas después, la raíz (App) al final.
+  Sin build (ADR-001 R11 / plan.md decisión C-1). Los .jsx se transpilan EN EL NAVEGADOR
+  (Babel.transform) y se registran en window.UI.* / window.Screens.* — no pueden
+  importarse entre sí (Babel no resuelve ese grafo), así que la composición cruzada usa
+  esos namespaces globales. La carga la orquesta client/loader.js: fetch + Babel.transform
+  + import() en SECUENCIA (no el escaneo automático de Babel Standalone — verificado que
+  con 8 ficheros pierde alguno en silencio). El orden de JSX_FILES en loader.js es el que
+  importa; este único <script> es la única entrada.
 -->
-<script type="text/babel" data-type="module" src="client/ui/components.jsx"></script>
-<script type="text/babel" data-type="module" src="client/screens/Login.jsx"></script>
-<script type="text/babel" data-type="module" src="client/screens/Home.jsx"></script>
-<script type="text/babel" data-type="module" src="client/screens/Calendar.jsx"></script>
-<script type="text/babel" data-type="module" src="client/screens/Prefs.jsx"></script>
-<script type="text/babel" data-type="module" src="client/screens/Generator.jsx"></script>
-<script type="text/babel" data-type="module" src="client/screens/Settings.jsx"></script>
-<script type="text/babel" data-type="module" src="client/App.jsx"></script>
-<script type="module" src="client/boot.js"></script>
+<script type="module" src="client/loader.js"></script>
 </body>
 </html>

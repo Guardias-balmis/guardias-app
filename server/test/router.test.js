@@ -72,7 +72,7 @@ test("login con aud de otra app se rechaza (fallo estrella propagado)", () => {
   assert.match(r.error, /aud/i);
 });
 
-test("login de un email no vinculado a ningún residente se rechaza", () => {
+test("login de un email no vinculado a ningún residente se rechaza y da un pendingToken (evita repetir el login de Google para el alta)", () => {
   // consumeNonce undefined: aislamos la rama de resolución de residente (nonce no exigido aquí)
   const deps = makeDeps({
     consumeNonce: undefined,
@@ -81,6 +81,7 @@ test("login de un email no vinculado a ningún residente se rechaza", () => {
   const r = call({ action: "login", idToken: "jwt" }, deps);
   assert.equal(r.ok, false);
   assert.match(r.error, /vinculad/i);
+  assert.ok(r.pendingToken, "debe incluir un pendingToken reutilizable para altaResidente");
 });
 
 test("una acción autenticada sin sesión válida se rechaza", () => {

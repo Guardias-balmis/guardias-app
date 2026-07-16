@@ -1,6 +1,6 @@
 // SettingsScreen — sin campos de credencial ni token (ADR-001 §3: cero secretos en el
 // cliente). Solo lectura de cuenta/residencia + cierre de sesión.
-import { COLOR, ANO_COLORS, ANO_TEXT } from "../lib/design-tokens.js";
+import { COLOR, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js";
 
 const { Card, Btn, Info } = window.UI;
 

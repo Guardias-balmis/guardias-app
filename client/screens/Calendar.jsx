@@ -2,12 +2,12 @@
 // PrefsScreen: no se crea un selector de mes propio aquí). Guarda por residenteId,
 // nunca por nombre (bug del v1); datesOfMonth/weekday para todo el cálculo de fechas
 // (nunca `new Date(anio, mes, ...)` a mano, para no reintroducir el desfase de mes).
-import { COLOR, S, ANOS, ANO_COLORS, ANO_TEXT, CODE_COLORS, CODE_LABELS, CODES_CYCLE, pillBtn } from "../lib/design-tokens.js";
-import { defaultTrainingPeriods, levelOn } from "../../v2/domain/residents.js";
-import { datesOfMonth, weekday, isWeekend, addDays, addYears } from "../../v2/domain/calendar.js";
-import { tally } from "../../v2/domain/tally.js";
-import { validateMonth } from "../../v2/domain/validate.js";
-import { todayISO } from "../lib/dates.js";
+import { COLOR, S, ANOS, ANO_COLORS, ANO_TEXT, CODE_COLORS, CODE_LABELS, CODES_CYCLE, pillBtn } from "./client/lib/design-tokens.js";
+import { defaultTrainingPeriods, levelOn } from "./v2/domain/residents.js";
+import { datesOfMonth, weekday, isWeekend, addDays, addYears } from "./v2/domain/calendar.js";
+import { tally } from "./v2/domain/tally.js";
+import { validateMonth } from "./v2/domain/validate.js";
+import { todayISO } from "./client/lib/dates.js";
 
 const { useState, useEffect } = React;
 const { Card } = window.UI;

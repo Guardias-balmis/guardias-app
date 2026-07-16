@@ -1,7 +1,7 @@
 // PrefsScreen — preferencias del residente para el mes en curso (app.mes/app.anio,
 // COMPARTIDO con CalendarScreen: no se crea un selector de mes propio aquí).
-import { COLOR, SHADOW, S, DIAS_SEMANA, DIAS_NOMBRE } from "../lib/design-tokens.js";
-import { daysInMonth } from "../../v2/domain/calendar.js";
+import { COLOR, SHADOW, S, DIAS_SEMANA, DIAS_NOMBRE } from "./client/lib/design-tokens.js";
+import { daysInMonth } from "./v2/domain/calendar.js";
 
 const { useState, useEffect } = React;
 const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
