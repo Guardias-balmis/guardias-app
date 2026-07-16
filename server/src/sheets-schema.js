@@ -10,11 +10,14 @@ const col = (key, type = "string") => ({ key, type });
 export const TABLES = {
   residentes: { name: "residentes", columns: [col("id"), col("nombre"), col("email"), col("fechaInicio"), col("fechaFin")] },
   periodos: { name: "periodos", columns: [col("id"), col("residenteId"), col("anio", "number"), col("fechaInicio"), col("fechaFin")] },
-  bloqueos: { name: "bloqueos", columns: [col("id"), col("residenteId"), col("desde"), col("hasta"), col("motivo"), col("provincia"), col("guardiasEnCentroExterno", "bool")] },
+  bloqueos: { name: "bloqueos", columns: [col("id"), col("residenteId"), col("desde"), col("hasta"), col("motivo"), col("provincia"), col("guardiasEnCentroExterno", "bool"), col("activo", "bool")] },
   asignaciones: { name: "asignaciones", columns: [col("id"), col("fecha"), col("residenteId"), col("codigo"), col("puesto"), col("origen")] },
   responsables: { name: "responsables", columns: [col("id"), col("periodoInicio"), col("periodoFin"), col("residenteId"), col("metodo"), col("semilla"), col("candidatos", "json"), col("fechaSorteo")] },
   sorteos: { name: "sorteos", columns: [col("id"), col("fecha"), col("motivo"), col("semilla"), col("candidatos", "json"), col("resultado", "json")] },
-  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("diasPreferidos", "json"), col("diasEvitar", "json"), col("rotDe", "number"), col("rotHasta", "number"), col("vacDe", "number"), col("vacHasta", "number"), col("notas")] },
+  // Fase 4: diasPreferidos/diasEvitar (día de semana genérico) y rotDe/rotHasta/vacDe/vacHasta
+  // (número de día suelto) del v1 se sustituyen por fechas concretas (BLANDO) y por la tabla
+  // `bloqueos` (DURO) — spec.md §5 Fase 4: "distingue DURO vs BLANDO, son cosas distintas".
+  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("fechasPreferidas", "json"), col("fechasEvitar", "json"), col("notas")] },
 };
 
 /** Cabecera (nombres de columna) de una tabla. */

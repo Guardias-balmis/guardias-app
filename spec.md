@@ -26,10 +26,13 @@ PeriodoFormativo {              # 4 por residente; generados por defecto, editab
   residenteId, anio: 1..4, fechaInicio: date, fechaFin: date
 }
 Bloqueo {
-  residenteId, fecha: date
-  tipo: DURO | BLANDO
-  motivo: VACACIONES | ROTACION | BAJA | PERSONAL   # embarazo/paternidad → BAJA (decisión V-5)
-  provinciaColindante?: bool    # solo ROTACION: rotación en Alicante/Valencia/Murcia/Albacete (INV-7)
+  id: UUID, residenteId
+  desde: date, hasta: date      # RANGO inclusivo, no un día suelto (decisión V-6)
+  tipo: DURO                    # motivo ∈ {VACACIONES,ROTACION,BAJA} ⇒ DURO siempre; no hay Bloqueo BLANDO
+  motivo: VACACIONES | ROTACION | BAJA   # embarazo/paternidad → BAJA (decisión V-5)
+  provincia?: string            # solo ROTACION: Alicante/Valencia/Murcia/Albacete activa INV-7
+  guardiasEnCentroExterno?: bool
+  activo: bool                  # cancelación = reinserción con mismo id y activo=false (append-only)
 }
 # Pendiente de modelar (§5 INV-13/14): Imaginaria (dos listas rotatorias por grupo) y la validación
 # del Responsable (nivel R3, sorteo reproducible). Ver Estado de implementación (§7).
@@ -45,9 +48,12 @@ Excepcion {                     # degrada una violación DURA→AVISO donde la n
 }
 ```
 
-**Bloqueos:** `DURO` (V/R/B — el generador y el validador prohíben guardia ese día) vs `BLANDO`
-(PERSONAL — "preferiría no"; se minimiza su incumplimiento, no se prohíbe). Esta distinción es
-núcleo del generador: no se colapsa.
+**DURO vs BLANDO (decisión V-6, Fase 4):** son entidades DISTINTAS, no dos tipos de una misma
+tabla. `Bloqueo` (V/R/B, rango `desde`/`hasta`) es **siempre DURO**: lo prohíbe el validador
+(INV-5/6/7), lo respeta el generador. Una preferencia PERSONAL ("preferiría no este día") es
+**BLANDA**: vive en `Preferencias.fechasEvitar` (fechas concretas sueltas, no un rango), es
+informativa para el generador y **nunca** la comprueba el validador — incumplirla no produce
+ninguna violación. Esta distinción es núcleo del generador: no se colapsa.
 
 ## 3. Reglas derivadas (funciones puras)
 
@@ -158,6 +164,7 @@ Estado: ✅ implementado y con test · ⏳ pendiente (fase indicada).
 | V-3 | Severidades `error` (bloqueante) / `aviso` (informativo) | Alineado con la salida del validador; mapea DURA→error, AVISO→aviso |
 | V-4 | **Clasificación de severidad** (tras la puerta de consistencia): `error` protege equidad/seguridad/legitimidad; `aviso` es advisory/compensable/social. Aviso: INV-2 (Pequeño con 3), INV-8d (mochila), INV-10 (eventos), INV-11 (dif mensual entre R2), INV-12 (coherencia festivo). El resto, `error` | La normativa dice "cifras orientativas, el criterio obligatorio es la equidad": un cuadrante no debe bloquearse por reglas blandas. El mecanismo `aviso` no existía y varias reglas blandas bloqueaban cuadrantes válidos |
 | V-5 | Embarazo/paternidad se modela como `Bloqueo` motivo **BAJA** (para el descuento proporcional de la nota [a]) | Evita ampliar el enum; el descuento de disponibilidad es idéntico |
+| V-6 | `Bloqueo` es rango `desde`/`hasta` (no un día suelto) y siempre DURO; BLANDO no es un `Bloqueo`, es `Preferencias.fechasEvitar` (fechas sueltas, no enforced) | Corrige la spec para que coincida con `validate.js` (ya implementado y probado E2E en Fase 3-4): INV-6/7 operan sobre periodos, no días sueltos; colapsar DURO/BLANDO en una tabla habría mezclado "prohibido" con "preferiría no" |
 | S-1 | Fechas ISO string + UTC, meses 1–12 | Mata la clase de bug del v1 (desfase +1 mes, `navMes` incoherente) |
 | S-2 | Nivel por aniversario personal, no por año académico | Normativa mide equidad por año de residencia individual; el Excel (año-entero) no puede expresar la nota [a] |
 | S-3 | Hueco entre periodos = nivel anterior; solape = inválido | Baja retrasa promoción; no existe des-promoción |

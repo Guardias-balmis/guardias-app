@@ -57,5 +57,8 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
     misPreferencias: (anio, mes) => authed("misPreferencias", { anio, mes }),
     guardarPreferencias: (anio, mes, prefs) => authed("guardarPreferencias", { anio, mes, prefs }),
     validar: (cuadrante) => authed("validar", { cuadrante }),
+    misBloqueos: (anio, mes) => authed("misBloqueos", { anio, mes }),
+    crearBloqueo: (desde, hasta, motivo, extra = {}) => authed("crearBloqueo", { desde, hasta, motivo, ...extra }),
+    cancelarBloqueo: (id) => authed("cancelarBloqueo", { id }),
   };
 }

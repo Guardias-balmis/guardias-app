@@ -19,11 +19,14 @@ const col = (key, type = "string") => ({ key, type });
 const TABLES = {
   residentes: { name: "residentes", columns: [col("id"), col("nombre"), col("email"), col("fechaInicio"), col("fechaFin")] },
   periodos: { name: "periodos", columns: [col("id"), col("residenteId"), col("anio", "number"), col("fechaInicio"), col("fechaFin")] },
-  bloqueos: { name: "bloqueos", columns: [col("id"), col("residenteId"), col("desde"), col("hasta"), col("motivo"), col("provincia"), col("guardiasEnCentroExterno", "bool")] },
+  bloqueos: { name: "bloqueos", columns: [col("id"), col("residenteId"), col("desde"), col("hasta"), col("motivo"), col("provincia"), col("guardiasEnCentroExterno", "bool"), col("activo", "bool")] },
   asignaciones: { name: "asignaciones", columns: [col("id"), col("fecha"), col("residenteId"), col("codigo"), col("puesto"), col("origen")] },
   responsables: { name: "responsables", columns: [col("id"), col("periodoInicio"), col("periodoFin"), col("residenteId"), col("metodo"), col("semilla"), col("candidatos", "json"), col("fechaSorteo")] },
   sorteos: { name: "sorteos", columns: [col("id"), col("fecha"), col("motivo"), col("semilla"), col("candidatos", "json"), col("resultado", "json")] },
-  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("diasPreferidos", "json"), col("diasEvitar", "json"), col("rotDe", "number"), col("rotHasta", "number"), col("vacDe", "number"), col("vacHasta", "number"), col("notas")] },
+  // Fase 4: diasPreferidos/diasEvitar (día de semana genérico) y rotDe/rotHasta/vacDe/vacHasta
+  // (número de día suelto) del v1 se sustituyen por fechas concretas (BLANDO) y por la tabla
+  // `bloqueos` (DURO) — spec.md §5 Fase 4: "distingue DURO vs BLANDO, son cosas distintas".
+  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("fechasPreferidas", "json"), col("fechasEvitar", "json"), col("notas")] },
 };
 
 /** Cabecera (nombres de columna) de una tabla. */
@@ -292,6 +295,7 @@ var Router = (function () {
 
 const ASIG_KEY = (r) => `${r.fecha}|${r.residenteId}`;
 const PREF_KEY = (r) => `${r.residenteId}|${r.anio}|${r.mes}`;
+const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA"]); // siempre DURO — spec V-6
 
 /**
  * @param {string} rawBody  cuerpo crudo de la petición (JSON en text/plain)
@@ -357,6 +361,38 @@ function handleRequest(rawBody, deps) {
         return authed(req, deps, (session) => {
           if (!req.prefs || typeof req.prefs !== "object") return { ok: false, error: "prefs inválido" };
           deps.store.appendRecord("preferencias", { residenteId: session.sub, anio: req.anio, mes: req.mes, ...req.prefs });
+          return { ok: true };
+        });
+
+      case "crearBloqueo":
+        return authed(req, deps, (session) => {
+          if (!BLOQ_MOTIVOS.has(req.motivo)) return { ok: false, error: "motivo inválido" };
+          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+          const id = deps.store.appendRecord("bloqueos", {
+            residenteId: session.sub, desde: req.desde, hasta: req.hasta, motivo: req.motivo,
+            provincia: req.provincia, guardiasEnCentroExterno: req.guardiasEnCentroExterno, activo: true,
+          });
+          return { ok: true, id };
+        });
+
+      case "misBloqueos":
+        return authed(req, deps, (session) => {
+          const prefix = monthPrefix(req.anio, req.mes);
+          const monthStart = `${prefix}-01`;
+          const monthEnd = `${prefix}-31`; // comparación lexicográfica ISO: basta un tope holgado
+          const all = deps.store.readLatest("bloqueos", (r) => r.id);
+          const mios = all.filter((b) =>
+            b.residenteId === session.sub && b.activo === true && b.desde <= monthEnd && b.hasta >= monthStart
+          );
+          return { ok: true, bloqueos: mios };
+        });
+
+      case "cancelarBloqueo":
+        return authed(req, deps, (session) => {
+          const actuales = deps.store.readLatest("bloqueos", (r) => r.id);
+          const propio = actuales.find((b) => b.id === req.id && b.residenteId === session.sub);
+          if (!propio) return { ok: false, error: "bloqueo no encontrado o ajeno" };
+          deps.store.appendRecord("bloqueos", { ...propio, activo: false });
           return { ok: true };
         });
 
