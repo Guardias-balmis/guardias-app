@@ -86,12 +86,22 @@ Replica la semántica del Excel salvo mejoras documentadas. Devuelve por residen
 | `findes` | guardias (G/GF/GP) en sábado o domingo | `SUMPRODUCT((S∨D)·guardia)` |
 | `festivos` | nº de GF | columna GF |
 | `prefestivos` | nº de GP | columna GP |
-| `puentes` | guardias (G/GF/GP) en día puente (§3.4) | — (el Excel no lo computa; la normativa sí lo exige para INV-3) |
-| `dobletesVD` | viernes con guardia **y** domingo (+2 días) con guardia | `SUMPRODUCT((V)·g(d)·g(d+2))` |
-| `tercerosPuesto` | nº de 3P | columna 3P |
+| `dobletes` | viernes con guardia **y** domingo (+2 días) con guardia | `SUMPRODUCT((V)·g(d)·g(d+2))` |
+| `tercerPuesto` | nº de 3P | columna 3P |
+| `cedidasCompradas` | nº de asignaciones con `origen` (informativo) | — |
 
+- **Contaje "tonto a propósito" (decisión C-1):** `tally(asignaciones, ventana)` cuenta códigos por
+  fecha y **no recibe la lista de festivos**: `festivos` se deriva del código GF, no de un calendario.
+  La coherencia código-vs-festivo oficial es un invariante aparte, no la responsabilidad del contador
+  (evita "corregir" en silencio y desincronizarse del Excel de referencia).
+- **`puentes` NO es una métrica del contaje.** La normativa exige equidad de **puentes libres**
+  (días puente en los que el residente **no** hace guardia) — una métrica de *ausencia*, no de guardia.
+  Se computa en el validador con contexto de calendario (INV-3), no en `tally`. *(Corrección de la
+  puerta de consistencia: la revisión 1 de esta spec confundía "guardias en puente" —que nadie
+  necesita— con "puentes libres".)*
 - **INV-4:** asignaciones con `origen` CEDIDA/COMPRADA y las 3P **no** entran en `total` ni en las
-  métricas de equidad; se registran aparte.
+  métricas de equidad; se registran aparte (contadores `tercerPuesto` y `cedidasCompradas`). Una
+  guardia comprada **no puede formar la mitad de un doblete**.
 - **Doblete en borde de mes** (viernes 31-jul → domingo 2-ago): el dominio lo computa por **fechas
   reales** y lo atribuye **al mes del viernes**. *Mejora deliberada sobre el Excel*, que al operar
   por columnas de mes pierde estos dobletes y distorsiona la equidad anual. La proyección a Sheets
@@ -136,5 +146,5 @@ degradan a AVISO solo donde la normativa lo permite (columna "Excepciones").
 
 - [x] `v2/domain/calendar.js` — calendario puro (S-1)
 - [x] `v2/domain/residents.js` — periodos, nivel, grupo, activo (S-2, S-3)
-- [ ] `v2/domain/tally.js` — contaje (§4)
+- [x] `v2/domain/tally.js` — contaje (§4), 19 tests
 - [ ] `v2/domain/validate.js` — validador (§5)
