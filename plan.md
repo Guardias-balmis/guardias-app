@@ -10,7 +10,7 @@
 |---|---|---|
 | 0 | ADR de arquitectura ([docs/adr/001-arquitectura.md](docs/adr/001-arquitectura.md)) | ✅ **Aceptada** (2026-07-16): stack Google, variante A′ (Apps Script en cuenta del servicio), sin API de Anthropic (generador «prompt portátil»), org de GitHub |
 | 1 | **Núcleo de dominio, TDD estricto** — `calendar`, `residents` (nivel/grupo), `tally` (contaje), `validate`/`thirdpost`/`equity` (INV-1..11). Cero I/O | ✅ **Completa** (rama `v2`): 118 tests en verde, cero dependencias. Pendiente puerta de consistencia y aprobación del autor para Fase 2 |
-| 2 | Backend Apps Script: verificación de identidad (tokeninfo + sesión HMAC), roles derivados, adaptador de Sheets, `LockService`. Spike CORS | ⬜ Requiere: acceso a cuenta del servicio para desplegar (el desarrollo no) |
+| 2 | Backend Apps Script: verificación de identidad (tokeninfo + sesión HMAC), roles derivados, adaptador de Sheets, `LockService`. Spike CORS | 🔄 Spike completo → [docs/adr/002-backend.md](docs/adr/002-backend.md) (BORRADOR, pendiente de aprobación). Orden 2.0-2.6: bundler+paridad y funciones puras se hacen sin cuenta del servicio; solo 2.6 (E2E) la necesita |
 | 3 | Cliente: trocear `index.html`, eliminar AdminScreen y todo secreto, alta con fechas, código GP, conservar diseño ([docs/auditoria/cliente-sistema-diseno.json](docs/auditoria/cliente-sistema-diseno.json)) | ⬜ Decisión pendiente: módulos sin build (candidata: ES modules + htm) |
 | 4 | Preferencias como calendario de fechas concretas, DURO vs BLANDO en UI | ⬜ |
 | 5 | Responsable R3: sorteo auditable (semilla+candidatos+fecha recomputables), voluntario > sorteo, mandato enero→enero | ⬜ |
