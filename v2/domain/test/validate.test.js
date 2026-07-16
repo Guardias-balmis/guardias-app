@@ -433,7 +433,7 @@ test("INV-10: Navidad con 2 R2 y sorteo documentado no dispara falso INV-9", () 
   assert.equal(only(v, "INV-9").length, 0);
 });
 
-test("INV-10: Navidad cubierta por un R3 es violación", () => {
+test("INV-10: Navidad cubierta por un R3 es violación (severidad AVISO)", () => {
   const asgs = coverMonth(12, 2026, 31, [asg("CARLOS", "2026-12-18", "G"), asg("ELENA", "2026-12-18", "G")]);
   const v = validateMonth({
     mes: 12, anio: 2026, residentes: [ANA, CARLOS, ELENA], asignaciones: asgs,
@@ -441,6 +441,17 @@ test("INV-10: Navidad cubierta por un R3 es violación", () => {
   });
   assert.equal(only(v, "INV-10").length, 1);
   assert.equal(only(v, "INV-10")[0].fecha, "2026-12-18");
+  assert.equal(only(v, "INV-10")[0].severidad, "aviso"); // los eventos son avisos, no bloquean
+});
+
+test("INV-9: un día de evento exime el 2×R2 aunque caiga antes de diciembre (fix P0-3)", () => {
+  // Evento ficticio en noviembre cubierto por 2×R2: el evento exime con independencia de la ventana de diciembre.
+  const asgs = coverMonth(11, 2026, 30, [asg("ELENA", "2026-11-20", "G"), asg("FRAN", "2026-11-20", "G")]);
+  const v = validateMonth({
+    mes: 11, anio: 2026, residentes: [ANA, ELENA, FRAN], asignaciones: asgs,
+    eventos: { navidad: { fecha: "2026-11-20", voluntarios: [], sorteoDocumentado: true, designados: ["ELENA", "FRAN"] } },
+  });
+  assert.equal(only(v, "INV-9").length, 0);
 });
 
 test("INV-10: Navidad sin sorteo documentado (y sin voluntario único) es violación", () => {
@@ -503,7 +514,7 @@ test("INV-11: aniversario personal a mitad de junio (R1 el día 5 viola, R2 el d
   assert.equal(i11[0].fecha, "2026-06-05");
 });
 
-test("INV-11: recuento agosto con diferencia 2 entre R2 del mismo año es violación", () => {
+test("INV-11: recuento agosto con diferencia 2 entre R2 del mismo año es aviso (compensable)", () => {
   // ELENA 5 (4G+1GF), FRAN 3, HUGO 4 — mismo año (cohorte 2025)
   const a = [];
   ["2026-08-03", "2026-08-06", "2026-08-11", "2026-08-18"].forEach((f) => a.push(asg("ELENA", f, "G")));
@@ -513,7 +524,26 @@ test("INV-11: recuento agosto con diferencia 2 entre R2 del mismo año es violac
   const v = validateMonth({ mes: 8, anio: 2026, residentes: [ANA, ELENA, FRAN, HUGO], asignaciones: a });
   const i11 = only(v, "INV-11").filter((x) => x.fecha == null);
   assert.equal(i11.length, 1);
+  assert.equal(i11[0].severidad, "aviso"); // el desequilibrio de verano es compensable antes del cierre
   assert.match(i11[0].detalle, /5|3|diferencia/i);
+});
+
+test("INV-2: un Pequeño con exactamente 3 guardias es AVISO, no error (infra-oferta, normativa pág. 2)", () => {
+  const DAVID = R("DAVID", "2025-05-26", "2029-05-25"); // R2 = PEQUENO
+  const asgs = ["2026-10-06", "2026-10-14", "2026-10-22"].map((f) => asg("DAVID", f, "G")); // 3 guardias
+  const v = validateMonth({ mes: 10, anio: 2026, residentes: [DAVID], asignaciones: asgs });
+  const i2 = v.filter((x) => x.invariante === "INV-2" && x.residenteId === "DAVID");
+  assert.equal(i2.length, 1);
+  assert.equal(i2[0].severidad, "aviso"); // "R pequeños... alguno podría tocar a solo 3"
+});
+
+test("INV-2: un Mayor con solo 3 guardias sí es error DURA", () => {
+  const CARLOS = R("CARLOS", "2024-05-27", "2028-05-26"); // R3 = MAYOR
+  const asgs = ["2026-10-06", "2026-10-14", "2026-10-22"].map((f) => asg("CARLOS", f, "G"));
+  const v = validateMonth({ mes: 10, anio: 2026, residentes: [CARLOS], asignaciones: asgs });
+  const i2 = v.filter((x) => x.invariante === "INV-2" && x.residenteId === "CARLOS");
+  assert.equal(i2.length, 1);
+  assert.equal(i2[0].severidad, "error");
 });
 
 test("INV-11: recuento excluye 3P — diferencia computable 1 es válida", () => {

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { validateResidencyYearClose } from "../equity.js";
 
 const R = (id, fechaInicio, fechaFin) => ({ id, fechaInicio, fechaFin });
-const acc = (total, findes = 0, festivos = 0, puentesLibres = 0, dobletes = 0) => ({ total, findes, festivos, puentesLibres, dobletes });
+const acc = (total, findes = 0, festivos = 0, puentesLibres = 0, dobletes = 0, prefestivos = 0) => ({ total, findes, festivos, puentesLibres, dobletes, prefestivos });
 const g = (residenteId, fecha, codigo = "G", extra = {}) => ({ residenteId, fecha, codigo, ...extra });
 
 const A = R("r3a", "2024-05-27", "2028-05-26"); // cierre R3 el 2027-05-26
@@ -156,6 +156,17 @@ test("INV-3: puentes libres con diferencia 2 es violación", () => {
   const e = only3(v);
   assert.equal(e.length, 1);
   assert.match(e[0].detalle, /puente/i);
+});
+
+test("INV-3: prefestivos con diferencia 2 al cierre es violación (la normativa los nombra en el recuento)", () => {
+  const v = validateResidencyYearClose({
+    mes: 5, anio: 2027, residentes: [R2A, R2B],
+    acumulados: { r2a: acc(54, 12, 4, 3, 2, 5), r2b: acc(54, 12, 4, 3, 2, 3) }, // prefestivos 5 vs 3
+    asignaciones: [],
+  });
+  const e = only3(v);
+  assert.equal(e.length, 1);
+  assert.match(e[0].detalle, /prefestivo/i);
 });
 
 test("INV-3: baja médica se descuenta proporcionalmente (nota [a])", () => {

@@ -9,6 +9,7 @@ import { weekday, compareISO, addDays, addYears, datesOfMonth } from "./calendar
 import { levelOn, defaultTrainingPeriods } from "./residents.js";
 
 const err = (detalle, extra = {}) => ({ invariante: "INV-8", severidad: "error", detalle, ...extra });
+const aviso = (detalle, extra = {}) => ({ invariante: "INV-8", severidad: "aviso", detalle, ...extra });
 
 function periodsOf(r) {
   return r.periodos || defaultTrainingPeriods(r.fechaInicio, r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1));
@@ -73,7 +74,8 @@ export function validateThirdPost(ctx) {
   if (uncoveredMochila.length && misplaced.length) {
     const dia = uncoveredMochila[0];
     const culpable = misplaced[0];
-    violations.push(err(`Existe 3P el ${culpable.fecha} (día sin R1) mientras el día de mochila ${dia} queda sin 3P: los 3P deben cubrir primero los días con R1`, { fecha: dia, residenteId: culpable.residenteId }));
+    // AVISO: el 3P es voluntario; la mala priorización se señala pero no impide VALIDAR.
+    violations.push(aviso(`Existe 3P el ${culpable.fecha} (día sin R1) mientras el día de mochila ${dia} queda sin 3P: los 3P deben cubrir primero los días con R1`, { fecha: dia, residenteId: culpable.residenteId }));
   }
 
   // ── INV-8c: equidad al cierre del año de residencia ──

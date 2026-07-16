@@ -109,13 +109,15 @@ test("INV-8c: no voluntario excluido del cómputo de equidad", () => {
   assert.equal(only8(v).length, 0); // Ana 3, Bruno 2 → diferencia 1; David (no voluntario) fuera
 });
 
-test("INV-8d: mochila descubierta con 3P mal priorizado", () => {
+test("INV-8d: mochila descubierta con 3P mal priorizado (AVISO, no bloquea)", () => {
   // r1-eva de mochila el 2026-09-11 (V); único 3P el 2026-09-12 (S, sin R1)
+  // Es AVISO: el 3P es voluntario, la mala priorización se señala pero no impide VALIDAR.
   const asignaciones = [g("r1-eva", "2026-09-11", "G"), p3("r2-bruno", "2026-09-12")];
   const v = validateThirdPost({ mes: 9, anio: 2026, residentes: [EVA, BRUNO], voluntarios3P: ["r2-bruno"], historial3P: {}, asignaciones });
-  const e = only8(v);
-  assert.equal(e.length, 1);
-  assert.equal(e[0].fecha, "2026-09-11");
+  const av = v.filter((x) => x.invariante === "INV-8" && x.severidad === "aviso");
+  assert.equal(av.length, 1);
+  assert.equal(av[0].fecha, "2026-09-11");
+  assert.equal(only8(v).length, 0); // no hay errores DURA
 });
 
 test("INV-8d: 3P extra válido con mochilas cubiertas", () => {

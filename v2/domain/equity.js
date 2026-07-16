@@ -8,8 +8,8 @@
 import { compareISO, addDays, addYears, datesOfMonth, toISO } from "./calendar.js";
 import { tally } from "./tally.js";
 
-const DIMS = ["total", "findes", "festivos", "puentesLibres", "dobletes"];
-const PROPORCIONAL = new Set(["total", "findes", "festivos", "dobletes"]); // se normalizan por disponibilidad
+const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "dobletes"];
+const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes"]); // se normalizan por disponibilidad
 const EPS = 1e-9;
 
 const err = (detalle, extra = {}) => ({ invariante: "INV-3", severidad: "error", detalle, ...extra });
@@ -37,7 +37,7 @@ export function validateResidencyYearClose(ctx) {
     const win = closingWindowThisMonth(r, mes, anio);
     if (!win) continue; // no cierra este mes → no se evalúa
 
-    const acc = acumulados[r.id] || { total: 0, findes: 0, festivos: 0, puentesLibres: 0, dobletes: 0 };
+    const acc = acumulados[r.id] || { total: 0, findes: 0, festivos: 0, prefestivos: 0, puentesLibres: 0, dobletes: 0 };
     // Contribución del mes, respetando la fecha de cierre (guardias posteriores no cuentan).
     const contribEnd = compareISO(monthEnd, win.end) <= 0 ? monthEnd : win.end;
     const t = tally(asignaciones.filter((a) => a.residenteId === r.id), { start: monthStart, end: contribEnd });
@@ -47,6 +47,7 @@ export function validateResidencyYearClose(ctx) {
       total: acc.total + t.total,
       findes: acc.findes + t.finde,
       festivos: acc.festivos + t.festivos,
+      prefestivos: (acc.prefestivos || 0) + t.prefestivos,
       dobletes: acc.dobletes + t.dobletes,
       puentesLibres: acc.puentesLibres + puentesLibresMes,
     };
@@ -116,5 +117,5 @@ function daysOfRange(a, b) {
 }
 const round = (x) => (Number.isInteger(x) ? x : Math.round(x * 100) / 100);
 function labelDim(dim) {
-  return { total: "Totales", findes: "Fines de semana", festivos: "Festivos", puentesLibres: "Puentes libres", dobletes: "Dobletes V-D" }[dim];
+  return { total: "Totales", findes: "Fines de semana", festivos: "Festivos", prefestivos: "Prefestivos", puentesLibres: "Puentes libres", dobletes: "Dobletes V-D" }[dim];
 }

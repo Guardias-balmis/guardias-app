@@ -19,6 +19,7 @@ const PROVINCIAS_CERCANAS = new Set(["alicante", "valencia", "murcia", "albacete
 const DURO = new Set(["VACACIONES", "ROTACION", "BAJA"]); // PERSONAL es BLANDO
 
 const err = (invariante, detalle, extra = {}) => ({ invariante, severidad: "error", detalle, ...extra });
+const aviso = (invariante, detalle, extra = {}) => ({ invariante, severidad: "aviso", detalle, ...extra });
 
 function periodsOf(residente) {
   if (residente.periodos) return residente.periodos;
@@ -54,7 +55,9 @@ export function validateMonth(ctx) {
     const windowOk = compareISO(fecha, toISO(academicYearOf(fecha), 12, 1)) >= 0; // desde 1-dic del año académico
     const evento = (eventos.navidad?.fecha === fecha) || (eventos.despedida?.fecha === fecha);
     const exc = excepciones.some((e) => e.tipo === "2xR2" && inRange(fecha, e.desde, e.hasta));
-    return windowOk && (evento || exc);
+    // Los eventos (INV-10) son una sección distinta de la normativa y eximen el 2×R2 con
+    // independencia de la ventana de diciembre; la excepción documentada solo desde diciembre.
+    return evento || (windowOk && exc);
   };
 
   // ── INV-1 / INV-9: paridad Mayor+Pequeño por día ──
@@ -109,7 +112,13 @@ export function validateMonth(ctx) {
       const nivelMedio = levelOnDay(r.id, days[Math.floor(days.length / 2)]);
       const r1Verano = nivelMedio === "R1" && (mes === 6 || mes === 7 || mes === 8);
       if (!esFebrero && !tieneVoB && !r1Verano) {
-        violations.push(err("INV-2", `${r.id}: ${total} guardias computables < mínimo 4`, { residenteId: r.id }));
+        // La normativa admite que un Pequeño toque a solo 3 por infra-oferta estructural
+        // ("R pequeños: 4 guardias, e incluso alguno podría tocar a solo 3"): AVISO, no DURA.
+        if (total === 3 && groupOf(nivelMedio) === "PEQUENO") {
+          violations.push(aviso("INV-2", `${r.id}: ${total} guardias computables (por debajo de 4; admisible en un Pequeño por infra-oferta estructural)`, { residenteId: r.id }));
+        } else {
+          violations.push(err("INV-2", `${r.id}: ${total} guardias computables < mínimo 4`, { residenteId: r.id }));
+        }
       }
     }
   }
@@ -164,7 +173,7 @@ export function validateMonth(ctx) {
       const max = Math.max(...totals), min = Math.min(...totals);
       if (max - min > 1) {
         const detalle = "Recuento de verano entre R2 del mismo año con diferencia > 1: " + grupo.map((g) => `${g.id}: ${g.total}`).join(", ");
-        violations.push(err("INV-11", detalle, { fecha: null }));
+        violations.push(aviso("INV-11", detalle + " (compensable antes del cierre del año de residencia)", { fecha: null }));
       }
     }
   }
@@ -219,22 +228,23 @@ function validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, v
   for (const [tipo, ev] of Object.entries(eventos)) {
     if (!ev || !dayset.has(ev.fecha)) continue;
     const guardias = (byDay.get(ev.fecha) || []).filter((a) => GUARDIA.has(a.codigo));
+    // Los eventos del servicio son sociales: se señalan como AVISO, no bloquean la validación.
     // ambos puestos deben ser R2
     for (const a of guardias) {
       if (levelOnDay(a.residenteId, ev.fecha) !== "R2") {
-        violations.push(err("INV-10", `Evento (${tipo}) el ${ev.fecha}: debe cubrirse con 2 R2 y ${a.residenteId} no es R2`, { fecha: ev.fecha, residenteId: a.residenteId }));
+        violations.push(aviso("INV-10", `Evento (${tipo}) el ${ev.fecha}: debe cubrirse con 2 R2 y ${a.residenteId} no es R2`, { fecha: ev.fecha, residenteId: a.residenteId }));
       }
     }
     // sorteo documentado salvo voluntario único
     const voluntarios = ev.voluntarios || [];
     if (voluntarios.length !== 1 && !ev.sorteoDocumentado) {
-      violations.push(err("INV-10", `Evento (${tipo}) el ${ev.fecha}: asignación sin sorteo documentado (exigido salvo un único voluntario)`, { fecha: ev.fecha }));
+      violations.push(aviso("INV-10", `Evento (${tipo}) el ${ev.fecha}: asignación sin sorteo documentado (exigido salvo un único voluntario)`, { fecha: ev.fecha }));
     }
     // los designados de Navidad quedan libres en la despedida
     if (tipo === "despedida") {
       for (const a of (byDay.get(ev.fecha) || [])) {
         if (designadosNavidad.includes(a.residenteId)) {
-          violations.push(err("INV-10", `${a.residenteId} cubrió Navidad y no puede tener guardia en la despedida (${ev.fecha})`, { fecha: ev.fecha, residenteId: a.residenteId }));
+          violations.push(aviso("INV-10", `${a.residenteId} cubrió Navidad y no puede tener guardia en la despedida (${ev.fecha})`, { fecha: ev.fecha, residenteId: a.residenteId }));
         }
       }
     }

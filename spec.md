@@ -28,9 +28,11 @@ PeriodoFormativo {              # 4 por residente; generados por defecto, editab
 Bloqueo {
   residenteId, fecha: date
   tipo: DURO | BLANDO
-  motivo: VACACIONES | ROTACION | BAJA | PERSONAL
+  motivo: VACACIONES | ROTACION | BAJA | PERSONAL   # embarazo/paternidad → BAJA (decisión V-5)
   provinciaColindante?: bool    # solo ROTACION: rotación en Alicante/Valencia/Murcia/Albacete (INV-7)
 }
+# Pendiente de modelar (§5 INV-13/14): Imaginaria (dos listas rotatorias por grupo) y la validación
+# del Responsable (nivel R3, sorteo reproducible). Ver Estado de implementación (§7).
 Asignacion {
   fecha: date, residenteId, codigo: G|GF|GP|3P, puesto: MAYOR|PEQUENO|TERCERO
   origen?: CEDIDA | COMPRADA    # si existe, se excluye del cómputo anual (INV-4)
@@ -90,10 +92,10 @@ Replica la semántica del Excel salvo mejoras documentadas. Devuelve por residen
 | `tercerPuesto` | nº de 3P | columna 3P |
 | `cedidasCompradas` | nº de asignaciones con `origen` (informativo) | — |
 
-- **Contaje "tonto a propósito" (decisión C-1):** `tally(asignaciones, ventana)` cuenta códigos por
+- **Contaje "tonto a propósito" (decisión T-1):** `tally(asignaciones, ventana)` cuenta códigos por
   fecha y **no recibe la lista de festivos**: `festivos` se deriva del código GF, no de un calendario.
-  La coherencia código-vs-festivo oficial es un invariante aparte, no la responsabilidad del contador
-  (evita "corregir" en silencio y desincronizarse del Excel de referencia).
+  La coherencia código-vs-festivo oficial es el invariante **INV-12** (§5, pendiente), no la
+  responsabilidad del contador (evita "corregir" en silencio y desincronizarse del Excel de referencia).
 - **`puentes` NO es una métrica del contaje.** La normativa exige equidad de **puentes libres**
   (días puente en los que el residente **no** hace guardia) — una métrica de *ausencia*, no de guardia.
   Se computa en el validador con contexto de calendario (INV-3), no en `tally`. *(Corrección de la
@@ -116,19 +118,36 @@ Replica la semántica del Excel salvo mejoras documentadas. Devuelve por residen
 Un cuadrante con violaciones **DURAS** no puede pasar a `VALIDADO`. Las `Excepcion` registradas
 degradan a AVISO solo donde la normativa lo permite (columna "Excepciones").
 
-| # | Regla operativa | Ámbito | Severidad | Excepciones |
+Severidad `error` **bloquea** el paso a `VALIDADO`; `aviso` informa pero no bloquea (decisión V-4).
+Estado: ✅ implementado y con test · ⏳ pendiente (fase indicada).
+
+| # | Regla operativa | Ámbito | Severidad | Estado |
 |---|---|---|---|---|
-| INV-1 | Cada día: exactamente 1 MAYOR y 1 PEQUENO (por nivel derivado a esa fecha) | día | DURA | 2×R2 solo vía INV-9 |
-| INV-2 | 4 ≤ guardias computables/mes ≤ 6 por residente activo | mes | DURA | febrero, vacaciones, alta/baja a mitad de mes → AVISO documentado |
-| INV-3 | Al cierre del año de residencia de cada residente: dif ≤ 1 con cada compañero del mismo año formativo en total, findes, festivos, puentes y dobletesVD | año personal | DURA al cierre; AVISO si la proyección con meses restantes ya no puede converger | nota [a]: bajas descuentan proporcionalmente |
-| INV-4 | 3P/cedidas/compradas fuera del cómputo | contaje | DURA (error de cómputo) | — |
-| INV-5 | Ninguna asignación sobre Bloqueo DURO | día | DURA | — |
-| INV-6 | Máx. 2 residentes del mismo año formativo en rotación externa simultánea; rotación prioritaria sobre vacaciones | día | DURA | — |
-| INV-7 | Rotación en provincia colindante → ≥1 guardia en viernes y ≥1 en sábado dentro del periodo | periodo | AVISO hasta que el periodo cierre; DURA al cerrar sin cumplir | — |
-| INV-8 | 3P: cubrir L→D antes de repetir día (por voluntario, sobre su historial); dif ≤ 1 entre voluntarios al cierre; prioridad a días con R1 de mochila | año | DURA (repetición); AVISO (prioridad mochila) | — |
-| INV-9 | 2×R2 el mismo día: solo desde el 1 de diciembre del año académico, con Excepcion justificada | día | DURA antes de diciembre incluso justificada; AVISO desde diciembre con justificación | la propia regla es la excepción |
-| INV-10 | Navidad y despedida: 2 R2 por sorteo documentado; los de Navidad libres en la despedida | evento | AVISO | voluntarios |
-| INV-11 | Junio–agosto: ningún R1 asignado; recuento de Pequeños entre R2 del mismo año (dif ≤ 1, compensable antes del cierre del año) | mes | DURA (R1 asignado); AVISO (dif entre R2) | — |
+| INV-1 | Cada día: exactamente 1 MAYOR y 1 PEQUENO (por nivel derivado a esa fecha) | día | error | ✅ |
+| INV-2 | 4 ≤ guardias computables/mes ≤ 6 por residente activo | mes | error (>6, o <4 en Mayor); **aviso** (Pequeño con 3, por infra-oferta); exento en febrero/vacaciones/baja/R1-verano | ✅ |
+| INV-3 | Al cierre del año de residencia: dif ≤ 1 con cada compañero del mismo año en total, findes, festivos, **prefestivos**, puentes libres y dobletes V-D | año personal | error | ✅ (prefestivos añadido tras la puerta de consistencia) |
+| INV-4 | 3P/cedidas/compradas fuera del cómputo | contaje | error | ✅ (vía `tally`) |
+| INV-5 | Ninguna asignación sobre Bloqueo DURO | día | error | ✅ |
+| INV-6 | Máx. 2 residentes de la misma promoción en rotación externa simultánea; rotación prioritaria sobre vacaciones | día | error | ✅ |
+| INV-7 | Rotación en Alicante/colindante → ≥1 guardia en viernes y ≥1 en sábado dentro del periodo | periodo | error (evaluado solo en el mes de fin) | ✅ (ver contrato C-2) |
+| INV-8 | 3P: cubrir L→D antes de repetir día (por voluntario); dif ≤ 1 entre voluntarios al cierre; prioridad a días con R1 de mochila | año | error (repetición, no-voluntario, equidad al cierre); **aviso** (prioridad mochila) | ✅ |
+| INV-9 | 2×R2 el mismo día: solo desde el 1-dic del año académico con Excepcion justificada, **o** en un día de evento | día | error si no justificado | ✅ (fix P0-3: los eventos eximen con independencia del mes) |
+| INV-10 | Navidad y despedida: 2 R2 por sorteo documentado; los de Navidad libres en la despedida | evento | **aviso** | ✅ |
+| INV-11 | Junio–agosto: ningún R1 asignado; recuento de Pequeños entre R2 del mismo año (dif ≤ 1, compensable) | mes | error (R1 asignado); **aviso** (dif entre R2) | ✅ |
+| INV-12 | Coherencia código↔festivo: GF solo en día festivo; G/GP no en festivo | día | aviso | ⏳ pendiente (necesita `bridgesOfMonth` y la lista de festivos como entrada) |
+| INV-13 | Imaginaria: dos listas rotatorias por grupo; la sustitución de una incidencia sale de la lista del grupo del incidente; una guardia de incidencia cedida/comprada NO descuenta de la imaginaria | evento | error | ⏳ pendiente (Fase 4-5; entidad no modelada aún) |
+| INV-14 | Responsable: nivel R3 en su periodo (enero→enero); método SORTEO solo sin voluntarios; sorteo reproducible | año | error | ⏳ pendiente (Fase 5) |
+
+### Contratos del validador (verificados por la puerta de consistencia)
+- **C-1 (lookahead de dobletes, ref. S-5):** cualquier cómputo mensual de `dobletes` que luego se sume
+  (p. ej. la proyección a Sheets de la Fase 7, o los acumulados de `equity`) debe pasar a `tally` las
+  asignaciones **más los ~2 primeros días del mes siguiente**, porque el domingo de un doblete de un
+  viernes-31 cae fuera del mes. `tally` hace el *lookahead* correctamente **si el dato está presente**;
+  omitirlo reintroduce el bug del Excel que S-5 corrige. `validateResidencyYearClose` es correcto para
+  el mes de cierre (el domingo posterior al aniversario pertenece al año siguiente).
+- **C-2 (periodo de INV-7):** `validateMonth` evalúa INV-7 solo en el mes en que **termina** la rotación,
+  y para ello `asignaciones` debe incluir las guardias del residente **de todo el periodo** de rotación
+  (que puede abarcar meses anteriores), no solo las del mes validado.
 
 ## 6. Decisiones registradas
 
@@ -137,6 +156,8 @@ degradan a AVISO solo donde la normativa lo permite (columna "Excepciones").
 | V-1 | **Reconciliación INV-1/INV-9:** un día con 2 Pequeños **ambos R2** lo gobierna INV-9 (excepción 2×R2); cualquier otro día defectuoso (2 mayores, R1+R2, falta puesto) es INV-1 | Los agentes de diseño de tests etiquetaron la misma situación con códigos distintos. El comportamiento aceptar/rechazar es el de la normativa; solo se unifica la etiqueta. La excepción 2×R2 solo se plantea cuando ambos son exactamente R2 |
 | V-2 | **Cohorte (promoción) = año natural de `fechaInicio`**; distinta del **nivel** (derivado por fecha). INV-6/INV-11 comparan por cohorte; el rol Mayor/Pequeño usa nivel | El caso del aniversario de mayo: tres residentes de la promoción 2024 siguen siendo "el mismo año" aunque su nivel computado difiera unos días |
 | V-3 | Severidades `error` (bloqueante) / `aviso` (informativo) | Alineado con la salida del validador; mapea DURA→error, AVISO→aviso |
+| V-4 | **Clasificación de severidad** (tras la puerta de consistencia): `error` protege equidad/seguridad/legitimidad; `aviso` es advisory/compensable/social. Aviso: INV-2 (Pequeño con 3), INV-8d (mochila), INV-10 (eventos), INV-11 (dif mensual entre R2), INV-12 (coherencia festivo). El resto, `error` | La normativa dice "cifras orientativas, el criterio obligatorio es la equidad": un cuadrante no debe bloquearse por reglas blandas. El mecanismo `aviso` no existía y varias reglas blandas bloqueaban cuadrantes válidos |
+| V-5 | Embarazo/paternidad se modela como `Bloqueo` motivo **BAJA** (para el descuento proporcional de la nota [a]) | Evita ampliar el enum; el descuento de disponibilidad es idéntico |
 | S-1 | Fechas ISO string + UTC, meses 1–12 | Mata la clase de bug del v1 (desfase +1 mes, `navMes` incoherente) |
 | S-2 | Nivel por aniversario personal, no por año académico | Normativa mide equidad por año de residencia individual; el Excel (año-entero) no puede expresar la nota [a] |
 | S-3 | Hueco entre periodos = nivel anterior; solape = inválido | Baja retrasa promoción; no existe des-promoción |
@@ -152,6 +173,12 @@ degradan a AVISO solo donde la normativa lo permite (columna "Excepciones").
 - [x] `v2/domain/tally.js` — contaje (§4), 19 tests
 - [x] `v2/domain/validate.js` — `validateMonth`: INV-1,2,5,6,7,9,10,11 (§5), 45 tests
 - [x] `v2/domain/thirdpost.js` — `validateThirdPost`: INV-8 (rotación, equidad, mochila), 19 tests
-- [x] `v2/domain/equity.js` — `validateResidencyYearClose`: INV-3 + INV-4 (cierre de año), 14 tests
+- [x] `v2/domain/equity.js` — `validateResidencyYearClose`: INV-3 + INV-4 (cierre de año), 15 tests
+- [ ] INV-12 (coherencia festivo) + `calendar.bridgesOfMonth()` — cierra S-4 (puentes derivados, no dato libre)
+- [ ] INV-13 (Imaginaria) — entidad + dos listas rotatorias por grupo (Fase 4-5)
+- [ ] INV-14 (Responsable R3, sorteo reproducible) — (Fase 5)
 
-**Núcleo de dominio completo: 118 tests en verde, cero dependencias, cero I/O.**
+**Núcleo de dominio (invariantes de mes y de cierre): 122 tests en verde, cero dependencias, cero I/O.**
+Lagunas conocidas y aplazadas con su fase, tras la puerta de consistencia (§5: INV-12/13/14). Fuera
+del núcleo puro (proceso, Fase 2+): comunicación trimestral a tutoría y envío del cuadrante a
+Coordinación (Raquel); responsabilidad del busca del Pequeño; distribución de tareas intra-guardia.
