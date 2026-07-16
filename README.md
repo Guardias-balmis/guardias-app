@@ -2,7 +2,7 @@
 
 Herramienta de organización de guardias de los residentes de Radiodiagnóstico del Hospital General Universitario Dr. Balmis (Alicante).
 
-**App en producción:** https://molecule97.github.io/guardias-app/ (sirve `index.html` de la rama `main` — cada push a `main` despliega).
+**App en producción:** https://guardias-balmis.github.io/guardias-app/ (sirve `index.html` de la rama `main` — cada push a `main` despliega).
 
 ## Estado
 
