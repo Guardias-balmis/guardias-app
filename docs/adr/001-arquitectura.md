@@ -1,6 +1,6 @@
 # ADR-001 · Arquitectura de `guardias-app` v2 («perpetua»)
 
-- **Estado:** Dirección **aceptada por el autor** (2026-07-16) con tres decisiones cerradas (§2). Variante de backend: **A′ recomendada** (§4), pendiente de ratificación final del autor.
+- **Estado:** **ACEPTADA** (2026-07-16). El autor ratificó: variante de backend **A′** (Apps Script en la cuenta del servicio), migración del repo a una **organización de GitHub** (pendiente de que el autor la cree), e inicio de la **Fase 1**.
 - **Fecha:** 2026-07-16 (revisión 2 — incorpora las respuestas del autor y la verificación de hechos de plataforma del Anexo A).
 - **Autor de la app:** R3 de Radiodiagnóstico, HGU Dr. Balmis (Alicante). Se marcha en 2028.
 - **Requisito rector:** la app debe **sobrevivir a su autor** ≥10 años sin administrador, sin rotación de tokens y sin gestión manual de residentes.
@@ -178,8 +178,10 @@ Auditorías del cliente en `docs/auditoria/` (inventario funcional y sistema de 
 
 ---
 
-## 11. Pendientes para cerrar la Fase 0
+## 11. Cierre de la Fase 0 (2026-07-16)
 
-1. **Ratificación del autor: A′ vs B** (§4). Solo afecta a la Fase 2 — la Fase 1 (dominio puro) es idéntica bajo ambas y puede empezar ya.
-2. **Decisión GitHub: org ahora vs personal+sucesor** (§7-R6). Barata hoy, cara después.
-3. Acceso a la cuenta del servicio cuando el protocolo lo permita (no bloquea Fases 1 y 3; la Fase 2 se desarrolla con cuenta de desarrollo y se re-despliega en 10 minutos).
+Decisiones ratificadas por el autor: **A′** (§4), **organización de GitHub ahora** (§7-R6) y **arranque de la Fase 1**.
+
+Acciones pendientes que no bloquean el desarrollo:
+1. El autor crea la organización de GitHub y se transfiere el repo (la URL de Pages cambia una sola vez, ahora que no le importa a nadie).
+2. Acceso a la cuenta Google del servicio cuando el protocolo lo permita (la Fase 2 se desarrolla con cuenta de desarrollo y se re-despliega en ~10 minutos).
