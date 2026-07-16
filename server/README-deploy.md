@@ -13,9 +13,9 @@
 
 1. **Con la cuenta del servicio** (la que será propietaria durable, no una personal), crea el
    Sheet de guardias y anota su **ID** (de la URL). Crea sus pestañas de datos con la fila de
-   cabecera: `residentes`, `periodos`, `bloqueos`, `asignaciones`, `responsables`, `sorteos`
-   (cabeceras en `server/src/sheets-schema.js`). **La cuenta que despliega debe ser la
-   propietaria del Sheet** (riesgo DR-2 del ADR): si no, añádela como editor.
+   cabecera: `residentes`, `periodos`, `bloqueos`, `asignaciones`, `responsables`, `sorteos`,
+   `preferencias` (cabeceras en `server/src/sheets-schema.js`). **La cuenta que despliega debe
+   ser la propietaria del Sheet** (riesgo DR-2 del ADR): si no, añádela como editor.
 
 2. **Proyecto de Apps Script** (script.google.com, misma cuenta): crea un proyecto y añade
    tres archivos con el contenido de `domain.gs`, `server-lib.gs` y `Code.gs`.

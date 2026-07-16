@@ -23,6 +23,7 @@ const TABLES = {
   asignaciones: { name: "asignaciones", columns: [col("id"), col("fecha"), col("residenteId"), col("codigo"), col("puesto"), col("origen")] },
   responsables: { name: "responsables", columns: [col("id"), col("periodoInicio"), col("periodoFin"), col("residenteId"), col("metodo"), col("semilla"), col("candidatos", "json"), col("fechaSorteo")] },
   sorteos: { name: "sorteos", columns: [col("id"), col("fecha"), col("motivo"), col("semilla"), col("candidatos", "json"), col("resultado", "json")] },
+  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("diasPreferidos", "json"), col("diasEvitar", "json"), col("rotDe", "number"), col("rotHasta", "number"), col("vacDe", "number"), col("vacHasta", "number"), col("notas")] },
 };
 
 /** Cabecera (nombres de columna) de una tabla. */
@@ -111,6 +112,26 @@ function makeStore({ ss, withLock, newId }) {
   }
 
   /**
+   * Vista de "estado actual" sobre un almacén append-only: para cada clave (`keyFn`), la
+   * ÚLTIMA fila insertada gana. Si `opts.emptyField` se indica y el registro ganador tiene
+   * ese campo vacío/ausente, es un borrado explícito y se excluye del resultado.
+   * Conserva el orden de PRIMERA aparición de cada clave (una reedición no reordena).
+   */
+  function readLatest(nameOrTable, keyFn, opts = {}) {
+    const records = readRecords(nameOrTable);
+    const order = [];
+    const byKey = new Map();
+    for (const r of records) {
+      const k = keyFn(r);
+      if (!byKey.has(k)) order.push(k);
+      byKey.set(k, r); // sobreescribe: la última fila de esta clave gana
+    }
+    return order
+      .map((k) => byKey.get(k))
+      .filter((r) => !opts.emptyField || (r[opts.emptyField] !== undefined && r[opts.emptyField] !== ""));
+  }
+
+  /**
    * Reescribe una pestaña (entregable proyectado) de forma idempotente y crash-safe por
    * "shadow-swap": se vuelca a una temporal, se borra la vieja y se renombra la temporal.
    * Si un intento previo cayó a mitad, se limpia el `_tmp_` residual antes de empezar.
@@ -126,7 +147,7 @@ function makeStore({ ss, withLock, newId }) {
     });
   }
 
-  return { appendRecord, readRecords, rebuildSheet };
+  return { appendRecord, readRecords, readLatest, rebuildSheet };
 }
 
   return { makeStore };
@@ -269,6 +290,9 @@ var Router = (function () {
   const { issueSession, verifySession } = Session;
   const { verifyTokeninfo } = VerifyToken;
 
+const ASIG_KEY = (r) => `${r.fecha}|${r.residenteId}`;
+const PREF_KEY = (r) => `${r.residenteId}|${r.anio}|${r.mes}`;
+
 /**
  * @param {string} rawBody  cuerpo crudo de la petición (JSON en text/plain)
  * @param {object} deps  { now, today, clientId, sessionSecret, sessionTtl, crypto,
@@ -291,6 +315,9 @@ function handleRequest(rawBody, deps) {
       case "login":
         return handleLogin(req, deps);
 
+      case "altaResidente":
+        return handleAlta(req, deps);
+
       case "whoami":
         return authed(req, deps, (session) => ({ ok: true, sub: session.sub, rol: session.rol }));
 
@@ -298,6 +325,39 @@ function handleRequest(rawBody, deps) {
         return authed(req, deps, () => {
           const violaciones = deps.domain.validateMonth(req.cuadrante);
           return { ok: true, violaciones, bloqueantes: violaciones.filter((v) => v.severidad === "error").length };
+        });
+
+      case "listResidentes":
+        return authed(req, deps, () => ({ ok: true, residentes: deps.store.readRecords("residentes") }));
+
+      case "listAsignaciones":
+        return authed(req, deps, () => {
+          const prefix = monthPrefix(req.anio, req.mes);
+          const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
+          return { ok: true, asignaciones: all.filter((a) => a.fecha.startsWith(prefix)) };
+        });
+
+      case "guardarAsignaciones":
+        return authed(req, deps, () => {
+          if (!Array.isArray(req.cambios) || req.cambios.length === 0) return { ok: false, error: "cambios vacío" };
+          for (const c of req.cambios) {
+            deps.store.appendRecord("asignaciones", { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen });
+          }
+          return { ok: true, guardados: req.cambios.length };
+        });
+
+      case "misPreferencias":
+        return authed(req, deps, (session) => {
+          const all = deps.store.readLatest("preferencias", PREF_KEY);
+          const mine = all.find((p) => p.residenteId === session.sub && p.anio === req.anio && p.mes === req.mes);
+          return { ok: true, prefs: mine || null };
+        });
+
+      case "guardarPreferencias":
+        return authed(req, deps, (session) => {
+          if (!req.prefs || typeof req.prefs !== "object") return { ok: false, error: "prefs inválido" };
+          deps.store.appendRecord("preferencias", { residenteId: session.sub, anio: req.anio, mes: req.mes, ...req.prefs });
+          return { ok: true };
         });
 
       default:
@@ -308,17 +368,50 @@ function handleRequest(rawBody, deps) {
   }
 }
 
-function handleLogin(req, deps) {
+/** Verifica el ID token de una petición (login/altaResidente) y devuelve el email, o el error. */
+function verifyIdentity(req, deps) {
   const claims = deps.fetchTokeninfo(req.idToken);
-  const v = verifyTokeninfo(claims, { clientId: deps.clientId, now: deps.now, consumeNonce: deps.consumeNonce });
+  return verifyTokeninfo(claims, { clientId: deps.clientId, now: deps.now, consumeNonce: deps.consumeNonce });
+}
+
+function sessionFor(residente, deps) {
+  const rol = resolveRol(deps.store, residente.id, deps.today);
+  const session = issueSession({ sub: residente.id, rol }, { now: deps.now, ttlSeconds: deps.sessionTtl, secret: deps.sessionSecret, crypto: deps.crypto });
+  return { ok: true, session, residente: { id: residente.id, nombre: residente.nombre, rol } };
+}
+
+function handleLogin(req, deps) {
+  const v = verifyIdentity(req, deps);
   if (!v.ok) return { ok: false, error: v.reason };
 
   const residente = deps.store.readRecords("residentes").find((r) => (r.email || "").toLowerCase() === v.email);
   if (!residente) return { ok: false, error: "email no vinculado a ningún residente" };
 
-  const rol = resolveRol(deps.store, residente.id, deps.today);
-  const session = issueSession({ sub: residente.id, rol }, { now: deps.now, ttlSeconds: deps.sessionTtl, secret: deps.sessionSecret, crypto: deps.crypto });
-  return { ok: true, session, residente: { id: residente.id, nombre: residente.nombre, rol } };
+  return sessionFor(residente, deps);
+}
+
+/**
+ * Alta autoservicio (DoD-1: "un R1 nuevo se da de alta solo"). Verifica el ID token de
+ * Google como login, pero en vez de exigir un residente ya vinculado, CREA uno — siempre
+ * que el email no esté ya vinculado (evita duplicados). El nivel R1-R4 no se pide: se
+ * deriva de `fechaInicio`/`fechaFin` (spec.md S-2).
+ */
+function handleAlta(req, deps) {
+  const v = verifyIdentity(req, deps);
+  if (!v.ok) return { ok: false, error: v.reason };
+
+  if (!req.nombre || !req.fechaInicio || !req.fechaFin) return { ok: false, error: "nombre, fechaInicio y fechaFin son obligatorios" };
+
+  const yaExiste = deps.store.readRecords("residentes").some((r) => (r.email || "").toLowerCase() === v.email);
+  if (yaExiste) return { ok: false, error: "ese email ya está vinculado a un residente" };
+
+  const id = deps.store.appendRecord("residentes", { nombre: req.nombre, email: v.email, fechaInicio: req.fechaInicio, fechaFin: req.fechaFin });
+  return sessionFor({ id, nombre: req.nombre }, deps);
+}
+
+/** Prefijo "YYYY-MM" de una fecha ISO, para filtrar asignaciones de un mes concreto. */
+function monthPrefix(anio, mes) {
+  return `${anio}-${String(mes).padStart(2, "0")}`;
 }
 
 /** Valida la sesión y ejecuta `fn(payload)`, o devuelve el error de sesión. */

@@ -36,6 +36,26 @@ export function makeStore({ ss, withLock, newId }) {
   }
 
   /**
+   * Vista de "estado actual" sobre un almacén append-only: para cada clave (`keyFn`), la
+   * ÚLTIMA fila insertada gana. Si `opts.emptyField` se indica y el registro ganador tiene
+   * ese campo vacío/ausente, es un borrado explícito y se excluye del resultado.
+   * Conserva el orden de PRIMERA aparición de cada clave (una reedición no reordena).
+   */
+  function readLatest(nameOrTable, keyFn, opts = {}) {
+    const records = readRecords(nameOrTable);
+    const order = [];
+    const byKey = new Map();
+    for (const r of records) {
+      const k = keyFn(r);
+      if (!byKey.has(k)) order.push(k);
+      byKey.set(k, r); // sobreescribe: la última fila de esta clave gana
+    }
+    return order
+      .map((k) => byKey.get(k))
+      .filter((r) => !opts.emptyField || (r[opts.emptyField] !== undefined && r[opts.emptyField] !== ""));
+  }
+
+  /**
    * Reescribe una pestaña (entregable proyectado) de forma idempotente y crash-safe por
    * "shadow-swap": se vuelca a una temporal, se borra la vieja y se renombra la temporal.
    * Si un intento previo cayó a mitad, se limpia el `_tmp_` residual antes de empezar.
@@ -51,5 +71,5 @@ export function makeStore({ ss, withLock, newId }) {
     });
   }
 
-  return { appendRecord, readRecords, rebuildSheet };
+  return { appendRecord, readRecords, readLatest, rebuildSheet };
 }

@@ -14,6 +14,7 @@ export const TABLES = {
   asignaciones: { name: "asignaciones", columns: [col("id"), col("fecha"), col("residenteId"), col("codigo"), col("puesto"), col("origen")] },
   responsables: { name: "responsables", columns: [col("id"), col("periodoInicio"), col("periodoFin"), col("residenteId"), col("metodo"), col("semilla"), col("candidatos", "json"), col("fechaSorteo")] },
   sorteos: { name: "sorteos", columns: [col("id"), col("fecha"), col("motivo"), col("semilla"), col("candidatos", "json"), col("resultado", "json")] },
+  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("diasPreferidos", "json"), col("diasEvitar", "json"), col("rotDe", "number"), col("rotHasta", "number"), col("vacDe", "number"), col("vacHasta", "number"), col("notas")] },
 };
 
 /** Cabecera (nombres de columna) de una tabla. */
