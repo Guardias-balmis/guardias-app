@@ -1,0 +1,105 @@
+{
+  "MESES": {
+    "constante": "const MESES = [\"Junio\",\"Julio\",\"Agosto\",\"Septiembre\",\"Octubre\",\"Noviembre\",\"Diciembre\",\"Enero\",\"Febrero\",\"Marzo\",\"Abril\",\"Mayo\"] (línea 54)",
+    "supuestos": "Año académico Junio→Mayo con índice 0=Junio. Todo el año académico comparte un único campo `ano` (estado inicial mes='Junio', ano=2026, líneas 154-155, hardcodeado — no se deriva de la fecha actual). navMes (l.732-739) incrementa/decrementa `ano` solo al cruzar el límite Mayo↔Junio, es decir `ano` etiqueta el año académico completo. PERO los helpers de fecha (l.66-77) usan ese mismo `ano` como año calendario para los 12 meses, sin sumar +1 para Enero–Mayo: internamente el modelo trata Diciembre–Mayo como enero–junio del MISMO año calendario que Junio–Noviembre, lo cual es cronológicamente incoherente."
+  },
+  "CODES_CYCLE": {
+    "valor": "const CODES_CYCLE = [\"G\",\"GF\",\"3P\",\"V\",\"R\",\"B\",\"\"] (línea 59)",
+    "falta_GP": "CONFIRMADO: no existe \"GP\" (guardia prefestivo) en CODES_CYCLE, ni en CODE_COLORS (l.57) ni en CODE_LABELS (l.58). La cadena 'GP' no aparece en ningún punto del fichero.",
+    "donde_se_usa": "Único uso: cycleCell en CalendarScreen (l.705-709) — al tocar una celda hace CODES_CYCLE[(indexOf(cur)+1) % 7]. Efecto colateral: si una celda contiene un código desconocido (p.ej. 'GP' escrito a mano en Airtable), indexOf devuelve -1 → (-1+1)%7 = 0 → el primer toque lo convierte silenciosamente en 'G', destruyendo el dato. Además se renderiza sin color (CODE_COLORS[v] undefined, l.812)."
+  },
+  "fechas": {
+    "helpers": "getDaysInMonth (l.66-70), getWeekday (l.71-75, new Date(ano, realMonth, day).getDay(), 0=domingo, timezone local del navegador), weekdayAbbr (l.76-78, mapea a [D,L,M,X,J,V,S]), isWeekend (l.79-82), isViernes/isDomingo (l.83-84, CÓDIGO MUERTO — nunca se usan), fmtDate (l.86, new Date(d).toLocaleDateString('es-ES'), también CÓDIGO MUERTO).",
+    "mapeo_mes": "realMonth = idx<6 ? idx+6 : idx-6. Esto mapea cada mes académico al mes REAL SIGUIENTE en JS (0-indexado): Junio(0)→6=julio, Noviembre(5)→11=diciembre, Diciembre(6)→0=enero, Febrero(8)→2=marzo, Mayo(11)→5=junio. El mapeo correcto sería (idx+5)%12 con ano+1 para Enero–Mayo.",
+    "fechaAlta": "AdminScreen l.1012: new Date().toISOString().split('T')[0] — fecha UTC, no local: un alta entre las 00:00 y la 01:00/02:00 hora española queda registrada con el día anterior.",
+    "festivos": "NO hay festivos hardcodeados en ningún sitio. Se delega por completo al modelo de IA: 'FESTIVOS ${mes} ${ano} COMUNITAT VALENCIANA: identifícalos tú según el calendario oficial' (l.882). La app no valida ni conoce festivos; el marcado GF es manual o lo que la IA alucine.",
+    "parseos": "filterByFormula compara {ano}=\"${ano}\" como string interpolado (l.507, 681, 847); prefs.ano se guarda como String(ano) (l.535) igual que cuadrante (l.717). rotDe/rotHasta/vacDe/vacHasta son inputs type=number guardados como strings sin validar rangos cruzados."
+  },
+  "niveles": {
+    "almacenamiento": "Campo `ano` ('R1'..'R4') es un campo ALMACENADO en la tabla Residentes de Airtable — no se deriva de fechaAlta ni de ninguna fecha de promoción. ANOS=[R4,R3,R2,R1] (l.53), nextAno (l.85): {R1:R2, R2:R3, R3:R4, R4:R4}.",
+    "usos": "HomeScreen: contadores por año (l.389-390) y listado de equipo (l.448-458). CalendarScreen: agrupación de filas del cuadrante por año (l.795-796). AIScreen: agrupación en el prompt (l.868) y resumen por año (l.963-967) — la regla '1 mayor (R3/R4) + 1 pequeño (R1/R2)' depende de este campo. AdminScreen: agrupación de lista (l.1065), alta con default 'R1' (l.1001, select l.1122-1126).",
+    "subirCategoria": "AdminScreen l.1022-1033: calcula nextAno(res.ano); si ya es R4 muestra toast de error y sale; si no, atUpdate(Residentes, res.id, {ano: nuevoAno}) + loadResidentes() + toast. Se dispara desde modal de confirmación (l.1139-1153) con botón '⬆ R{n+1}' (oculto para R4, l.1086). PROBLEMAS: la promoción es retroactiva — como el nivel no se versiona por mes, los cuadrantes históricos reinterpretan al residente con su nivel NUEVO (un G de cuando era R2 ahora cuenta como guardia de 'mayor' si es R3); no hay promoción masiva al cierre del año académico (hay que subir uno a uno); no hay operación inversa para corregir un error salvo borrar y recrear."
+  },
+  "cuadrante": {
+    "modelo": "Tabla 'Cuadrante' en Airtable: un registro por residente y mes con campos {nombre, mes, ano (string), d1..d31}. Cada celda dN es un string con UN código de CODES_CYCLE ('G','GF','3P','V','R','B') o ausente. La clave del registro es el NOMBRE completo del residente, no su record-id.",
+    "lectura": "loadCuadrante (l.677-693): atList con filtro AND({mes}=\"..\",{ano}=\"..\"); por cada registro construye data[f.nombre] = {id: r.id, 1: 'G', 5: 'GF', ...} iterando d=1..31 y copiando solo campos truthy. El record-id se mezcla en el mismo objeto bajo la clave 'id'. Si hay registros duplicados con el mismo nombre, se fusionan pero solo se conserva el id del primero. Estado en cuadrante[`${mes}|${ano}`][nombre][dia].",
+    "escritura": "saveCuadrante (l.711-730): por cada nombre construye fields={nombre, mes, ano:String(ano)} + solo los dN truthy; si dias.id existe hace PATCH, si no POST y guarda el id devuelto con setCell(nombre,'id',rec.records[0].id). Una llamada HTTP secuencial por residente, sin batching ni reintentos.",
+    "interaccion": "getCell/setCell (l.697-704), cycleCell al tocar (l.705-709), countG (l.741-745) cuenta solo 'G'+'GF' hasta nDias."
+  },
+  "bugs": [
+    {
+      "linea": "66-77",
+      "bug": "Off-by-one de mes: realMonth = idx+6/idx-6 apunta al mes siguiente. Consecuencias verificables: 'Febrero' calcula los días de MARZO → muestra 31 días (nunca 28/29, los años bisiestos son imposibles); 'Junio' muestra 31 (julio); 'Septiembre','Noviembre','Abril' muestran 31; y TODOS los días de la semana / fines de semana resaltados en la cabecera del cuadrante son los del mes equivocado."
+    },
+    {
+      "linea": "68/73 + 732-739",
+      "bug": "Sin rollover de año: Enero–Mayo usan el mismo `ano` que Junio–Diciembre. Aun corrigiendo el off-by-one, los días de semana de Enero–Mayo se calcularían con el año calendario equivocado (deberían ser ano+1). Con el bug actual, Diciembre 2026 se calcula como enero de 2026 — anterior en el tiempo a Junio 2026."
+    },
+    {
+      "linea": "59 + 705-709",
+      "bug": "Falta 'GP' en CODES_CYCLE y cualquier código desconocido en una celda se corrompe a 'G' al primer toque (indexOf=-1 → índice 0). Corrupción silenciosa de datos legados."
+    },
+    {
+      "linea": "711-730",
+      "bug": "Borrar una celda nunca se persiste: al ciclar hasta '' el valor local queda vacío, pero saveCuadrante solo envía campos truthy (if (dias[d])) y PATCH de Airtable no toca campos omitidos → el código antiguo reaparece al recargar. Habría que enviar dN:null o ''."
+    },
+    {
+      "linea": "716-725",
+      "bug": ">15 residentes: 16+ llamadas HTTP secuenciales al guardar (una por residente). El límite de Airtable es 5 req/s → 429 sin manejo de reintento, y al fallar a mitad de bucle el guardado queda PARCIAL (unos residentes guardados, otros no) con un único toast de error. Doble clic rápido en Guardar también puede crear registros duplicados (el id del create se guarda en estado asíncrono)."
+    },
+    {
+      "linea": "683-689, 717",
+      "bug": "El cuadrante se indexa por `nombre` en vez de por record-id del residente: renombrar un residente (o un espacio/tilde distinto) desvincula todo su histórico; dos registros Cuadrante con el mismo nombre se fusionan en lectura pero solo se actualiza el primero."
+    },
+    {
+      "linea": "623-648",
+      "bug": "Los inputs de rotación/vacaciones usan max={nDias} con nDias erróneo (bug #1): en Febrero permite 'hasta el día 31'; además min/max de un input number no impiden teclear valores fuera de rango y no se valida rotDe<=rotHasta."
+    },
+    {
+      "linea": "507, 681, 847",
+      "bug": "filterByFormula construido por interpolación sin escapar: un nombre/valor con comillas dobles rompe la fórmula (inyección de fórmula Airtable). Y {ano}=\"2026\" compara como string — si el campo ano en Airtable es numérico el filtro no casa y el cuadrante/preferencias aparecen vacíos."
+    },
+    {
+      "linea": "900-908",
+      "bug": "La llamada a api.anthropic.com no puede funcionar: falta x-api-key, falta anthropic-version, y falta el header de opt-in CORS para navegador (anthropic-dangerous-direct-browser-access) — siempre 401/bloqueo CORS. En el error, data.content es undefined → text='' → JSON.parse('') lanza 'Unexpected end of JSON input', enmascarando la causa real."
+    },
+    {
+      "linea": "912 + 937-990",
+      "bug": "result.cuadrante (el cuadrante generado por la IA) NUNCA se usa: no se vuelca al estado del calendario ni se guarda en Airtable. Solo se muestran razonamiento/alertas/festivos/resumen; 'Ver en calendario' (l.986) cambia de pestaña y muestra el cuadrante viejo. La función principal de la app está desconectada."
+    },
+    {
+      "linea": "905",
+      "bug": "max_tokens:4000 insuficiente con muchos residentes: 15+ residentes × ~5 guardias + resumen + razonamiento superan fácilmente 4000 tokens de salida → JSON truncado → JSON.parse lanza y se pierde toda la generación."
+    },
+    {
+      "linea": "882",
+      "bug": "Festivos delegados a la IA ('identifícalos tú') sin validación: el modelo puede alucinar festivos de la Comunitat Valenciana; además por el bug de meses la IA recibe nDias del mes equivocado (p.ej. genera Febrero con 31 días)."
+    },
+    {
+      "linea": "319-323 + 187",
+      "bug": "Escalada de privilegios trivial: en modo demo cualquier email que contenga 'admin' obtiene rol admin, y el rol vive en localStorage (editable). Paradójicamente, el login real con Google siempre asigna rol 'residente' (l.312) — no existe vía legítima de ser admin."
+    },
+    {
+      "linea": "157-160, 1198",
+      "bug": "El Personal Access Token de Airtable (lectura+escritura) se guarda en localStorage y viaja en cada cliente: cualquier residente con la app tiene el token completo; un XSS lo exfiltra."
+    },
+    {
+      "linea": "188",
+      "bug": "myResidente = find(r => r.email === user?.email): comparación exacta case-sensitive; 'Quique@Gmail.com' vs 'quique@gmail.com' no vincula y el usuario ve 'No vinculado a ningún residente'."
+    },
+    {
+      "linea": "185, 504-523, 845-850",
+      "bug": "useEffects con dependencias incompletas: loadResidentes no reacciona a cambios de tableResidentes; el efecto de PrefsScreen/AIScreen captura cfg viejo si se cambian los ajustes sin recargar."
+    },
+    {
+      "linea": "1012",
+      "bug": "fechaAlta en UTC (toISOString) — día anterior si el alta ocurre antes de la 01:00/02:00 hora peninsular."
+    }
+  ],
+  "ia": {
+    "endpoint": "POST https://api.anthropic.com/v1/messages, headers solo {Content-Type: application/json} (l.900-903), model 'claude-sonnet-4-6' (id de modelo válido y activo — el fallo no es el modelo sino la ausencia de x-api-key/anthropic-version/opt-in CORS), max_tokens 4000, un único mensaje user.",
+    "prompt_exacto": "Eres un experto en organización de guardias médicas hospitalarias en España.\n\nTAREA: Genera el cuadrante de guardias de Radiodiagnóstico del Hospital Dr. Balmis para ${mes} ${ano} (${nDias} días).\n\nRESIDENTES:\n${ANOS.map(a => `${a}: ${residentes.filter(r=>r.ano===a).map(r=>r.nombre).join(\", \")}`).join(\"\\n\")}\n\nPREFERENCIAS REGISTRADAS:\n${prefsStr || \"Ninguna registrada aún\"}\n\nNORMAS ESTRICTAS (obligatorias, en orden de prioridad):\n1. Cada día: exactamente 1 Residente Mayor (R3/R4) Y 1 Residente Pequeño (R1/R2). Nunca 2 mayores ni 2 pequeños juntos.\n2. Guardias por residente: entre 4 y 6 al mes (mín 4, máx 6).\n3. Diferencia máxima entre residentes del mismo año al cerrar el mes: 1 guardia.\n4. Priorizar dobletes viernes-domingo para reducir fines de semana. Diferencia máxima de dobletes entre compañeros del mismo año: 1.\n5. Festivos nacionales y de la Comunitat Valenciana: marcar como GF en lugar de G.\n6. Residentes con rotación externa no hacen guardia esos días (salvo norma de rotación en provincia Alicante).\n7. Residentes de vacaciones no hacen guardia esos días.\n\nFESTIVOS ${mes.toUpperCase()} ${ano} COMUNITAT VALENCIANA: identifícalos tú según el calendario oficial.\n\nRESPONDE SOLO con JSON válido, sin texto adicional, sin markdown:\n{\n  \"razonamiento\": \"explicación breve de decisiones clave y cómo se han respetado las normas\",\n  \"cuadrante\": {\n    \"NOMBRE_RESIDENTE\": {\"1\":\"G\",\"5\":\"GF\",\"12\":\"G\",...},\n    ...\n  },\n  \"resumen\": {\n    \"NOMBRE_RESIDENTE\": {\"total\":N,\"gf\":N,\"fs\":N,\"dobles\":N},\n    ...\n  },\n  \"alertas\": [\"texto alerta 1\", ...],\n  \"festivos\": [1,8,...]\n}",
+    "prefsStr": "Construido en l.855-861 por cada preferencia: `${residenteNombre}: maxGuardias=N, preferDobles=bool, diasPreferidos=[...], diasEvitar=[...]` + opcionales `, rotación días X-Y`, `, vacaciones días X-Y`, `, notas: ...`.",
+    "parseo_respuesta": "l.909-912: data=await res.json(); text=data.content?.find(b=>b.type==='text')?.text||''; clean=text.replace(/```json|```/g,'').trim(); setResult(JSON.parse(clean)). Fragilidades: no comprueba res.ok ni stop_reason (truncado por max_tokens → JSON inválido); si el modelo antepone prosa al JSON el parse falla; el regex solo quita fences, no extrae el bloque JSON; y del resultado solo se consumen razonamiento/alertas/festivos/resumen — cuadrante se descarta (nunca se pinta ni se guarda)."
+  }
+}

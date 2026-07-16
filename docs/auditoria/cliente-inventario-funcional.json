@@ -1,0 +1,225 @@
+{
+  "archivo": "/Users/user/guardias-app/index.html",
+  "lineas_totales": 1362,
+  "stack": "HTML único con React 18 UMD + ReactDOM + Babel standalone desde cdnjs (líneas 7-9); todo el código JSX en un <script type='text/babel'> (línea 34); sin build, sin backend propio",
+  "navegacion_global": "Sin router: App mantiene state 'tab' ('home'|'prefs'|'calendar'|'admin'|'settings'|'ai') y renderiza condicionalmente (líneas 201-207). Si user===null se fuerza LoginScreen. BottomNav y botones llaman setTab().",
+  "pantallas": {
+    "App": {
+      "lineas": "141-216",
+      "que_hace": "Componente raíz. Inicializa cfg y user desde localStorage, crea el contexto AppCtx (línea 190-192) con {cfg, saveCfg, user, saveUser, residentes, loadResidentes, loading, showToast, tab/setTab, mes/setMes, ano/setAno, isAdmin, myResidente}. Carga residentes de Airtable en useEffect (línea 185) al cambiar airtableToken/airtableBaseId. Estado inicial: mes='Junio', ano=2026.",
+      "estado": [
+        "cfg (config Airtable/Google, persistida en localStorage 'guardias_cfg')",
+        "user (sesión, localStorage 'guardias_user')",
+        "residentes[]",
+        "loading",
+        "tab",
+        "toast",
+        "mes",
+        "ano"
+      ],
+      "derivados": "isAdmin = user?.rol === 'admin' (línea 187); myResidente = residentes.find(r => r.email === user?.email) (línea 188)"
+    },
+    "Header": {
+      "lineas": "221-243",
+      "que_hace": "Barra superior fija. Muestra nombre y '👑 Admin' o email. Botón ⚙️ → setTab('settings'); botón ↩️ → saveUser(null) (logout, borra localStorage 'guardias_user')."
+    },
+    "BottomNav": {
+      "lineas": "250-277",
+      "que_hace": "Nav inferior fija con tabs home/prefs/calendar/ai; añade tab 'admin' solo si isAdmin (línea 257). Es la única 'protección' de AdminScreen: puramente visual, cliente."
+    },
+    "LoginScreen": {
+      "lineas": "282-380",
+      "que_hace": "Login con Google (loginGoogle, línea 288: redirect a accounts.google.com OAuth2 implicit flow) y 'modo demo' (loginDemo, línea 319: entra con cualquier nombre/email sin verificación; si el email contiene la subcadena 'admin' asigna rol 'admin'). useEffect (líneas 304-317) procesa el hash de retorno OAuth: extrae access_token, hace fetch a googleapis userinfo, guarda user y limpia el hash con history.replaceState.",
+      "estado": [
+        "demoEmail",
+        "demoName",
+        "showDemo"
+      ],
+      "navegacion": "No usa setTab; al guardar user, App re-renderiza a HomeScreen automáticamente"
+    },
+    "HomeScreen": {
+      "lineas": "385-469",
+      "que_hace": "Dashboard: saludo con foto/inicial, badge de año del residente vinculado (o aviso 'No vinculado a ningún residente'), card del mes en curso, card acceso a preferencias, lista de equipo por año R4→R1, QuickCards. Navega con setTab a 'calendar', 'prefs', 'ai', 'admin' (esta última solo visible si isAdmin, línea 464). Sin llamadas de red propias."
+    },
+    "PrefsScreen": {
+      "lineas": "489-664",
+      "que_hace": "Formulario de preferencias mensuales del residente vinculado: maxGuardias (contador 4-6), preferDobles (toggle viernes-domingo), diasPreferidos/diasEvitar (toggles L-D), rotación externa rotDe/rotHasta, vacaciones vacDe/vacHasta, notas. useEffect (líneas 504-523) carga registro existente de Preferencias filtrando por residenteId+mes+ano. save() (líneas 527-551) hace upsert: atUpdate si existingId, atCreate si no.",
+      "estado": [
+        "prefs {maxGuardias, preferDobles, diasPreferidos[], diasEvitar[], rotDe, rotHasta, vacDe, vacHasta, notas}",
+        "saved",
+        "existingId"
+      ]
+    },
+    "CalendarScreen": {
+      "lineas": "669-833",
+      "que_hace": "Cuadrante mensual editable: tabla residentes (agrupados R4→R1) x días 1..nDias. loadCuadrante (líneas 677-693) lee tabla Cuadrante filtrando mes+ano y mapea campos d1..d31 a {nombre:{dia:codigo, id:recordId}}. Tocar celda cicla códigos CODES_CYCLE ['G','GF','3P','V','R','B',''] (cycleCell, línea 705). saveCuadrante (líneas 711-730) hace upsert por residente: atUpdate si el registro tiene id, atCreate si no. navMes (línea 732) cambia mes/año (año académico Junio-Mayo, ver helpers getDaysInMonth/getWeekday líneas 66-84 que remapean índice de mes). countG cuenta G+GF por residente.",
+      "estado": [
+        "cuadrante (cache por clave `${mes}|${ano}`)",
+        "loadingCuad"
+      ],
+      "nota": "El cuadrante se indexa por NOMBRE del residente, no por id — renombrar un residente rompe el vínculo"
+    },
+    "AIScreen": {
+      "lineas": "838-993",
+      "que_hace": "Generador de cuadrante con IA. useEffect (líneas 845-850) carga Preferencias del mes desde Airtable. run() (líneas 852-915) construye un prompt con residentes por año, preferencias serializadas y 7 normas estrictas (1 mayor R3/R4 + 1 pequeño R1/R2 por día, 4-6 guardias/mes, dobletes V-D, festivos GF de la Comunitat Valenciana, etc.), hace POST a api.anthropic.com y parsea la respuesta como JSON {razonamiento, cuadrante, resumen, alertas, festivos} tras quitar fences markdown. Renderiza razonamiento, alertas, festivos y resumen por residente (valida 4≤total≤6). Botón 'Ver en calendario' solo hace setTab('calendar') — el cuadrante generado NUNCA se escribe en Airtable ni en el estado del calendario (result.cuadrante se descarta).",
+      "estado": [
+        "loading",
+        "result",
+        "error",
+        "prefs[]"
+      ]
+    },
+    "AdminScreen": {
+      "lineas": "998-1174",
+      "que_hace": "Panel admin con sub-tabs 'lista' y 'add'. Ver detalle en 'roles'.",
+      "estado": [
+        "subTab",
+        "newRes {nombre,email,ano}",
+        "confirm {action:'subir'|'eliminar', res}"
+      ]
+    },
+    "SettingsScreen": {
+      "lineas": "1179-1290",
+      "que_hace": "Edita cfg local y saveCfg lo persiste en localStorage 'guardias_cfg': airtableToken (input password con toggle 👁 mostrar/ocultar, líneas 1196-1204), airtableBaseId, googleClientId, y los 3 nombres de tabla. Incluye instrucciones para crear el PAT de Airtable (scopes data.records:read/write, schema.bases:read) y el Client ID de Google. Muestra además una macro VBA de ejemplo (líneas 1252-1287) que instruye a pegar el token de Airtable en Excel ('TU_TOKEN')."
+    },
+    "componentes_compartidos": "Card (1295), SectionTitle (1307), Btn (1312), Toast (1325), QuickCard (471); estilos inline como objetos JS (inputStyle, smallBtn, etc., líneas 1337-1353)"
+  },
+  "red": [
+    {
+      "destino": "https://api.airtable.com/v0/{airtableBaseId}/{tabla}[/{recordId}]",
+      "funcion": "airtableReq (líneas 92-108); wrappers atList (110, con paginación por offset y filterByFormula), atCreate (122, POST {records:[{fields}]}), atUpdate (125, PATCH), atDelete (128, DELETE)",
+      "metodos": [
+        "GET",
+        "POST",
+        "PATCH",
+        "DELETE"
+      ],
+      "headers": {
+        "Authorization": "Bearer ${cfg.airtableToken}",
+        "Content-Type": "application/json"
+      },
+      "llamado_desde": [
+        "App.loadResidentes (línea 177): atList Residentes",
+        "PrefsScreen useEffect (línea 506): atList Preferencias con formula AND({residenteId}=...,{mes}=...,{ano}=...)",
+        "PrefsScreen.save (líneas 544-545): atUpdate/atCreate Preferencias",
+        "CalendarScreen.loadCuadrante (línea 681): atList Cuadrante con formula AND({mes}=...,{ano}=...)",
+        "CalendarScreen.saveCuadrante (líneas 721-723): atUpdate/atCreate Cuadrante por residente",
+        "AIScreen useEffect (línea 847): atList Preferencias del mes",
+        "AdminScreen.addResidente (línea 1008): atCreate Residentes",
+        "AdminScreen.subirCategoria (línea 1027): atUpdate Residentes {ano}",
+        "AdminScreen.eliminarResidente (línea 1038): atDelete Residentes"
+      ]
+    },
+    {
+      "destino": "https://accounts.google.com/o/oauth2/v2/auth?client_id=...&redirect_uri=...&response_type=token&scope=email profile&prompt=select_account",
+      "funcion": "LoginScreen.loginGoogle (líneas 288-301)",
+      "metodo": "Navegación completa (window.location.href), no fetch",
+      "headers": "N/A",
+      "nota": "redirect_uri = window.location.href.split('?')[0] — la URL actual de la página"
+    },
+    {
+      "destino": "https://www.googleapis.com/oauth2/v3/userinfo?access_token=${token}",
+      "funcion": "LoginScreen useEffect (línea 309)",
+      "metodo": "GET (fetch)",
+      "headers": "Ninguno — el access_token va como QUERY PARAM en la URL, no en header Authorization",
+      "llamado_desde": "LoginScreen al detectar #access_token en el hash tras el redirect OAuth"
+    },
+    {
+      "destino": "https://api.anthropic.com/v1/messages",
+      "funcion": "AIScreen.run (líneas 900-908)",
+      "metodo": "POST",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{model:'claude-sonnet-4-6', max_tokens:4000, messages:[{role:'user', content:prompt}]}",
+      "llamado_desde": "AIScreen",
+      "nota_critica": "SIN autenticación: falta x-api-key, falta anthropic-version y falta anthropic-dangerous-direct-browser-access. Tal como está, esta llamada falla siempre (401/CORS); no existe ningún campo de API key de Anthropic en Settings ni en cfg."
+    }
+  ],
+  "secretos": {
+    "airtableToken": {
+      "tipo": "Airtable Personal Access Token (patXXX...) con scopes read+write de registros y schema.bases:read",
+      "entrada": "SettingsScreen input tipo password con toggle de visibilidad (líneas 1196-1204)",
+      "almacenamiento": "localStorage clave 'guardias_cfg' (JSON plano, sin cifrar) vía saveCfg (líneas 157-160); leído en App init (línea 143)",
+      "exposicion": "Viaja en header Authorization Bearer desde el navegador en cada llamada Airtable; visible a cualquier script/XSS y a cualquiera con acceso al dispositivo. Todo usuario de la app (incluido demo) que tenga el token configurado tiene write/delete total sobre la base — la autorización real es el token, no el rol"
+    },
+    "googleClientId": {
+      "valor_hardcodeado": "526410201682-4tabf10k8799fulc2d9194jqvmbn213u.apps.googleusercontent.com (DEFAULT_CONFIG, línea 43)",
+      "almacenamiento": "localStorage 'guardias_cfg'; editable en Settings",
+      "nota": "Un Client ID es público por diseño, pero está incrustado en el fuente"
+    },
+    "google_access_token": {
+      "tipo": "OAuth2 access_token (implicit flow)",
+      "exposicion": "Llega en el fragmento #access_token de la URL (queda en historial/memoria hasta replaceState, línea 313) y se reenvía como query param a googleapis (línea 309). NO se persiste en localStorage",
+      "nota": "El perfil derivado {name,email,picture,rol} SÍ se persiste en 'guardias_user'"
+    },
+    "anthropic_api_key": "NO EXISTE en el código ni en la config — la llamada a Anthropic va sin credencial (bug funcional; si algún día se añadiera en cliente sería otro secreto expuesto)",
+    "localStorage_keys": [
+      "guardias_cfg (token Airtable, baseId, clientId, nombres de tablas)",
+      "guardias_user (sesión: name, email, picture, rol)"
+    ],
+    "otros": "La macro VBA mostrada en Settings (líneas 1255-1281) promueve incrustar el token Airtable en texto plano en Excel"
+  },
+  "identidad": {
+    "mecanismo_real": "NO es GIS (Google Identity Services) ni ID token/JWT. Es OAuth2 implicit flow clásico: redirect a accounts.google.com/o/oauth2/v2/auth con response_type=token, scope 'email profile', prompt=select_account (loginGoogle, líneas 288-301). No se carga ninguna librería de Google ni hay credential JWT que decodificar",
+    "flujo_retorno": "useEffect en LoginScreen (líneas 304-317): lee access_token del hash → GET googleapis userinfo → saveUser({name, email, picture, rol:'residente'}) → limpia hash",
+    "verificacion": "NINGUNA. No hay JWT, no hay verificación de firma ni de audiencia; se confía en la respuesta de userinfo. La sesión es un objeto JSON en localStorage sin expiración, sin refresh, editable por el usuario (cambiar rol a 'admin' en DevTools da admin instantáneo)",
+    "vinculo_con_datos": "myResidente se resuelve por coincidencia exacta user.email === Residentes.email (línea 188). Sin residente vinculado no se pueden guardar preferencias, pero el resto de la app (calendario editable, IA, settings) queda accesible",
+    "modo_demo": "loginDemo (líneas 319-323): cualquier nombre/email entra sin Google; rol = email.includes('admin') ? 'admin' : 'residente' — bypass total de autenticación y de rol",
+    "logout": "Header ↩️ → saveUser(null) → removeItem('guardias_user')"
+  },
+  "roles": {
+    "determinacion": "isAdmin = user?.rol === 'admin' (App, línea 187). El rol vive solo en localStorage 'guardias_user'. Vía Google SIEMPRE se asigna rol 'residente' (línea 312) — no hay forma legítima de ser admin por Google; el único camino en la UI es el modo demo con 'admin' en el email (línea 322), o editar localStorage a mano",
+    "enforcement": "Solo cosmético/cliente: BottomNav oculta el tab admin (línea 257) y HomeScreen oculta el QuickCard (línea 464). No hay guard en el render de AdminScreen ni, obviamente, en Airtable: cualquier usuario con el token configurado puede hacer las mismas escrituras (p.ej. saveCuadrante está disponible a todos)",
+    "capacidades_AdminScreen": {
+      "addResidente": "líneas 1004-1020: atCreate en Residentes con {nombre, email, ano, fechaAlta: ISO yyyy-mm-dd de hoy}; valida solo nombre+email no vacíos; recarga lista",
+      "subirCategoria": "líneas 1022-1033: promociona año via nextAno (R1→R2→R3→R4, R4 tope, helper línea 85); atUpdate Residentes {ano}; con modal de confirmación (líneas 1139-1154)",
+      "eliminarResidente": "líneas 1035-1044: atDelete en Residentes; modal de confirmación 'no se puede deshacer' (líneas 1156-1167). No borra en cascada sus Preferencias ni sus filas de Cuadrante"
+    }
+  },
+  "modelo": {
+    "convencion_temporal": "Año académico: MESES = [Junio..Mayo] (línea 54); getDaysInMonth/getWeekday (líneas 66-78) remapean índice (idx<6 → mes real idx+6 del mismo año; idx>=6 → idx-6). mes se guarda como nombre en español ('Junio') y ano como STRING ('2026') en Preferencias y Cuadrante",
+    "Residentes": {
+      "campos": {
+        "nombre": "texto, nombre completo; usado como clave en Cuadrante y en el prompt IA",
+        "email": "texto; clave de vínculo con la sesión Google (match exacto)",
+        "ano": "R1|R2|R3|R4 (constante ANOS, línea 53)",
+        "fechaAlta": "fecha yyyy-mm-dd (solo se escribe al crear)"
+      },
+      "id_airtable": "recXXX usado como Preferencias.residenteId"
+    },
+    "Preferencias": {
+      "campos": {
+        "residenteId": "texto = record id de Residentes (se filtra con {residenteId} en fórmula, línea 507)",
+        "residenteNombre": "texto (desnormalizado)",
+        "mes": "texto ('Junio'...)",
+        "ano": "texto ('2026')",
+        "maxGuardias": "número 4-6 (default 5)",
+        "preferDobles": "boolean/checkbox",
+        "diasPreferidos": "texto CSV de abreviaturas L,M,X,J,V,S,D",
+        "diasEvitar": "texto CSV ídem",
+        "rotDe / rotHasta": "texto/número día del mes (rotación externa)",
+        "vacDe / vacHasta": "texto/número día del mes (vacaciones)",
+        "notas": "texto largo"
+      },
+      "unicidad": "1 registro por residente+mes+año (upsert en PrefsScreen.save)"
+    },
+    "Cuadrante": {
+      "campos": {
+        "nombre": "texto, nombre completo del residente (¡clave de join por nombre, no por id!)",
+        "mes": "texto",
+        "ano": "texto",
+        "d1 ... d31": "31 campos de texto, un código por día: G (Guardia), GF (G. Festiva), 3P (3.º Puesto), V (Vacaciones), R (Rotación), B (Baja) — CODE_LABELS línea 58; celdas vacías = sin campo"
+      },
+      "unicidad": "1 registro por residente+mes+año (upsert en saveCuadrante, keyed por presencia de dias.id)"
+    }
+  },
+  "hallazgos_clave": [
+    "La llamada a api.anthropic.com (línea 900) no puede funcionar: sin x-api-key, sin anthropic-version, sin header de acceso directo desde navegador",
+    "El cuadrante generado por la IA (result.cuadrante) nunca se aplica al calendario ni se guarda — solo se muestran razonamiento/resumen",
+    "Autorización enteramente en cliente: rol en localStorage forgeable + modo demo con 'admin' en el email; el PAT de Airtable en localStorage da write/delete total a cualquier usuario de la app",
+    "Cuadrante usa el nombre como clave de residente; renombrar o duplicar nombres corrompe el vínculo",
+    "eliminarResidente no limpia Preferencias ni Cuadrante asociados",
+    "QuickCard usa la variable global var_radius (línea 484) definida DESPUÉS de HomeScreen — funciona solo por hoisting de const en el mismo script Babel"
+  ]
+}

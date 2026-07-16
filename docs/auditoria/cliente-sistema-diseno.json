@@ -1,0 +1,274 @@
+{
+  "paleta": {
+    "css_custom_properties": {
+      "--blue-dark": {
+        "hex": "#1F4E79",
+        "rol": "Color primario oscuro: header de la app, títulos de cards y secciones, texto principal destacado, fondo de toast OK, cabecera de tabla (th), badge R4"
+      },
+      "--blue": {
+        "hex": "#2E75B6",
+        "rol": "Color de acción primario: botones principales (Btn), tab activa en bottom nav, links, toggles activos, día preferido seleccionado, badge R3, columna 'G' de la tabla"
+      },
+      "--blue-light": {
+        "hex": "#5BA3D0",
+        "rol": "Badge R2 (escala de azules por año de residencia)"
+      },
+      "--blue-pale": {
+        "hex": "#EBF3FB",
+        "rol": "Fondos suaves azules: filas alternas (zebra) del calendario, cajas informativas de ayuda, fondo de navBtn y counterBtn"
+      },
+      "--green": {
+        "hex": "#375623",
+        "rol": "Verde oscuro: texto sobre fondos verdes claros (fin de semana en header de tabla, botón subir categoría)"
+      },
+      "--green-light": {
+        "hex": "#E2EFDA",
+        "rol": "Fondo verde claro: columnas de fin de semana en el header del calendario, filas de resumen OK (4-6 guardias), fondo del botón 'subir categoría'; también es el color del código R (Rotación)"
+      },
+      "--green-mid": {
+        "hex": "#70AD47",
+        "rol": "Verde de éxito/acción secundaria: botones 'Ver en calendario', 'Confirmar subida', QuickCard 'Ver cuadrante completo'"
+      },
+      "--orange": {
+        "hex": "#C55A11",
+        "rol": "Advertencia/aviso: texto de alertas, avisos 'no vinculado', días a evitar seleccionados, QuickCard admin, notas de precaución en modales"
+      },
+      "--orange-light": {
+        "hex": "#FCE4D6",
+        "rol": "Fondo de avisos naranjas, filas de resumen NO-OK, borde inferior de items de alerta; también es el color del código GF (Guardia Festiva) y de --red-light"
+      },
+      "--yellow": {
+        "hex": "#FFE699",
+        "rol": "Color del código V (Vacaciones) en el calendario"
+      },
+      "--yellow-light": {
+        "hex": "#FFFDE7",
+        "rol": "Definido pero no usado en JSX (reservado para fondos amarillos suaves)"
+      },
+      "--red": {
+        "hex": "#C00000",
+        "rol": "Peligro/error: título y botón de 'Eliminar residente', fondo de toast de error, texto de errores"
+      },
+      "--red-light": {
+        "hex": "#FCE4D6",
+        "rol": "Fondo de cajas de error y del botón eliminar (mismo hex que --orange-light)"
+      },
+      "--gray": {
+        "hex": "#F5F7FA",
+        "rol": "Fondo general del contenido de la app (contenedor principal) y fondo del bloque de código VBA"
+      },
+      "--gray-mid": {
+        "hex": "#E0E7EF",
+        "rol": "Bordes: inputs, separadores de cards, borde superior del bottom nav, fondo de sub-tabs y botones deshabilitados, toggle apagado, bordes de celdas td"
+      },
+      "--gray-dark": {
+        "hex": "#6B7280",
+        "rol": "Texto secundario/muted: descripciones, labels, tabs inactivas, metadatos"
+      },
+      "--radius": {
+        "valor": "12px",
+        "rol": "Radio estándar de cards y QuickCards"
+      },
+      "--radius-sm": {
+        "valor": "8px",
+        "rol": "Radio pequeño (definido; en la práctica muchos elementos usan 8px literal)"
+      },
+      "--shadow": {
+        "valor": "0 2px 12px rgba(31,78,121,0.10)",
+        "rol": "Sombra estándar de cards (tinte azul de marca)"
+      },
+      "--shadow-lg": {
+        "valor": "0 8px 32px rgba(31,78,121,0.16)",
+        "rol": "Sombra elevada: modales y toasts"
+      }
+    },
+    "colores_literales_fuera_de_variables": {
+      "#F0F4F8": "background del body",
+      "#1a1a2e": "color de texto base del body",
+      "#C0CCD8": "thumb del scrollbar y borde de th del calendario",
+      "#E0E7EF": "borde de td del calendario (igual a --gray-mid)",
+      "#9DC3E6": "badge R1 (azul muy claro, con texto #1F4E79)",
+      "#D9D9D9": "código B (Baja) en calendario",
+      "#DEEAF1": "código 3P (3.º Puesto) en calendario",
+      "#C6EFCE": "código G (Guardia) en calendario",
+      "rgba(255,255,255,0.15)": "fondo de iconBtn del header",
+      "rgba(0,0,0,0.5)": "overlay de modal",
+      "#333": "texto de celdas del calendario y del botón Google",
+      "0 2px 8px rgba(0,0,0,0.2)": "sombra del header sticky",
+      "0 -2px 12px rgba(0,0,0,0.08)": "sombra del bottom nav (hacia arriba)",
+      "0 2px 8px rgba(0,0,0,0.06)": "sombra del botón 'Entrar con Google'",
+      "0 1px 4px rgba(0,0,0,0.1)": "sombra de sub-tab activa",
+      "0 1px 4px rgba(0,0,0,0.2)": "sombra del knob del toggle switch"
+    },
+    "colores_por_ano_residencia": {
+      "ANO_COLORS": {
+        "R4": "#1F4E79",
+        "R3": "#2E75B6",
+        "R2": "#5BA3D0",
+        "R1": "#9DC3E6"
+      },
+      "ANO_TEXT": {
+        "R4": "#fff",
+        "R3": "#fff",
+        "R2": "#fff",
+        "R1": "#1F4E79"
+      },
+      "nota": "Escala monocromática de azules: más oscuro = residente más veterano. Badge: padding '2px 8px' (o '3px 10px' en admin), borderRadius 6, fontWeight 700, fontSize 12-13"
+    }
+  },
+  "tipografia": {
+    "familia": "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif (system font stack, inherit en inputs y buttons)",
+    "familia_monospace": "monospace (solo para el bloque de código VBA en Ajustes)",
+    "tamanos": {
+      "9px": "celdas y header de días del calendario, badge de año en tabla",
+      "10px": "leyenda del calendario, tabla base fontSize",
+      "11px": "subtítulo del header, labels de bottom nav, hints bajo controles, emails en listas, títulos R-grupo en resumen IA",
+      "12px": "labels de formulario (labelStyle), badges de año, smallBtn, texto de cajas de ayuda, pies de página",
+      "13px": "texto de descripción/cuerpo secundario, pillBtn, sub-tabs, dayToggleBtn, links",
+      "14px": "inputs, texto de modal, toast, nombres en listas, texto de toggle",
+      "15px": "inputs/select/textarea base (CSS global), Btn principal, botón Google",
+      "16px": "SectionTitle, título de modal, navBtn flechas",
+      "17px": "título del header y saludos, título de mes en calendario",
+      "18px": "mes en curso (Home), emoji de iconBtn",
+      "20px": "iconos de bottom nav, inicial del avatar, counterBtn signo",
+      "22px": "logo 'Guardias' del login, número de maxGuardias",
+      "24px": "icono de QuickCard",
+      "56px": "emoji-logo 🏥 del login"
+    },
+    "pesos": {
+      "400": "texto normal, tabs inactivas",
+      "500": "nombres en tabla calendario, filas de resumen",
+      "600": "labels, botones pequeños/pills, nombres en listas, hints destacados",
+      "700": "títulos de card, Btn, badges de año, títulos de header/mes, tab activa, celdas con código",
+      "800": "SectionTitle y logo del login"
+    },
+    "detalles": "letterSpacing .3 en título de header y .4 en títulos de card/labels; textTransform:uppercase en títulos de card y labels; lineHeight 1.3-1.7 según densidad"
+  },
+  "layout": {
+    "patron": "SPA mobile-first de una sola columna. React 18 UMD + Babel standalone en un único index.html, todos los estilos inline (style={{}}) salvo el reset y :root en <style>",
+    "viewport": "width=device-width, initial-scale=1.0, maximum-scale=1.0 (bloquea zoom)",
+    "estructura": "div raíz flex column minHeight:100vh con background var(--gray) → Header sticky arriba + contenido flex:1 con padding '0 0 80px' (espacio para nav) + BottomNav fixed abajo + Toast fixed",
+    "max_width_contenido": "480px con margin '0 auto' y padding 16 en todas las pantallas excepto el calendario (600px, padding '12px 0') y login (380px)",
+    "header": "sticky top:0 zIndex:100, background var(--blue-dark), texto blanco, padding '14px 16px 10px', boxShadow '0 2px 8px rgba(0,0,0,0.2)'. Título '🏥 Guardias · Dr. Balmis' 17px/700 + subtítulo usuario 11px opacity .75. Botones de icono a la derecha (iconBtn: rgba(255,255,255,0.15), borderRadius 8, padding '6px 10px', fontSize 18)",
+    "bottom_nav": "fixed bottom:0 left:0 right:0, background #fff, borderTop '1px solid var(--gray-mid)', boxShadow '0 -2px 12px rgba(0,0,0,0.08)', zIndex 100. Items flex:1 en columna (emoji 20px + label 11px), activo: color var(--blue), fontWeight 700, borderTop '2px solid var(--blue)'; inactivo: var(--gray-dark), 400, borderTop transparente. Tab Admin solo visible si isAdmin",
+    "separacion_vertical": "las pantallas son flex column con gap:14 entre cards",
+    "grids": "accesos rápidos en Home: grid gridTemplateColumns '1fr 1fr' gap 10",
+    "scroll": "el calendario envuelve la tabla en div overflowX:auto (tabla minWidth 500); scrollbar personalizada de 4px con thumb #C0CCD8 radius 4",
+    "reset_global": "*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}; body background #F0F4F8, color #1a1a2e"
+  },
+  "componentes": {
+    "Card": "background #fff, borderRadius var(--radius) [12px], padding 16, boxShadow var(--shadow). Título opcional: fontSize 13, fontWeight 700, color var(--blue-dark), textTransform uppercase, letterSpacing .4, marginBottom 12, paddingBottom 8, borderBottom '1px solid var(--gray-mid)'",
+    "SectionTitle": "fontSize 16, fontWeight 800, color var(--blue-dark), paddingBottom 4; suele empezar con emoji (⚙️, 🤖, 👑)",
+    "Btn_primario": "width 100%, padding '13px 20px', borderRadius 10, border none, fontSize 15, fontWeight 700, background color-prop (default var(--blue)), color textColor (default #fff), transition 'opacity .15s'; disabled: background var(--gray-mid), color var(--gray-dark), opacity .7",
+    "pillBtn": "función (color) → background color, color #fff, borderRadius 8, padding '7px 14px', fontSize 13, fontWeight 600, sin borde",
+    "smallBtn": "padding '6px 10px', borderRadius 7, fontSize 12, fontWeight 600, sin borde; se colorea con fondo claro + texto oscuro del mismo tono (p.ej. background var(--green-light) + color var(--green), o var(--red-light) + var(--red))",
+    "iconBtn": "background rgba(255,255,255,0.15), borderRadius 8, padding '6px 10px', color #fff, fontSize 18 (solo en header)",
+    "navBtn": "flechas ◀ ▶ de mes: background var(--blue-pale), borderRadius 8, padding '8px 14px', color var(--blue), fontSize 16, fontWeight 700",
+    "counterBtn": "stepper −/+: 36x36, borderRadius 10, border '1.5px solid var(--blue)', background var(--blue-pale), color var(--blue), fontSize 20, fontWeight 700, flex centrado",
+    "dayToggleBtn": "padding '7px 10px', borderRadius 8, fontSize 13, fontWeight 600, transition 'all .15s'; seleccionado: fondo sólido (var(--blue) o var(--orange)) + texto #fff; no seleccionado: fondo #fff + texto del color + border '1.5px solid' del color",
+    "input": "inputStyle: padding '10px 12px', borderRadius 8, border '1.5px solid var(--gray-mid)', fontSize 14, outline none, background #fff, WebkitAppearance none",
+    "label": "labelStyle: fontSize 12, fontWeight 600, color var(--gray-dark), textTransform uppercase, letterSpacing .4",
+    "toggle_switch": "pista 44x24 borderRadius 12, background var(--blue) si ON / var(--gray-mid) si OFF, transition 'background .2s'; knob 18x18 borderRadius 9 blanco, top 3, left 3→22, transition 'left .2s', boxShadow '0 1px 4px rgba(0,0,0,0.2)'",
+    "badge_ano": "span con background ANO_COLORS[ano], color ANO_TEXT[ano], padding '2px 8px' (admin '3px 10px'), borderRadius 6, fontWeight 700, fontSize 12-13",
+    "QuickCard": "botón card: background #fff, borderRadius var(--radius), padding 14, boxShadow var(--shadow), borderLeft '4px solid {color}' (acento de color por función), columna con emoji 24px + label 12px/600 var(--blue-dark)",
+    "sub_tabs_segmented": "contenedor: background var(--gray-mid), borderRadius 10, padding 3, flex gap 6; tab: flex 1, padding '8px 4px', borderRadius 8, fontSize 13, fontWeight 600; activa: background #fff, color var(--blue-dark), boxShadow '0 1px 4px rgba(0,0,0,0.1)'; inactiva: transparente, var(--gray-dark)",
+    "modal_confirmacion": "overlay fixed inset:0 background rgba(0,0,0,0.5), flex centrado, zIndex 200, padding 20; caja: background #fff, borderRadius 16, padding 24, maxWidth 320, boxShadow var(--shadow-lg); título 16px/700 (var(--blue-dark) o var(--red) si destructivo); dos Btn en fila gap 8: Cancelar (color var(--gray-mid), textColor var(--gray-dark)) + acción (var(--green-mid) o var(--red))",
+    "toast": "fixed bottom 90, left 50% translateX(-50%), padding '11px 20px', borderRadius 10, fontSize 14, fontWeight 600, color #fff, background var(--blue-dark) (ok) o var(--red) (err), boxShadow var(--shadow-lg), zIndex 300, whiteSpace nowrap, autodesaparece a los 3000ms",
+    "caja_aviso": "avisos inline: background var(--orange-light) (o var(--red-light)), border '1px solid var(--orange)' (o var(--red)), borderRadius 10, padding 12, fontSize 13, texto del mismo color del borde",
+    "caja_info": "ayuda: background var(--blue-pale), borderRadius 8, padding 10, fontSize 12, color var(--blue-dark), lineHeight 1.6",
+    "calendario_tabla": "table borderCollapse collapse, fontSize 10, minWidth 500 dentro de overflowX:auto. th: padding '4px 3px', border '1px solid #C0CCD8', sticky top 0, background var(--blue-dark) + texto #fff (o var(--green-light) + texto var(--green) para S/D fin de semana), fontSize 9, celda día con número y abreviatura L/M/X/J/V/S/D (fontWeight 400, opacity .8). Columna 'G' del contador: background var(--blue). td: padding '3px 2px', border '1px solid #E0E7EF'; filas zebra i%2 → var(--blue-pale) / #fff; primera celda = badge año (background ANO_COLORS, fontSize 9, 700); celdas de día: onClick cicla códigos, background CODE_COLORS[v] o transparent, fontWeight 700 si hay código, fontSize 9, color #333, muestra '·' si vacía, minWidth 20, cursor pointer, userSelect none",
+    "leyenda_calendario": "fila flex gap 6 flexWrap; cada item: cuadradito 18x14 con background CODE_COLORS[code], borderRadius 3, border '1px solid #ddd' + código en fontSize 10 color var(--gray-dark)",
+    "avatar": "48x48 borderRadius 24; foto con objectFit cover, o fallback círculo var(--blue) con inicial blanca 20px/700",
+    "fila_resumen_ia": "padding '6px 8px', borderRadius 8, background var(--green-light) si total 4-6 (OK) o var(--orange-light) si no; termina en emoji ✅/⚠️"
+  },
+  "codigo_colores_guardia": {
+    "mapa_CODE_COLORS": {
+      "G": "#C6EFCE",
+      "GF": "#FCE4D6",
+      "3P": "#DEEAF1",
+      "V": "#FFE699",
+      "R": "#E2EFDA",
+      "B": "#D9D9D9"
+    },
+    "mapa_CODE_LABELS": {
+      "G": "Guardia",
+      "GF": "G. Festiva",
+      "3P": "3.º Puesto",
+      "V": "Vacaciones",
+      "R": "Rotación",
+      "B": "Baja"
+    },
+    "significado_visual": {
+      "G": "verde claro Excel-style = guardia normal",
+      "GF": "naranja/salmón claro = guardia en festivo",
+      "3P": "azul grisáceo claro = tercer puesto",
+      "V": "amarillo = vacaciones",
+      "R": "verde muy pálido = rotación externa",
+      "B": "gris = baja"
+    },
+    "aplicacion": "la celda td recibe background:CODE_COLORS[v] cuando hay código (si no, 'transparent' y se muestra '·'), texto siempre #333, fontWeight 700 con código / 400 sin él, fontSize 9. Ciclo al tocar: CODES_CYCLE = ['G','GF','3P','V','R','B',''] (tap avanza al siguiente). Para el contador de la columna G se cuentan G y GF",
+    "nota": "GF (#FCE4D6) coincide con --orange-light/--red-light; R (#E2EFDA) coincide con --green-light; V (#FFE699) coincide con --yellow. Paleta heredada del estilo de relleno de Excel"
+  },
+  "iconografia": {
+    "global": {
+      "logo_app": "🏥 (header y login)",
+      "admin_rol": "👑",
+      "logout": "↩️",
+      "ajustes_header": "⚙️"
+    },
+    "bottom_nav": {
+      "home": "🏠 Inicio",
+      "prefs": "⚙️ Preferencias",
+      "calendar": "📅 Cuadrante",
+      "ai": "🤖 IA",
+      "admin": "👑 Admin (solo admin)"
+    },
+    "login": {
+      "logo": "🏥 a 56px",
+      "google": "SVG multicolor oficial de Google 20x20 (paths #EA4335, #4285F4, #FBBC05, #34A853)"
+    },
+    "home": {
+      "saludo": "👋",
+      "mes_en_curso": "📅",
+      "preferencias": "⚙️",
+      "equipo": "👥",
+      "quickcards": "🤖 (IA), 👑 (admin), 📊 (cuadrante)"
+    },
+    "prefs": {
+      "titulo": "⚙️",
+      "guardar": "💾",
+      "guardado_ok": "✓"
+    },
+    "calendar": {
+      "nav_mes": "◀ ▶ (caracteres, no emoji)",
+      "celda_vacia": "· (punto medio)",
+      "guardar": "💾"
+    },
+    "ai": {
+      "titulo": "🤖",
+      "razonamiento": "💡",
+      "alertas": "⚠️ (card) y ⚠ (item)",
+      "festivos": "🎉",
+      "resumen": "📊",
+      "estado_ok": "✅",
+      "estado_warn": "⚠️",
+      "ver_calendario": "→"
+    },
+    "admin": {
+      "titulo": "👑",
+      "sub_tabs": "👥 Residentes / ➕ Añadir",
+      "subir": "⬆",
+      "eliminar": "🗑"
+    },
+    "settings": {
+      "titulo": "⚙️",
+      "airtable": "🔑",
+      "oauth": "🔐",
+      "tablas": "📋",
+      "vba": "📥",
+      "mostrar_password": "👁 / 🙈"
+    },
+    "toasts": "✓ al final de mensajes de éxito",
+    "patron": "todos los iconos son emojis nativos del sistema (sin librería de iconos); los títulos de card y sección llevan emoji como prefijo"
+  }
+}
