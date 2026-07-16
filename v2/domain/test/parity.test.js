@@ -9,7 +9,8 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { buildBundle, transformModule } from "../../../build/build-gas.mjs";
+import nodeCrypto from "node:crypto";
+import { buildBundle, buildServerBundle, transformModule } from "../../../build/build-gas.mjs";
 
 // Fuente ESM
 import { weekday } from "../calendar.js";
@@ -18,6 +19,8 @@ import { tally } from "../tally.js";
 import { validateMonth } from "../validate.js";
 import { validateThirdPost } from "../thirdpost.js";
 import { validateResidencyYearClose } from "../equity.js";
+import { handleRequest as esmHandleRequest } from "../../../server/src/router.js";
+import { issueSession } from "../../../server/src/session.js";
 
 // ── Fixtures deterministas que ejercitan cada función pública ──
 const PERIODS = [
@@ -119,8 +122,31 @@ test("el bundler FALLA RUIDOSAMENTE ante sintaxis no soportada (nunca la ignora)
   assert.match(ok, /return \{ w \};/);
 });
 
-test("FRESCURA: el server/domain.gs comiteado está al día con la fuente", () => {
-  const path = fileURLToPath(new URL("../../../server/domain.gs", import.meta.url));
-  const committed = fs.readFileSync(path, "utf8");
-  assert.equal(committed, buildBundle(), "server/domain.gs desactualizado — ejecuta `npm run build`");
+test("PARIDAD servidor: Server.handleRequest del bundle == fuente ESM", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(buildServerBundle(), ctx);
+  const Server = ctx.Server;
+  assert.equal(typeof Server.handleRequest, "function");
+
+  const crypto = {
+    hmac: (m, s) => nodeCrypto.createHmac("sha256", s).update(m, "utf8").digest("base64url"),
+    b64urlEncode: (str) => Buffer.from(str, "utf8").toString("base64url"),
+    b64urlDecode: (b) => Buffer.from(b, "base64url").toString("utf8"),
+  };
+  const deps = { now: 1000, secret: "s", sessionSecret: "s", crypto, domain: { validateMonth } };
+  const session = issueSession({ sub: "u", rol: "responsable" }, { now: 1000, ttlSeconds: 3600, secret: "s", crypto });
+  const cuadrante = {
+    mes: 7, anio: 2026,
+    residentes: [{ id: "IVAN", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }],
+    asignaciones: [{ residenteId: "IVAN", fecha: "2026-07-15", codigo: "G" }],
+  };
+  const body = JSON.stringify({ action: "validar", session, cuadrante });
+  assert.equal(JSON.stringify(Server.handleRequest(body, deps)), JSON.stringify(esmHandleRequest(body, deps)));
+});
+
+test("FRESCURA: los .gs comiteados están al día con la fuente", () => {
+  const domainPath = fileURLToPath(new URL("../../../server/domain.gs", import.meta.url));
+  const serverPath = fileURLToPath(new URL("../../../server/server-lib.gs", import.meta.url));
+  assert.equal(fs.readFileSync(domainPath, "utf8"), buildBundle(), "server/domain.gs desactualizado — `npm run build`");
+  assert.equal(fs.readFileSync(serverPath, "utf8"), buildServerBundle(), "server/server-lib.gs desactualizado — `npm run build`");
 });

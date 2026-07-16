@@ -1,5 +1,5 @@
 /**
- * domain.gs · Núcleo de dominio de guardias-app para Google Apps Script.
+ * domain.gs · guardias-app para Google Apps Script.
  * ARTEFACTO GENERADO por build/build-gas.mjs desde v2/domain/*.js — NO EDITAR A MANO.
  * Regenerar: `npm run build`. La paridad con la fuente ESM la verifica parity.test.js.
  */

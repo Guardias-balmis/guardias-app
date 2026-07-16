@@ -16,10 +16,13 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // Orden topológico: cada módulo se define después de sus dependencias.
-const MODULES = ["calendar", "residents", "tally", "thirdpost", "equity", "validate"];
+const DOMAIN_MODULES = ["calendar", "residents", "tally", "thirdpost", "equity", "validate"];
+const SERVER_MODULES = ["sheets-schema", "sheets-store", "session", "verify-token", "router"];
 
 const DOMAIN_DIR = fileURLToPath(new URL("../v2/domain/", import.meta.url));
-const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const SERVER_DIR = fileURLToPath(new URL("../server/src/", import.meta.url));
+// Nombre de variable a partir del basename del módulo: "sheets-schema" → "SheetsSchema".
+const cap = (s) => s.split(/[-_]/).map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join("");
 
 const IMPORT_RE = /^import\s*\{([^}]*)\}\s*from\s*["']\.\/([\w-]+)\.js["'];?\s*$/;
 const EXPORT_DECL_RE = /^(\s*)export\s+(function|const|let|var|class)\s+([A-Za-z0-9_$]+)/;
@@ -62,30 +65,38 @@ function fail(module, line, reason) {
   throw new Error(`[build-gas] ${module}.js: ${reason}` + (line ? `\n  → ${line.trim()}` : ""));
 }
 
-/** Construye el bundle completo (string). Puro: no toca disco. */
-export function buildBundle() {
+/** Construye un bundle (string) a partir de una lista de módulos. Puro: no toca disco. */
+function bundle({ dir, modules, globalName, artifact, source }) {
   const header = [
     "/**",
-    " * domain.gs · Núcleo de dominio de guardias-app para Google Apps Script.",
-    " * ARTEFACTO GENERADO por build/build-gas.mjs desde v2/domain/*.js — NO EDITAR A MANO.",
+    ` * ${artifact} · guardias-app para Google Apps Script.`,
+    ` * ARTEFACTO GENERADO por build/build-gas.mjs desde ${source} — NO EDITAR A MANO.`,
     " * Regenerar: `npm run build`. La paridad con la fuente ESM la verifica parity.test.js.",
     " */",
     "",
   ].join("\n");
-
-  const blocks = MODULES.map((m) => transformModule(m, fs.readFileSync(DOMAIN_DIR + m + ".js", "utf8")));
-
+  const blocks = modules.map((m) => transformModule(m, fs.readFileSync(dir + m + ".js", "utf8")));
   // API pública: se aplanan los exports de todos los módulos (no colisionan entre sí).
-  const namespaces = MODULES.map(cap).join(", ");
-  const footer = `// ── API pública ──\nvar Domain = Object.assign({}, ${namespaces});`;
-
+  const footer = `// ── API pública ──\nvar ${globalName} = Object.assign({}, ${modules.map(cap).join(", ")});`;
   return [header, ...blocks, footer].join("\n\n") + "\n";
 }
 
-// Ejecutado directamente (`node build/build-gas.mjs`): escribe el artefacto.
+/** Bundle del núcleo de dominio → global `Domain`. */
+export function buildBundle() {
+  return bundle({ dir: DOMAIN_DIR, modules: DOMAIN_MODULES, globalName: "Domain", artifact: "domain.gs", source: "v2/domain/*.js" });
+}
+
+/** Bundle de la lógica de servidor pura (auth/sesión/store/router) → global `Server`. */
+export function buildServerBundle() {
+  return bundle({ dir: SERVER_DIR, modules: SERVER_MODULES, globalName: "Server", artifact: "server-lib.gs", source: "server/src/*.js" });
+}
+
+// Ejecutado directamente (`node build/build-gas.mjs`): escribe los artefactos.
 if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(process.argv[1])) {
-  const out = fileURLToPath(new URL("../server/domain.gs", import.meta.url));
-  fs.mkdirSync(fileURLToPath(new URL("../server/", import.meta.url)), { recursive: true });
-  fs.writeFileSync(out, buildBundle());
-  console.log(`[build-gas] escrito ${out} (${buildBundle().length} bytes)`);
+  const outDir = fileURLToPath(new URL("../server/", import.meta.url));
+  fs.mkdirSync(outDir, { recursive: true });
+  for (const [file, build] of [["domain.gs", buildBundle], ["server-lib.gs", buildServerBundle]]) {
+    fs.writeFileSync(outDir + file, build());
+    console.log(`[build-gas] escrito ${outDir}${file} (${build().length} bytes)`);
+  }
 }
