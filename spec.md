@@ -134,6 +134,9 @@ degradan a AVISO solo donde la normativa lo permite (columna "Excepciones").
 
 | # | Decisión | Motivo |
 |---|---|---|
+| V-1 | **Reconciliación INV-1/INV-9:** un día con 2 Pequeños **ambos R2** lo gobierna INV-9 (excepción 2×R2); cualquier otro día defectuoso (2 mayores, R1+R2, falta puesto) es INV-1 | Los agentes de diseño de tests etiquetaron la misma situación con códigos distintos. El comportamiento aceptar/rechazar es el de la normativa; solo se unifica la etiqueta. La excepción 2×R2 solo se plantea cuando ambos son exactamente R2 |
+| V-2 | **Cohorte (promoción) = año natural de `fechaInicio`**; distinta del **nivel** (derivado por fecha). INV-6/INV-11 comparan por cohorte; el rol Mayor/Pequeño usa nivel | El caso del aniversario de mayo: tres residentes de la promoción 2024 siguen siendo "el mismo año" aunque su nivel computado difiera unos días |
+| V-3 | Severidades `error` (bloqueante) / `aviso` (informativo) | Alineado con la salida del validador; mapea DURA→error, AVISO→aviso |
 | S-1 | Fechas ISO string + UTC, meses 1–12 | Mata la clase de bug del v1 (desfase +1 mes, `navMes` incoherente) |
 | S-2 | Nivel por aniversario personal, no por año académico | Normativa mide equidad por año de residencia individual; el Excel (año-entero) no puede expresar la nota [a] |
 | S-3 | Hueco entre periodos = nivel anterior; solape = inválido | Baja retrasa promoción; no existe des-promoción |
@@ -147,4 +150,6 @@ degradan a AVISO solo donde la normativa lo permite (columna "Excepciones").
 - [x] `v2/domain/calendar.js` — calendario puro (S-1)
 - [x] `v2/domain/residents.js` — periodos, nivel, grupo, activo (S-2, S-3)
 - [x] `v2/domain/tally.js` — contaje (§4), 19 tests
-- [ ] `v2/domain/validate.js` — validador (§5)
+- [x] `v2/domain/validate.js` — `validateMonth`: INV-1,2,5,6,7,9,10,11 (§5), 45 tests
+- [ ] `v2/domain/equity.js` — INV-3 (equidad al cierre del año de residencia)
+- [ ] `v2/domain/thirdpost.js` — INV-8 (rotación y equidad del tercer puesto)
