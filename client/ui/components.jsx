@@ -21,9 +21,9 @@ function SectionTitle({ children }) {
   return <div style={{ fontSize: 16, fontWeight: 800, color: COLOR.blueDark, paddingBottom: 4 }}>{children}</div>;
 }
 
-function Btn({ onClick, children, disabled, color = COLOR.blue, textColor = "#fff" }) {
+function Btn({ onClick, children, disabled, color = COLOR.blue, textColor = "#fff", ...rest }) {
   return (
-    <button onClick={onClick} disabled={disabled} style={{
+    <button onClick={onClick} disabled={disabled} {...rest} style={{
       background: disabled ? COLOR.grayMid : color,
       color: disabled ? COLOR.grayDark : textColor,
       border: "none", borderRadius: 10, padding: "13px 20px",

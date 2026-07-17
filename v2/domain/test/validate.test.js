@@ -5,7 +5,7 @@
 // comportamiento (aceptar/rechazar) es idéntico a la normativa; solo se unifica la etiqueta.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateMonth } from "../validate.js";
+import { validateMonth, rotationHistoryStart } from "../validate.js";
 
 // ── helpers de construcción ──
 const R = (id, fechaInicio, fechaFin) => ({ id, fechaInicio, fechaFin });
@@ -610,4 +610,38 @@ test("INV-11: recuento excluye 3P — diferencia computable 1 es válida", () =>
   ["2026-07-08", "2026-07-15", "2026-07-22", "2026-07-29"].forEach((f) => a.push(asg("HUGO", f, "G")));
   const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA, FRAN, HUGO], asignaciones: a });
   assert.equal(only(v, "INV-11").filter((x) => x.fecha == null).length, 0);
+});
+
+// ── rotationHistoryStart (contrato C-2, Fase 6.1: rango de histórico que necesita el
+// cliente para que INV-7 vea la rotación completa, no solo el mes validado/generado) ──
+test("rotationHistoryStart: sin bloqueos, devuelve null", () => {
+  assert.equal(rotationHistoryStart([], "2026-08-01"), null);
+});
+
+test("rotationHistoryStart: ignora motivos distintos de ROTACION", () => {
+  const bloqueos = [{ motivo: "VACACIONES", desde: "2026-06-01", hasta: "2026-08-10" }];
+  assert.equal(rotationHistoryStart(bloqueos, "2026-08-01"), null);
+});
+
+test("rotationHistoryStart: ignora ROTACION en provincia no cercana (no puede disparar INV-7)", () => {
+  const bloqueos = [{ motivo: "ROTACION", provincia: "Madrid", desde: "2026-06-01", hasta: "2026-08-10" }];
+  assert.equal(rotationHistoryStart(bloqueos, "2026-08-01"), null);
+});
+
+test("rotationHistoryStart: ignora ROTACION que empieza en el propio mes o después (no cruza mes)", () => {
+  const bloqueos = [{ motivo: "ROTACION", provincia: "Alicante", desde: "2026-08-01", hasta: "2026-08-10" }];
+  assert.equal(rotationHistoryStart(bloqueos, "2026-08-01"), null);
+});
+
+test("rotationHistoryStart: devuelve el desde real de una ROTACION cercana que empieza antes del mes", () => {
+  const bloqueos = [{ motivo: "ROTACION", provincia: "alicante", desde: "2026-07-20", hasta: "2026-08-05" }];
+  assert.equal(rotationHistoryStart(bloqueos, "2026-08-01"), "2026-07-20");
+});
+
+test("rotationHistoryStart: con varias rotaciones cercanas, devuelve el desde MÍNIMO", () => {
+  const bloqueos = [
+    { motivo: "ROTACION", provincia: "alicante", desde: "2026-07-20", hasta: "2026-08-05" },
+    { motivo: "ROTACION", provincia: "valencia", desde: "2026-06-15", hasta: "2026-08-02" },
+  ];
+  assert.equal(rotationHistoryStart(bloqueos, "2026-08-01"), "2026-06-15");
 });

@@ -629,6 +629,26 @@ function inRange(fecha, desde, hasta) {
 }
 
 /**
+ * Contrato C-2 (§5): INV-7 evalúa una rotación cercana solo en el mes en que termina,
+ * pero necesita ver las guardias del residente de TODO el periodo, que puede empezar en
+ * un mes anterior al validado/generado. El cliente (Calendar.jsx, Generator.jsx) no tiene
+ * asignaciones de meses anteriores por defecto — esta función le dice desde qué fecha
+ * pedirlas, para no reimplementar el mismo criterio de "¿esta rotación puede disparar
+ * INV-7?" (motivo, provincia cercana) en cada pantalla con su propio código.
+ * @param {{motivo:string, provincia?:string, desde:string}[]} bloqueos  del equipo, ya
+ *        acotados al mes en curso (p.ej. la respuesta de listBloqueos)
+ * @param {string} monthStart  ISO, primer día del mes a validar/generar
+ * @returns {string|null} la fecha `desde` más antigua a incluir, o null si con las
+ *          asignaciones del propio mes basta (ninguna rotación cercana lo cruza)
+ */
+function rotationHistoryStart(bloqueos, monthStart) {
+  const desdes = bloqueos
+    .filter((b) => b.motivo === "ROTACION" && b.provincia && PROVINCIAS_CERCANAS.has(b.provincia.toLowerCase()) && b.desde < monthStart)
+    .map((b) => b.desde);
+  return desdes.length === 0 ? null : desdes.reduce((min, d) => (d < min ? d : min));
+}
+
+/**
  * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos?, excepciones?,
  *                        eventos?, designadosNavidad? }
  * @returns {{invariante:string, severidad:'error'|'aviso', fecha?:string, residenteId?:string, detalle:string}[]}
@@ -847,7 +867,7 @@ function validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, v
   }
 }
 
-  return { validateMonth };
+  return { rotationHistoryStart, validateMonth };
 })();
 
 // ── responsible.js ──

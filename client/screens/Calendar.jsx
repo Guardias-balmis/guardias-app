@@ -6,7 +6,7 @@ import { COLOR, S, ANOS, ANO_COLORS, ANO_TEXT, CODE_COLORS, CODE_LABELS, CODES_C
 import { defaultTrainingPeriods, levelOn } from "./v2/domain/residents.js";
 import { datesOfMonth, weekday, isWeekend, addDays, addYears } from "./v2/domain/calendar.js";
 import { tally } from "./v2/domain/tally.js";
-import { validateMonth } from "./v2/domain/validate.js";
+import { validateMonth, rotationHistoryStart } from "./v2/domain/validate.js";
 import { todayISO } from "./client/lib/dates.js";
 
 const { useState, useEffect } = React;
@@ -29,6 +29,7 @@ function CalendarScreen() {
   const [asignaciones, setAsignaciones] = useState({}); // {[residenteId]: {[fecha]: codigo}}
   const [pendientes, setPendientes] = useState({});     // {[residenteId+"|"+fecha]: {fecha,residenteId,codigo}}
   const [guardando, setGuardando] = useState(false);
+  const [validando, setValidando] = useState(false);
   const [violaciones, setViolaciones] = useState(null); // null = aún no validado
 
   useEffect(() => {
@@ -76,6 +77,10 @@ function CalendarScreen() {
   };
 
   const cicla = (residenteId, fecha) => {
+    // Bloqueado mientras validando: validar() encadena dos peticiones de red y resuelve
+    // contra el `asignaciones` capturado por closure al empezar — una edición a mitad de
+    // esa ventana quedaría silenciosamente ignorada por el resultado que llegue después.
+    if (validando) return;
     const actual = (asignaciones[residenteId] || {})[fecha] || "";
     const siguiente = CODES_CYCLE[(CODES_CYCLE.indexOf(actual) + 1) % CODES_CYCLE.length];
     setAsignaciones((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: siguiente } }));
@@ -98,8 +103,6 @@ function CalendarScreen() {
     }
   };
 
-  const [validando, setValidando] = useState(false);
-
   const validar = async () => {
     setValidando(true);
     // INV-5/6/7 dependen de los bloqueos de TODO el equipo (vacaciones/rotación/baja), no
@@ -114,10 +117,8 @@ function CalendarScreen() {
     // TERMINA, pero necesita las guardias del residente de TODO el periodo — que puede
     // empezar en un mes anterior al validado. listAsignaciones (arriba, en el useEffect)
     // solo trae el mes en curso, así que faltaba el histórico si la rotación cruzaba mes.
-    const monthStart = datesOfMonth(anio, mes)[0];
-    const desdeRotacion = bloqueos
-      .filter((b) => b.motivo === "ROTACION" && b.desde < monthStart)
-      .reduce((min, b) => (min === null || b.desde < min ? b.desde : min), null);
+    const monthStart = monthWindow.start;
+    const desdeRotacion = rotationHistoryStart(bloqueos, monthStart);
     let historicas = [];
     if (desdeRotacion) {
       const rHist = await app.api.listAsignacionesRango(desdeRotacion, addDays(monthStart, -1));

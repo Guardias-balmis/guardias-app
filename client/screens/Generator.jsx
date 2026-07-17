@@ -6,7 +6,7 @@
 import { COLOR, S, ANOS } from "./client/lib/design-tokens.js";
 import { defaultTrainingPeriods, levelOn, groupOf, periodOn } from "./v2/domain/residents.js";
 import { addDays, addYears, toISO } from "./v2/domain/calendar.js";
-import { validateMonth } from "./v2/domain/validate.js";
+import { validateMonth, rotationHistoryStart } from "./v2/domain/validate.js";
 import { accumulatedTally } from "./v2/domain/accumulate.js";
 
 const { useState, useMemo, useEffect } = React;
@@ -125,10 +125,14 @@ function GeneratorScreen() {
   const app = window.useApp();
   const { mes, anio, residentes, api, showToast, setTab, setLoading } = app;
 
-  const iso15 = useMemo(() => toISO(anio, mes, 15), [anio, mes]);
   const monthStart = useMemo(() => toISO(anio, mes, 1), [anio, mes]);
   const nombreMes = useMemo(() => nombreMesDe(anio, mes), [anio, mes]);
-  const porNivel = useMemo(() => agruparPorNivel(residentes, iso15), [residentes, iso15]);
+  // Agrupa por nivel a fecha `monthStart` (día 1), el MISMO ancla que usa accumulatedTally
+  // internamente (vía periodOn) para resolver el periodo formativo en curso — si aquí se
+  // usara otra fecha (p.ej. el día 15), un residente cuyo aniversario cae a mitad de mes
+  // aparecería bajo su nivel nuevo con el contaje acumulado de su año saliente (~1 año en
+  // vez de unos meses), descuadrando la equidad que el prompt le pide a la IA.
+  const porNivel = useMemo(() => agruparPorNivel(residentes, monthStart), [residentes, monthStart]);
 
   // Bloqueos del equipo y guardias históricas del entorno del mes (Fase 6.1): el prompt
   // portátil necesita datos reales, no "lo que sepa la IA por contexto" — y el validador
@@ -156,15 +160,19 @@ function GeneratorScreen() {
         setLoading(false);
         setContextError("No se pudieron cargar los bloqueos: " + rBloqueos.error);
         setCargandoContexto(false);
+        // Se resetean (no se dejan los del mes anterior): con contextError activo el
+        // prompt/comprobar() no deben mostrar datos reales de OTRO mes como si fueran de este.
+        setBloqueos([]);
+        setHistoricas([]);
         return;
       }
 
       // Rango del histórico: cubre (a) desde el inicio del año de residencia en curso más
       // antiguo entre los residentes activos (para accumulatedTally, contrato C-1) y (b)
-      // desde la fecha REAL de cualquier bloqueo ROTACION que termine este mes (para INV-7
-      // cross-mes, contrato C-2 — igual que Calendar.jsx: el aniversario del residente no
-      // tiene por qué coincidir con el inicio de su rotación). El límite superior entra 1-2
-      // días dentro del mes generado solo para el lookahead de doblete de (a).
+      // desde la fecha REAL de cualquier bloqueo ROTACION cercana que termine este mes (para
+      // INV-7 cross-mes, contrato C-2 — mismo criterio que Calendar.jsx vía rotationHistoryStart,
+      // compartido en v2/domain/validate.js). El límite superior entra 1-2 días dentro del mes
+      // generado solo para el lookahead de doblete de (a).
       const desdesAcumulado = residentes
         .map((r) => {
           const fin = r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1);
@@ -172,10 +180,8 @@ function GeneratorScreen() {
           return periodo ? periodo.start : null;
         })
         .filter(Boolean);
-      const desdesRotacion = rBloqueos.bloqueos
-        .filter((b) => b.motivo === "ROTACION" && b.desde < monthStart)
-        .map((b) => b.desde);
-      const candidatos = [...desdesAcumulado, ...desdesRotacion];
+      const desdeRotacion = rotationHistoryStart(rBloqueos.bloqueos, monthStart);
+      const candidatos = desdeRotacion ? [...desdesAcumulado, desdeRotacion] : desdesAcumulado;
 
       const rHist = candidatos.length === 0
         ? { ok: true, asignaciones: [] }
@@ -185,6 +191,8 @@ function GeneratorScreen() {
       if (!rHist.ok) {
         setContextError("No se pudo cargar el histórico de guardias: " + rHist.error);
         setCargandoContexto(false);
+        setBloqueos([]);
+        setHistoricas([]);
         return;
       }
       setBloqueos(rBloqueos.bloqueos);
@@ -312,7 +320,9 @@ function GeneratorScreen() {
           fontSize: 11.5, lineHeight: 1.5, resize: "vertical", background: COLOR.gray, color: COLOR.bodyText,
         }} />
         <div style={{ marginTop: 10 }}>
-          <Btn onClick={copiarPrompt}>📋 Copiar prompt</Btn>
+          <Btn onClick={copiarPrompt} disabled={cargandoContexto || !!contextError}>
+            {cargandoContexto ? "Cargando contexto…" : "📋 Copiar prompt"}
+          </Btn>
         </div>
       </Card>
 
