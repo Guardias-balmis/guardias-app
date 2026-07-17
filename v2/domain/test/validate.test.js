@@ -210,6 +210,16 @@ test("INV-2: vacaciones documentadas eximen del mínimo", () => {
   assert.equal(v.filter((x) => x.invariante === "INV-2").length, 0);
 });
 
+test("INV-2: baja documentada también exime del mínimo (misma rama que vacaciones)", () => {
+  const BRUNO = R("BRUNO", "2024-05-27", "2028-05-26");
+  const asgs = [asg("BRUNO", "2026-09-19", "G"), asg("BRUNO", "2026-09-26", "G")];
+  const v = validateMonth({
+    mes: 9, anio: 2026, residentes: [BRUNO], asignaciones: asgs,
+    bloqueos: [blk("BRUNO", "2026-09-01", "2026-09-15", "BAJA")],
+  });
+  assert.equal(v.filter((x) => x.invariante === "INV-2").length, 0);
+});
+
 test("INV-2: 7 guardias reales superan el máximo (31 días no amplía el tope)", () => {
   const asgs = ["2026-10-01", "2026-10-05", "2026-10-09", "2026-10-13", "2026-10-17", "2026-10-21", "2026-10-29"]
     .map((f) => asg("ANA", f, "G"));
@@ -219,8 +229,11 @@ test("INV-2: 7 guardias reales superan el máximo (31 días no amplía el tope)"
   assert.match(i2[0].detalle, /6|máximo|maximo/i);
 });
 
-// ─────────────── INV-5 (bloqueos duros) ───────────────
-test("INV-5: guardia y 3P sobre bloqueos duros (incluye 3P sobre baja)", () => {
+// ─────────────── INV-5 (bloqueo motivo BAJA — decisión V-8) ───────────────
+// Fase 5.x / decisión V-8: solo BAJA sigue bloqueando la asignación (no se puede exigir una
+// guardia a alguien de baja médica/embarazo). VACACIONES y ROTACION dejaron de bloquear: son
+// informativas para el generador, pero sus fechas siguen alimentando INV-2/6/7 y la equidad.
+test("INV-5: guardia y 3P sobre bloqueo BAJA violan; el mismo patrón sobre VACACIONES no", () => {
   const BRUNO = R("BRUNO", "2024-05-27", "2028-05-26");
   const CARLA = R("CARLA", "2025-05-26", "2029-05-25");
   const asgs = [asg("BRUNO", "2026-10-07", "G"), asg("CARLA", "2026-10-21", "3P")];
@@ -229,32 +242,74 @@ test("INV-5: guardia y 3P sobre bloqueos duros (incluye 3P sobre baja)", () => {
     bloqueos: [blk("BRUNO", "2026-10-05", "2026-10-11", "VACACIONES"), blk("CARLA", "2026-10-19", "2026-10-23", "BAJA")],
   });
   const i5 = v.filter((x) => x.invariante === "INV-5");
-  assert.equal(i5.length, 2);
-  assert.ok(i5.some((x) => x.fecha === "2026-10-07" && x.residenteId === "BRUNO"));
+  assert.equal(i5.length, 1);
   assert.ok(i5.some((x) => x.fecha === "2026-10-21" && x.residenteId === "CARLA"));
+  assert.ok(!i5.some((x) => x.residenteId === "BRUNO")); // VACACIONES ya no bloquea (V-8)
 });
 
-test("INV-5: bloqueo que cruza de diciembre a enero (extremos inclusivos)", () => {
+test("INV-5: VACACIONES y ROTACION ya no bloquean asignación (decisión V-8)", () => {
+  const asgs = [asg("ANA", "2026-10-07", "G")];
+  const DAVID = R("DAVID", "2025-05-26", "2029-05-25");
+  const asgsRot = [asg("DAVID", "2026-10-15", "G")];
+  const vVac = validateMonth({
+    mes: 10, anio: 2026, residentes: [ANA], asignaciones: asgs,
+    bloqueos: [blk("ANA", "2026-10-05", "2026-10-11", "VACACIONES")],
+  });
+  const vRot = validateMonth({
+    mes: 10, anio: 2026, residentes: [DAVID], asignaciones: asgsRot,
+    bloqueos: [blk("DAVID", "2026-10-01", "2026-10-15", "ROTACION", { provincia: "Madrid" })],
+  });
+  assert.equal(vVac.filter((x) => x.invariante === "INV-5").length, 0);
+  assert.equal(vRot.filter((x) => x.invariante === "INV-5").length, 0);
+});
+
+test("INV-5: bloqueo BAJA que cruza de diciembre a enero (extremos inclusivos)", () => {
   const asgs = [asg("ANA", "2027-01-02", "G"), asg("ANA", "2027-01-04", "G")];
   const v = validateMonth({
     mes: 1, anio: 2027, residentes: [ANA], asignaciones: asgs,
-    bloqueos: [blk("ANA", "2026-12-28", "2027-01-03", "VACACIONES")],
+    bloqueos: [blk("ANA", "2026-12-28", "2027-01-03", "BAJA")],
   });
   const i5 = v.filter((x) => x.invariante === "INV-5");
   assert.equal(i5.length, 1);
   assert.equal(i5[0].fecha, "2027-01-02");
 });
 
-test("INV-5: fin de bloqueo inclusivo (día 15 viola, día 16 no)", () => {
+test("INV-5: fin de bloqueo BAJA inclusivo (día 15 viola, día 16 no)", () => {
   const DAVID = R("DAVID", "2025-05-26", "2029-05-25");
   const asgs = [asg("DAVID", "2026-10-15", "G"), asg("DAVID", "2026-10-16", "G")];
   const v = validateMonth({
     mes: 10, anio: 2026, residentes: [DAVID], asignaciones: asgs,
-    bloqueos: [blk("DAVID", "2026-10-01", "2026-10-15", "ROTACION", { provincia: "Madrid" })],
+    bloqueos: [blk("DAVID", "2026-10-01", "2026-10-15", "BAJA")],
   });
   const i5 = v.filter((x) => x.invariante === "INV-5");
   assert.equal(i5.length, 1);
   assert.equal(i5[0].fecha, "2026-10-15");
+});
+
+test("INV-5: inicio de bloqueo BAJA inclusivo (día 9 no viola, día 10 sí — simétrico al fin)", () => {
+  const DAVID = R("DAVID", "2025-05-26", "2029-05-25");
+  const asgs = [asg("DAVID", "2026-10-09", "G"), asg("DAVID", "2026-10-10", "G")];
+  const v = validateMonth({
+    mes: 10, anio: 2026, residentes: [DAVID], asignaciones: asgs,
+    bloqueos: [blk("DAVID", "2026-10-10", "2026-10-20", "BAJA")],
+  });
+  const i5 = v.filter((x) => x.invariante === "INV-5");
+  assert.equal(i5.length, 1);
+  assert.equal(i5[0].fecha, "2026-10-10");
+});
+
+test("INV-5/INV-7 ya no se contradicen: cubrir viernes+sábado en rotación cercana satisface INV-7 sin disparar INV-5", () => {
+  // Antes de la decisión V-8, este mismo escenario (ya probado en el bloque INV-7 de más
+  // abajo) violaba INV-5 en las 3 asignaciones mientras satisfacía INV-7 — una contradicción
+  // real nunca detectada porque los tests de INV-7 no comprobaban INV-5 en el mismo caso.
+  const M1 = R("M1", "2024-05-27", "2028-05-26");
+  const asgs = [asg("M1", "2026-10-16", "G"), asg("M1", "2026-10-24", "G"), asg("M1", "2026-10-20", "G")];
+  const v = validateMonth({
+    mes: 10, anio: 2026, residentes: [M1], asignaciones: asgs,
+    bloqueos: [blk("M1", "2026-10-05", "2026-10-31", "ROTACION", { provincia: "Alicante" })],
+  });
+  assert.equal(v.filter((x) => x.invariante === "INV-7").length, 0);
+  assert.equal(v.filter((x) => x.invariante === "INV-5").length, 0);
 });
 
 // ─────────────── INV-6 (rotaciones simultáneas) ───────────────

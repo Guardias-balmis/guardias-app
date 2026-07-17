@@ -1,6 +1,8 @@
 // Tests de las acciones de bloqueos (Fase 4.0): crearBloqueo, misBloqueos, cancelarBloqueo.
-// DURO (vacaciones/rotación/baja) — spec.md §5 decisión V-6: rango desde/hasta, nunca un día
-// suelto; cancelación por reinserción con el MISMO id (append-only, readLatest resuelve).
+// Vacaciones/rotación/baja — spec.md §5 decisión V-6: rango desde/hasta, nunca un día suelto;
+// cancelación por reinserción con el MISMO id (append-only, readLatest resuelve). Estas
+// acciones son agnósticas de severidad: desde V-8 (Fase 5.x) solo BAJA bloquea la asignación
+// (INV-5) — la distinción vive en el validador de dominio, no aquí.
 import test from "node:test";
 import assert from "node:assert/strict";
 import nodeCrypto from "node:crypto";

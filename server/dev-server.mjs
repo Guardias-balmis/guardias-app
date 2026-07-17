@@ -19,6 +19,7 @@ import { handleRequest } from "./src/router.js";
 import { makeStore } from "./src/sheets-store.js";
 import { headerOf, TABLES, recordToRow } from "./src/sheets-schema.js";
 import { validateMonth } from "../v2/domain/validate.js";
+import { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible } from "../v2/domain/responsible.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = Number(process.argv[2] || 8787);
@@ -51,6 +52,7 @@ const SEED_RESIDENTES = [
 const ss = memorySS({
   residentes: [headerOf(TABLES.residentes), ...SEED_RESIDENTES.map((r) => recordToRow(TABLES.residentes, r))],
   responsables: [headerOf(TABLES.responsables)],
+  voluntariosResponsable: [headerOf(TABLES.voluntariosResponsable)],
   asignaciones: [headerOf(TABLES.asignaciones)],
   preferencias: [headerOf(TABLES.preferencias)],
 });
@@ -67,7 +69,8 @@ function deps() {
     now, today: new Date().toISOString().slice(0, 10),
     clientId: DEV_CLIENT_ID, sessionSecret: "dev-secret-no-usar-en-produccion", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => nodeCrypto.randomUUID() }),
-    domain: { validateMonth },
+    domain: { validateMonth, eligibleCandidates, resolveMethod, drawResponsible, validateResponsible },
+    newSeed: () => nodeCrypto.randomUUID(),
     issueNonce: () => { const n = nodeCrypto.randomUUID(); nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
     // ÚNICO punto sustituido: credenciales "dev:email:nonce" se aceptan como verificadas.

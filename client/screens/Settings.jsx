@@ -10,7 +10,7 @@ function fechaEs(iso) {
 
 function SettingsScreen() {
   const app = window.useApp();
-  const { auth, myResidente, nivel, isResponsable, logout } = app;
+  const { auth, myResidente, nivel, isResponsable, logout, setTab } = app;
 
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 480, margin: "0 auto" }}>
@@ -51,6 +51,13 @@ function SettingsScreen() {
           </div>
         </Card>
       )}
+
+      <Card title="Responsable del contaje">
+        <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
+          Mandato anual (enero→enero) de un R3: voluntariado, sorteo auditable e historial.
+        </div>
+        <Btn onClick={() => setTab("responsable")} color={COLOR.bluePale} textColor={COLOR.blueDark}>Ver / gestionar →</Btn>
+      </Card>
 
       <Btn onClick={logout} color={COLOR.red}>Cerrar sesión</Btn>
 

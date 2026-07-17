@@ -100,3 +100,18 @@ test("makeApi.guardarAsignaciones manda el array de cambios", async () => {
   const sent = JSON.parse(fetchImpl.calls[0].init.body);
   assert.deepEqual(sent.cambios, cambios);
 });
+
+test("makeApi: acciones del Responsable mandan la action y el anio correctos", async () => {
+  const fetchImpl = fakeFetch(200, { ok: true });
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "s" });
+  await api.estadoResponsable(2027);
+  await api.ofrecerseResponsable(2027);
+  await api.retirarVoluntariadoResponsable(2027);
+  await api.ejecutarSorteoResponsable(2027);
+  await api.listResponsables();
+  const acciones = fetchImpl.calls.map((c) => JSON.parse(c.init.body));
+  assert.deepEqual(acciones.map((a) => a.action), [
+    "estadoResponsable", "ofrecerseResponsable", "retirarVoluntariadoResponsable", "ejecutarSorteoResponsable", "listResponsables",
+  ]);
+  assert.equal(acciones[0].anio, 2027);
+});

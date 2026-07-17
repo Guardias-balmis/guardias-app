@@ -12,12 +12,15 @@ export const TABLES = {
   periodos: { name: "periodos", columns: [col("id"), col("residenteId"), col("anio", "number"), col("fechaInicio"), col("fechaFin")] },
   bloqueos: { name: "bloqueos", columns: [col("id"), col("residenteId"), col("desde"), col("hasta"), col("motivo"), col("provincia"), col("guardiasEnCentroExterno", "bool"), col("activo", "bool")] },
   asignaciones: { name: "asignaciones", columns: [col("id"), col("fecha"), col("residenteId"), col("codigo"), col("puesto"), col("origen")] },
-  responsables: { name: "responsables", columns: [col("id"), col("periodoInicio"), col("periodoFin"), col("residenteId"), col("metodo"), col("semilla"), col("candidatos", "json"), col("fechaSorteo")] },
+  responsables: { name: "responsables", columns: [col("id"), col("periodoInicio"), col("periodoFin"), col("residenteId"), col("metodo"), col("voluntarios", "json"), col("semilla"), col("candidatos", "json"), col("fechaSorteo")] },
+  voluntariosResponsable: { name: "voluntariosResponsable", columns: [col("id"), col("residenteId"), col("periodoInicio"), col("activo", "bool")] },
   sorteos: { name: "sorteos", columns: [col("id"), col("fecha"), col("motivo"), col("semilla"), col("candidatos", "json"), col("resultado", "json")] },
   // Fase 4: diasPreferidos/diasEvitar (día de semana genérico) y rotDe/rotHasta/vacDe/vacHasta
   // (número de día suelto) del v1 se sustituyen por fechas concretas (BLANDO) y por la tabla
-  // `bloqueos` (DURO) — spec.md §5 Fase 4: "distingue DURO vs BLANDO, son cosas distintas".
-  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("fechasPreferidas", "json"), col("fechasEvitar", "json"), col("notas")] },
+  // `bloqueos` — spec.md §5 Fase 4: "distingue DURO vs BLANDO, son cosas distintas". Desde V-8
+  // (Fase 5.x) la severidad dentro de `bloqueos` ya no es uniforme: solo motivo BAJA bloquea
+  // la asignación (INV-5); VACACIONES/ROTACION son informativas.
+  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("fechasEvitar", "json"), col("notas")] },
 };
 
 /** Cabecera (nombres de columna) de una tabla. */

@@ -102,8 +102,10 @@ function CalendarScreen() {
 
   const validar = async () => {
     setValidando(true);
-    // INV-5/6/7 dependen de los bloqueos DURO de TODO el equipo (vacaciones/rotación/baja),
-    // no solo de quien pulsa Validar — listBloqueos (a diferencia de misBloqueos) los trae todos.
+    // INV-5/6/7 dependen de los bloqueos de TODO el equipo (vacaciones/rotación/baja), no
+    // solo de quien pulsa Validar — listBloqueos (a diferencia de misBloqueos) los trae
+    // todos. Desde la decisión V-8, solo BAJA bloquea la asignación (INV-5); VACACIONES y
+    // ROTACION siguen alimentando INV-6/7 sin bloquear.
     const rBloqueos = await app.api.listBloqueos(anio, mes);
     setValidando(false);
     if (!rBloqueos.ok) { showToast("Error cargando bloqueos para validar: " + rBloqueos.error, "err"); return; }

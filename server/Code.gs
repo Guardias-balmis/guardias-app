@@ -43,11 +43,22 @@ function deps_() {
       validateMonth: Domain.validateMonth,
       validateThirdPost: Domain.validateThirdPost,
       validateResidencyYearClose: Domain.validateResidencyYearClose,
+      eligibleCandidates: Domain.eligibleCandidates,
+      resolveMethod: Domain.resolveMethod,
+      drawResponsible: Domain.drawResponsible,
+      validateResponsible: Domain.validateResponsible,
     },
+    newSeed: newSeed_,
     issueNonce: issueNonce_,
     consumeNonce: consumeNonce_,
     fetchTokeninfo: fetchTokeninfo_,
   };
+}
+
+// Semilla del sorteo del Responsable (INV-14): generada por la app, nunca por el dominio
+// (cero I/O ahí, S-6). Utilities.getUuid() es la misma fuente que ya usa el store para ids.
+function newSeed_() {
+  return Utilities.getUuid();
 }
 
 // HMAC + base64url con Utilities (base64EncodeWebSafe = base64url; quitamos el padding).

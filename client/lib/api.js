@@ -61,5 +61,10 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
     listBloqueos: (anio, mes) => authed("listBloqueos", { anio, mes }),
     crearBloqueo: (desde, hasta, motivo, extra = {}) => authed("crearBloqueo", { desde, hasta, motivo, ...extra }),
     cancelarBloqueo: (id) => authed("cancelarBloqueo", { id }),
+    estadoResponsable: (anio) => authed("estadoResponsable", { anio }),
+    ofrecerseResponsable: (anio) => authed("ofrecerseResponsable", { anio }),
+    retirarVoluntariadoResponsable: (anio) => authed("retirarVoluntariadoResponsable", { anio }),
+    ejecutarSorteoResponsable: (anio) => authed("ejecutarSorteoResponsable", { anio }),
+    listResponsables: () => authed("listResponsables"),
   };
 }

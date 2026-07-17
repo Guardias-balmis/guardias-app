@@ -16,7 +16,13 @@ import { tally } from "./tally.js";
 const GUARDIA = new Set(["G", "GF", "GP"]);          // ocupan puesto obligatorio
 const ASIGNACION = new Set(["G", "GF", "GP", "3P"]); // cualquier asignación (INV-5, INV-7)
 const PROVINCIAS_CERCANAS = new Set(["alicante", "valencia", "murcia", "albacete"]);
-const DURO = new Set(["VACACIONES", "ROTACION", "BAJA"]); // PERSONAL es BLANDO
+// Decisión V-8 (Fase 5.x): solo BAJA bloquea la asignación — no se puede exigir una guardia
+// a alguien de baja médica/embarazo, por seguridad/legalidad. VACACIONES y ROTACION dejaron
+// de bloquear (antes ambas asignaciones aquí también contaban por igual): son informativas
+// para el generador, igual que una preferencia BLANDA — pero sus fechas SIGUEN alimentando
+// INV-2 (exención del mínimo mensual), INV-6 (ausencias simultáneas) e INV-7 (cobertura
+// viernes/sábado en rotación cercana), que las leen de `bloqueos` directamente, no de este set.
+const DURO = new Set(["BAJA"]);
 
 const err = (invariante, detalle, extra = {}) => ({ invariante, severidad: "error", detalle, ...extra });
 const aviso = (invariante, detalle, extra = {}) => ({ invariante, severidad: "aviso", detalle, ...extra });
@@ -91,7 +97,7 @@ export function validateMonth(ctx) {
     violations.push(err("INV-1", detalle, { fecha }));
   }
 
-  // ── INV-5: asignación sobre bloqueo DURO ──
+  // ── INV-5: asignación sobre bloqueo BAJA (único motivo DURO — decisión V-8) ──
   for (const a of asignaciones) {
     if (!dayset.has(a.fecha) || !ASIGNACION.has(a.codigo)) continue;
     const hit = bloqueos.find((b) => b.residenteId === a.residenteId && DURO.has(b.motivo) && inRange(a.fecha, b.desde, b.hasta));

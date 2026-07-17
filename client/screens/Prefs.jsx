@@ -1,20 +1,20 @@
 // PrefsScreen — preferencias del residente para el mes en curso (app.mes/app.anio,
 // COMPARTIDO con CalendarScreen). Fase 4: sustituye día-de-semana genérico por fechas
-// concretas del mes, y distingue DURO (Bloqueo: vacaciones/rotación/baja — lo prohíbe el
-// validador) de BLANDO (fechasPreferidas/fechasEvitar — informativo, nunca lo comprueba el
-// validador; spec.md decisión V-6). Son cosas distintas para el usuario y para el sistema:
-// aquí viven en secciones separadas con acentos de color distintos (rojo=bloquea, azul/
-// naranja=preferencia).
+// concretas del mes. Fase 5.x / decisión V-8: dentro de Bloqueo, solo BAJA sigue bloqueando
+// la asignación (INV-5) — vacaciones y rotación pasaron a ser informativas para el
+// generador, igual que fechasEvitar, aunque sus fechas SIGUEN alimentando INV-2/6/7 y la
+// equidad. Se quitó la sección de "fechas preferidas" (BLANDO positivo) a petición del
+// autor. Acentos de color: rojo=BAJA (sigue bloqueando), naranja=vacaciones/rotación/evitar
+// (informativo, no bloquea).
 import { COLOR, SHADOW, S } from "./client/lib/design-tokens.js";
 import { datesOfMonth, weekday, compareISO } from "./v2/domain/calendar.js";
 
 const { useState, useEffect } = React;
-const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
+const { Card, SectionTitle, Btn, Aviso } = window.UI;
 
 const DEFAULT_PREFS = {
   maxGuardias: 5,
   preferDobles: false,
-  fechasPreferidas: [],
   fechasEvitar: [],
   notas: "",
 };
@@ -86,7 +86,7 @@ function DateGrid({ anio, mes, selected, onToggle, color, bloqueadas }) {
   );
 }
 
-/** Formulario de alta de un Bloqueo DURO (vacaciones/rotación/baja) — spec.md V-6, INV-5/6/7. */
+/** Formulario de alta de un Bloqueo (vacaciones/rotación/baja) — spec.md V-6/V-8, INV-2/5/6/7. */
 function NuevoBloqueo({ anio, mes, onCreated, showToast, api }) {
   const primerDia = datesOfMonth(anio, mes)[0];
   const [motivo, setMotivo] = useState("VACACIONES");
@@ -135,8 +135,8 @@ function NuevoBloqueo({ anio, mes, onCreated, showToast, api }) {
             style={{ ...S.input, width: "100%", marginTop: 4, boxSizing: "border-box" }} />
         </div>
       )}
-      <Btn onClick={crear} disabled={saving || !valido} color={COLOR.red}>
-        {saving ? "Añadiendo…" : "🚫 Añadir bloqueo"}
+      <Btn onClick={crear} disabled={saving || !valido} color={COLOR.blueDark}>
+        {saving ? "Añadiendo…" : "Añadir"}
       </Btn>
     </div>
   );
@@ -185,7 +185,8 @@ function PrefsScreen() {
     [field]: p[field].includes(fecha) ? p[field].filter((d) => d !== fecha) : [...p[field], fecha],
   }));
 
-  // Fechas ya cubiertas por un bloqueo DURO: no tiene sentido marcarlas también como preferencia.
+  // Fechas ya cubiertas por CUALQUIER bloqueo (vacaciones/rotación/baja): no tiene sentido
+  // marcarlas también como "a evitar" — ya son una ausencia conocida y registrada.
   const fechasBloqueadas = new Set();
   for (const b of bloqueos) {
     for (const f of datesOfMonth(anio, mes)) {
@@ -237,43 +238,46 @@ function PrefsScreen() {
         </div>
       </Card>
 
-      <Card title="🚫 Bloqueos — vacaciones, rotación, baja">
+      <Card title="🗓️ Vacaciones, rotación y baja">
         <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
-          Esto es distinto de una preferencia: un bloqueo <b>prohíbe</b> asignarte guardia esos
-          días — lo hace cumplir el validador, no es negociable.
+          Vacaciones y rotación son informativas: el generador evita asignarte guardia esos
+          días, pero puede hacerlo si no queda alternativa — el validador no lo bloquea. La
+          baja médica o el embarazo son distintos: <b>nunca</b> se te asignará guardia esos
+          días, lo hace cumplir el validador.
         </div>
         {bloqueos.length === 0 ? (
-          <div style={{ fontSize: 13, color: COLOR.grayDark, fontStyle: "italic", marginBottom: 10 }}>Sin bloqueos este mes.</div>
+          <div style={{ fontSize: 13, color: COLOR.grayDark, fontStyle: "italic", marginBottom: 10 }}>Sin fechas registradas este mes.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
-            {bloqueos.map((b) => (
-              <div key={b.id} style={{
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-                background: COLOR.redLight, borderRadius: 8, padding: "8px 10px",
-              }}>
-                <div style={{ fontSize: 13, color: COLOR.red }}>
-                  <b>{MOTIVO_LABEL[b.motivo] || b.motivo}</b> · {fechaEs(b.desde)} – {fechaEs(b.hasta)}
-                  {b.provincia ? ` · ${b.provincia}` : ""}
+            {bloqueos.map((b) => {
+              // NOTA: COLOR.redLight === COLOR.orangeLight (mismo hex en design-tokens.js) —
+              // usar solo el fondo no distinguiría nada. La distinción real es el fondo NEUTRO
+              // (naranja: solo borde) vs TEÑIDO (baja: fondo completo), no el matiz del color.
+              const esBaja = b.motivo === "BAJA";
+              const color = esBaja ? COLOR.red : COLOR.orange;
+              return (
+                <div key={b.id} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  background: esBaja ? COLOR.redLight : COLOR.gray,
+                  borderLeft: `4px solid ${color}`, borderRadius: 8, padding: "8px 10px",
+                }}>
+                  <div style={{ fontSize: 13, color }}>
+                    <b>{MOTIVO_LABEL[b.motivo] || b.motivo}</b> · {fechaEs(b.desde)} – {fechaEs(b.hasta)}
+                    {b.provincia ? ` · ${b.provincia}` : ""}
+                    {!esBaja && <span style={{ fontWeight: 600 }}> · no bloquea</span>}
+                  </div>
+                  <button onClick={() => cancelarBloqueo(b.id)} style={{ ...S.smallBtn, background: "#fff", color }}>Cancelar</button>
                 </div>
-                <button onClick={() => cancelarBloqueo(b.id)} style={{ ...S.smallBtn, background: "#fff", color: COLOR.red }}>Cancelar</button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
         {showNuevoBloqueo ? (
           <NuevoBloqueo anio={anio} mes={mes} api={api} showToast={showToast}
             onCreated={() => { setShowNuevoBloqueo(false); cargarBloqueos(); }} />
         ) : (
-          <Btn onClick={() => setShowNuevoBloqueo(true)} color={COLOR.gray} textColor={COLOR.red}>+ Añadir bloqueo</Btn>
+          <Btn onClick={() => setShowNuevoBloqueo(true)} color={COLOR.gray} textColor={COLOR.blueDark}>+ Añadir</Btn>
         )}
-      </Card>
-
-      <Card title="Fechas preferidas">
-        <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10 }}>
-          Toca las fechas concretas en las que prefieres guardia (preferencia, no obligación).
-        </div>
-        <DateGrid anio={anio} mes={mes} selected={prefs.fechasPreferidas} bloqueadas={fechasBloqueadas}
-          onToggle={(f) => toggleFecha("fechasPreferidas", f)} color={COLOR.blue} />
       </Card>
 
       <Card title="Fechas a evitar">
@@ -289,12 +293,6 @@ function PrefsScreen() {
           placeholder="Cualquier otra circunstancia a tener en cuenta…" rows={4}
           style={{ ...S.input, width: "100%", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} />
       </Card>
-
-      <Info>
-        Las fechas preferidas/a evitar son una preferencia BLANDA: el generador las tiene en
-        cuenta pero no las garantiza. Los bloqueos de arriba son DUROS: el validador nunca
-        permite una guardia sobre ellos.
-      </Info>
 
       <Btn onClick={guardar} disabled={saving}>
         {saving ? "Guardando…" : saved ? "✓ Guardado" : "💾 Guardar preferencias"}

@@ -21,12 +21,15 @@ const TABLES = {
   periodos: { name: "periodos", columns: [col("id"), col("residenteId"), col("anio", "number"), col("fechaInicio"), col("fechaFin")] },
   bloqueos: { name: "bloqueos", columns: [col("id"), col("residenteId"), col("desde"), col("hasta"), col("motivo"), col("provincia"), col("guardiasEnCentroExterno", "bool"), col("activo", "bool")] },
   asignaciones: { name: "asignaciones", columns: [col("id"), col("fecha"), col("residenteId"), col("codigo"), col("puesto"), col("origen")] },
-  responsables: { name: "responsables", columns: [col("id"), col("periodoInicio"), col("periodoFin"), col("residenteId"), col("metodo"), col("semilla"), col("candidatos", "json"), col("fechaSorteo")] },
+  responsables: { name: "responsables", columns: [col("id"), col("periodoInicio"), col("periodoFin"), col("residenteId"), col("metodo"), col("voluntarios", "json"), col("semilla"), col("candidatos", "json"), col("fechaSorteo")] },
+  voluntariosResponsable: { name: "voluntariosResponsable", columns: [col("id"), col("residenteId"), col("periodoInicio"), col("activo", "bool")] },
   sorteos: { name: "sorteos", columns: [col("id"), col("fecha"), col("motivo"), col("semilla"), col("candidatos", "json"), col("resultado", "json")] },
   // Fase 4: diasPreferidos/diasEvitar (día de semana genérico) y rotDe/rotHasta/vacDe/vacHasta
   // (número de día suelto) del v1 se sustituyen por fechas concretas (BLANDO) y por la tabla
-  // `bloqueos` (DURO) — spec.md §5 Fase 4: "distingue DURO vs BLANDO, son cosas distintas".
-  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("fechasPreferidas", "json"), col("fechasEvitar", "json"), col("notas")] },
+  // `bloqueos` — spec.md §5 Fase 4: "distingue DURO vs BLANDO, son cosas distintas". Desde V-8
+  // (Fase 5.x) la severidad dentro de `bloqueos` ya no es uniforme: solo motivo BAJA bloquea
+  // la asignación (INV-5); VACACIONES/ROTACION son informativas.
+  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("fechasEvitar", "json"), col("notas")] },
 };
 
 /** Cabecera (nombres de columna) de una tabla. */
@@ -295,7 +298,7 @@ var Router = (function () {
 
 const ASIG_KEY = (r) => `${r.fecha}|${r.residenteId}`;
 const PREF_KEY = (r) => `${r.residenteId}|${r.anio}|${r.mes}`;
-const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA"]); // siempre DURO — spec V-6
+const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA"]); // enum de motivos válidos (severidad mixta desde V-8: solo BAJA bloquea la asignación)
 
 /**
  * @param {string} rawBody  cuerpo crudo de la petición (JSON en text/plain)
@@ -394,6 +397,70 @@ function handleRequest(rawBody, deps) {
           return { ok: true };
         });
 
+      case "estadoResponsable":
+        return authed(req, deps, (session) => {
+          if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
+          const { periodoInicio, periodoFin } = mandatoPeriod(req.anio);
+          const residentes = deps.store.readRecords("residentes");
+          const elegibles = deps.domain.eligibleCandidates(residentes, periodoInicio);
+          const voluntarios = activeVolunteers(deps, periodoInicio);
+          const mandato = currentMandate(deps, periodoInicio);
+          return { ok: true, periodoInicio, periodoFin, elegibles, voluntarios, meHeOfrecido: voluntarios.includes(session.sub), mandato };
+        });
+
+      case "ofrecerseResponsable":
+        return authed(req, deps, (session) => {
+          if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
+          const { periodoInicio } = mandatoPeriod(req.anio);
+          if (currentMandate(deps, periodoInicio)) return { ok: false, error: "el responsable de ese periodo ya está decidido" };
+          const residentes = deps.store.readRecords("residentes");
+          const elegibles = deps.domain.eligibleCandidates(residentes, periodoInicio);
+          if (!elegibles.includes(session.sub)) return { ok: false, error: "no tienes nivel R3 en ese periodo" };
+          deps.store.appendRecord("voluntariosResponsable", { residenteId: session.sub, periodoInicio, activo: true });
+          return { ok: true };
+        });
+
+      case "retirarVoluntariadoResponsable":
+        return authed(req, deps, (session) => {
+          if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
+          const { periodoInicio } = mandatoPeriod(req.anio);
+          if (currentMandate(deps, periodoInicio)) return { ok: false, error: "el responsable de ese periodo ya está decidido" };
+          deps.store.appendRecord("voluntariosResponsable", { residenteId: session.sub, periodoInicio, activo: false });
+          return { ok: true };
+        });
+
+      case "ejecutarSorteoResponsable":
+        return authed(req, deps, () => {
+          if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
+          const { periodoInicio, periodoFin } = mandatoPeriod(req.anio);
+          if (currentMandate(deps, periodoInicio)) return { ok: false, error: "el responsable de ese periodo ya está decidido" };
+          const residentes = deps.store.readRecords("residentes");
+          const elegibles = deps.domain.eligibleCandidates(residentes, periodoInicio);
+          if (elegibles.length === 0) return { ok: false, error: "no hay ningún R3 elegible para ese periodo" };
+          const voluntarios = activeVolunteers(deps, periodoInicio);
+          const decision = deps.domain.resolveMethod(elegibles, voluntarios);
+
+          const record = decision.metodo === "VOLUNTARIO"
+            ? { periodoInicio, periodoFin, residenteId: decision.residenteId, metodo: "VOLUNTARIO", voluntarios }
+            : (() => {
+              const semilla = deps.newSeed();
+              const residenteId = deps.domain.drawResponsible(decision.candidatos, semilla);
+              return { periodoInicio, periodoFin, residenteId, metodo: "SORTEO", voluntarios, candidatos: decision.candidatos, semilla, fechaSorteo: deps.today };
+            })();
+
+          const violaciones = deps.domain.validateResponsible(record, { residentes });
+          if (violaciones.length > 0) return { ok: false, error: "fallo interno: " + violaciones.map((v) => v.detalle).join("; ") };
+
+          const id = deps.store.appendRecord("responsables", record);
+          return { ok: true, mandato: { id, ...record } };
+        });
+
+      case "listResponsables":
+        return authed(req, deps, () => ({
+          ok: true,
+          mandatos: deps.store.readLatest("responsables", (r) => r.periodoInicio).sort((a, b) => (a.periodoInicio < b.periodoInicio ? -1 : 1)),
+        }));
+
       default:
         return { ok: false, error: `acción desconocida: ${req.action}` };
     }
@@ -473,6 +540,27 @@ function activeBloqueosInMonth(deps, anio, mes) {
     .filter((b) => b.activo === true && b.desde <= monthEnd && b.hasta >= monthStart);
 }
 
+function isYear(v) {
+  return typeof v === "number" && Number.isInteger(v) && v > 2000 && v < 2100;
+}
+
+/** Mandato enero→enero (INV-14) para el año dado: [YYYY-01-01, (YYYY+1)-01-01). */
+function mandatoPeriod(anio) {
+  return { periodoInicio: `${anio}-01-01`, periodoFin: `${anio + 1}-01-01` };
+}
+
+/** Voluntarios activos (última reinserción gana, como cancelarBloqueo) para un periodo. */
+function activeVolunteers(deps, periodoInicio) {
+  return deps.store.readLatest("voluntariosResponsable", (r) => `${r.residenteId}|${r.periodoInicio}`)
+    .filter((v) => v.periodoInicio === periodoInicio && v.activo === true)
+    .map((v) => v.residenteId);
+}
+
+/** El mandato ya decidido para un periodo, si existe (última reinserción gana). */
+function currentMandate(deps, periodoInicio) {
+  return deps.store.readLatest("responsables", (r) => r.periodoInicio).find((r) => r.periodoInicio === periodoInicio) || null;
+}
+
 /** Valida la sesión y ejecuta `fn(payload)`, o devuelve el error de sesión. */
 function authed(req, deps, fn) {
   const s = verifySession(req.session, { now: deps.now, secret: deps.sessionSecret, crypto: deps.crypto });
@@ -480,10 +568,14 @@ function authed(req, deps, fn) {
   return fn(s.payload);
 }
 
-/** Rol derivado: 'responsable' si hoy cae dentro de un mandato de la tabla responsables. */
+/**
+ * Rol derivado: 'responsable' si hoy cae dentro de un mandato de la tabla responsables.
+ * `readLatest` por periodoInicio (no `readRecords` crudo): si un mandato se reemplaza por
+ * una corrección posterior (misma clave), la fila vieja no debe seguir concediendo el rol.
+ */
 function resolveRol(store, residenteId, today) {
-  const mandatos = store.readRecords("responsables").filter((r) => r.residenteId === residenteId);
-  const activo = mandatos.some((m) => m.periodoInicio <= today && today < m.periodoFin);
+  const mandatos = store.readLatest("responsables", (r) => r.periodoInicio);
+  const activo = mandatos.some((m) => m.residenteId === residenteId && m.periodoInicio <= today && today < m.periodoFin);
   return activo ? "responsable" : "residente";
 }
 

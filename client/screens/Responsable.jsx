@@ -1,0 +1,146 @@
+// ResponsableScreen — Fase 5, INV-14 (spec.md). Mandato enero→enero de un R3 (pasa a R4
+// durante el mandato): voluntario > sorteo. Decisión Fase 5: si se ofrecen ≥2 voluntarios,
+// se sortea solo entre ellos; sin voluntarios, se sortea entre todo el grupo de R3. El
+// sorteo es determinista (semilla+candidatos guardados) — se muestran en pantalla para que
+// cualquiera pueda recomputar el resultado (auditable).
+import { COLOR, S } from "./client/lib/design-tokens.js";
+
+const { useState, useEffect } = React;
+const { Card, SectionTitle, Btn, Info, Aviso } = window.UI;
+
+function nombreDe(residentes, id) {
+  const r = residentes.find((x) => x.id === id);
+  return r ? r.nombre : id;
+}
+
+function ResponsableScreen() {
+  const app = window.useApp();
+  const { api, myResidente, residentes, showToast, setTab } = app;
+  const [anio, setAnio] = useState(new Date().getUTCFullYear());
+  const [estado, setEstado] = useState(null);
+  const [historial, setHistorial] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  const cargar = async () => {
+    const [rEstado, rHist] = await Promise.all([api.estadoResponsable(anio), api.listResponsables()]);
+    if (rEstado.ok) setEstado(rEstado);
+    else showToast("Error cargando el estado del responsable: " + rEstado.error, "err");
+    if (rHist.ok) setHistorial(rHist.mandatos);
+  };
+
+  useEffect(() => { setEstado(null); cargar(); }, [anio]);
+
+  const accion = async (fn, mensajeOk) => {
+    setBusy(true);
+    const r = await fn();
+    setBusy(false);
+    if (r.ok) { showToast(mensajeOk); cargar(); }
+    else showToast("Error: " + r.error, "err");
+  };
+
+  return (
+    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 480, margin: "0 auto" }}>
+      <SectionTitle>📋 Responsable del contaje</SectionTitle>
+
+      <Card>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <button onClick={() => setAnio((a) => a - 1)} style={{ ...S.smallBtn, background: COLOR.bluePale, color: COLOR.blue }}>‹</button>
+          <div style={{ fontSize: 15, fontWeight: 700, color: COLOR.blueDark, textAlign: "center" }}>
+            Mandato {anio} → {anio + 1}<br />
+            <span style={{ fontSize: 11, fontWeight: 400, color: COLOR.grayDark }}>(1 enero {anio} – 1 enero {anio + 1})</span>
+          </div>
+          <button onClick={() => setAnio((a) => a + 1)} style={{ ...S.smallBtn, background: COLOR.bluePale, color: COLOR.blue }}>›</button>
+        </div>
+      </Card>
+
+      {!estado ? (
+        <Aviso>Cargando…</Aviso>
+      ) : estado.mandato ? (
+        <Card title="Responsable decidido">
+          <div style={{ fontSize: 16, fontWeight: 700, color: COLOR.blueDark }}>
+            {nombreDe(residentes, estado.mandato.residenteId)}
+          </div>
+          <div style={{ fontSize: 13, color: COLOR.grayDark, marginTop: 4 }}>
+            Método: {estado.mandato.metodo === "SORTEO" ? "Sorteo" : "Voluntario"}
+          </div>
+          {estado.mandato.metodo === "SORTEO" && (
+            <div style={{ marginTop: 10, fontSize: 12, color: COLOR.grayDark, lineHeight: 1.7 }}>
+              <div><b>Candidatos del sorteo:</b> {estado.mandato.candidatos.map((id) => nombreDe(residentes, id)).join(", ")}</div>
+              <div><b>Semilla:</b> <code style={{ background: COLOR.gray, padding: "1px 5px", borderRadius: 4 }}>{estado.mandato.semilla}</code></div>
+              <div><b>Fecha del sorteo:</b> {estado.mandato.fechaSorteo}</div>
+            </div>
+          )}
+          <div style={{ marginTop: 10 }}>
+            <Info>
+              {estado.mandato.metodo === "SORTEO"
+                ? "Auditable: con estos candidatos y esta semilla, cualquiera puede recomputar el mismo resultado."
+                : "Se asignó directo por ser el único voluntario elegible — no hizo falta sorteo."}
+            </Info>
+          </div>
+        </Card>
+      ) : (
+        <Card title="Elegibles (nivel R3 a 1 de enero)">
+          {estado.elegibles.length === 0 ? (
+            <div style={{ fontSize: 13, color: COLOR.grayDark, fontStyle: "italic" }}>Ningún residente será R3 ese 1 de enero.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+              {estado.elegibles.map((id) => (
+                <div key={id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: COLOR.bodyText }}>
+                  <span>{nombreDe(residentes, id)}</span>
+                  {estado.voluntarios.includes(id) && <span style={{ color: COLOR.blue, fontWeight: 700 }}>🙋 voluntario</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {estado.elegibles.includes(myResidente?.id) && (
+            estado.meHeOfrecido ? (
+              <Btn onClick={() => accion(() => api.retirarVoluntariadoResponsable(anio), "Voluntariado retirado")} disabled={busy} color={COLOR.gray} textColor={COLOR.red}>
+                Retirar mi voluntariado
+              </Btn>
+            ) : (
+              <Btn onClick={() => accion(() => api.ofrecerseResponsable(anio), "Te has ofrecido voluntario ✓")} disabled={busy}>
+                🙋 Ofrecerme voluntario
+              </Btn>
+            )
+          )}
+
+          {estado.elegibles.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <Btn onClick={() => accion(() => api.ejecutarSorteoResponsable(anio), "Responsable decidido ✓")} disabled={busy} color={COLOR.blueDark}>
+                {estado.voluntarios.length >= 2 ? "🎲 Sortear entre los voluntarios"
+                  : estado.voluntarios.length === 1 ? "Asignar al voluntario (sin sorteo)"
+                  : "🎲 Sortear entre todos los R3"}
+              </Btn>
+            </div>
+          )}
+        </Card>
+      )}
+
+      <Info>
+        Normativa: el contaje recae en un R3 de enero a enero (pasa a R4 durante el mandato).
+        Se decide por voluntario; si se ofrecen dos o más, se sortea solo entre ellos (Fase 5); si
+        nadie se ofrece, se sortea entre todos los R3 elegibles. El sorteo es determinista:
+        guardando semilla y candidatos, el resultado es recomputable por cualquiera.
+      </Info>
+
+      {historial.length > 0 && (
+        <Card title="Historial de responsables">
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {historial.map((m) => (
+              <div key={m.periodoInicio} style={{ fontSize: 13, display: "flex", justifyContent: "space-between", color: COLOR.bodyText }}>
+                <span>{m.periodoInicio.slice(0, 4)}</span>
+                <span>{nombreDe(residentes, m.residenteId)} ({m.metodo === "SORTEO" ? "sorteo" : "voluntario"})</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Btn onClick={() => setTab("settings")} color={COLOR.grayMid} textColor={COLOR.blueDark}>← Volver a Ajustes</Btn>
+    </div>
+  );
+}
+
+window.Screens = window.Screens || {};
+window.Screens.Responsable = ResponsableScreen;

@@ -28,7 +28,9 @@ PeriodoFormativo {              # 4 por residente; generados por defecto, editab
 Bloqueo {
   id: UUID, residenteId
   desde: date, hasta: date      # RANGO inclusivo, no un día suelto (decisión V-6)
-  tipo: DURO                    # motivo ∈ {VACACIONES,ROTACION,BAJA} ⇒ DURO siempre; no hay Bloqueo BLANDO
+  tipo: mixto                   # solo BAJA bloquea la asignación (INV-5); VACACIONES/ROTACION
+                                 # ya no bloquean, son informativas, pero siguen alimentando
+                                 # INV-2/6/7 y la equidad (decisión V-8, Fase 5.x)
   motivo: VACACIONES | ROTACION | BAJA   # embarazo/paternidad → BAJA (decisión V-5)
   provincia?: string            # solo ROTACION: Alicante/Valencia/Murcia/Albacete activa INV-7
   guardiasEnCentroExterno?: bool
@@ -42,18 +44,25 @@ Asignacion {
 }
 Cuadrante { mes: 1..12, anio, estado: BORRADOR|VALIDADO|PUBLICADO, generadoPor, validadoPor, validadoEn }
 Responsable { periodoInicio, periodoFin, residenteId, metodo: VOLUNTARIO|SORTEO,
-              semilla?, candidatos[]?, fechaSorteo? }   # sorteo reproducible y auditable
+              voluntarios[], semilla?, candidatos[]?, fechaSorteo? }   # sorteo reproducible y auditable
 Excepcion {                     # degrada una violación DURA→AVISO donde la normativa lo permite
   invariante, ambito: {mes?|fecha?|residenteId?}, justificacion, registradaPor, fecha
 }
 ```
 
-**DURO vs BLANDO (decisión V-6, Fase 4):** son entidades DISTINTAS, no dos tipos de una misma
-tabla. `Bloqueo` (V/R/B, rango `desde`/`hasta`) es **siempre DURO**: lo prohíbe el validador
-(INV-5/6/7), lo respeta el generador. Una preferencia PERSONAL ("preferiría no este día") es
-**BLANDA**: vive en `Preferencias.fechasEvitar` (fechas concretas sueltas, no un rango), es
-informativa para el generador y **nunca** la comprueba el validador — incumplirla no produce
-ninguna violación. Esta distinción es núcleo del generador: no se colapsa.
+**DURO vs BLANDO (decisión V-6, Fase 4; refinada por V-8, Fase 5.x):** `Bloqueo` y una
+preferencia PERSONAL siguen siendo entidades DISTINTAS, no dos tipos de una misma tabla. Pero
+dentro de `Bloqueo` la severidad ya no es uniforme por entidad, depende del `motivo` (V-8):
+**BAJA sigue siendo DURA** — INV-5 prohíbe asignar guardia esos días, por seguridad/legalidad
+(no se puede exigir una guardia a alguien de baja médica o embarazo). **VACACIONES y ROTACION
+dejaron de bloquear la asignación**: son informativas para el generador, igual que una
+preferencia BLANDA — pero sus fechas SIGUEN alimentando INV-2 (exención del mínimo mensual),
+INV-6 (ausencias simultáneas por cohorte) e INV-7 (cobertura viernes/sábado en rotación
+cercana): no se volvieron irrelevantes, solo dejaron de bloquear la asignación en sí. Una
+preferencia PERSONAL ("preferiría no este día") sigue viviendo en `Preferencias.fechasEvitar`
+(fechas concretas sueltas, no un rango), informativa y **nunca** comprobada por el validador.
+`Preferencias.fechasPreferidas` (BLANDO positivo, "quiero guardia aquí") se retiró en Fase 5.x
+a petición del autor: no aportaba suficiente valor frente a la complejidad de mantenerlo.
 
 ## 3. Reglas derivadas (funciones puras)
 
@@ -133,7 +142,7 @@ Estado: ✅ implementado y con test · ⏳ pendiente (fase indicada).
 | INV-2 | 4 ≤ guardias computables/mes ≤ 6 por residente activo | mes | error (>6, o <4 en Mayor); **aviso** (Pequeño con 3, por infra-oferta); exento en febrero/vacaciones/baja/R1-verano | ✅ |
 | INV-3 | Al cierre del año de residencia: dif ≤ 1 con cada compañero del mismo año en total, findes, festivos, **prefestivos**, puentes libres y dobletes V-D | año personal | error | ✅ (prefestivos añadido tras la puerta de consistencia) |
 | INV-4 | 3P/cedidas/compradas fuera del cómputo | contaje | error | ✅ (vía `tally`) |
-| INV-5 | Ninguna asignación sobre Bloqueo DURO | día | error | ✅ |
+| INV-5 | Ninguna asignación sobre Bloqueo motivo BAJA (vacaciones/rotación ya no bloquean la asignación, decisión V-8) | día | error | ✅ |
 | INV-6 | Máx. 2 residentes de la misma promoción en rotación externa simultánea; rotación prioritaria sobre vacaciones | día | error | ✅ |
 | INV-7 | Rotación en Alicante/colindante → ≥1 guardia en viernes y ≥1 en sábado dentro del periodo | periodo | error (evaluado solo en el mes de fin) | ✅ (ver contrato C-2) |
 | INV-8 | 3P: cubrir L→D antes de repetir día (por voluntario); dif ≤ 1 entre voluntarios al cierre; prioridad a días con R1 de mochila | año | error (repetición, no-voluntario, equidad al cierre); **aviso** (prioridad mochila) | ✅ |
@@ -142,7 +151,7 @@ Estado: ✅ implementado y con test · ⏳ pendiente (fase indicada).
 | INV-11 | Junio–agosto: ningún R1 asignado; recuento de Pequeños entre R2 del mismo año (dif ≤ 1, compensable) | mes | error (R1 asignado); **aviso** (dif entre R2) | ✅ |
 | INV-12 | Coherencia código↔festivo: GF solo en día festivo; G/GP no en festivo | día | aviso | ⏳ pendiente (necesita `bridgesOfMonth` y la lista de festivos como entrada) |
 | INV-13 | Imaginaria: dos listas rotatorias por grupo; la sustitución de una incidencia sale de la lista del grupo del incidente; una guardia de incidencia cedida/comprada NO descuenta de la imaginaria | evento | error | ⏳ pendiente (Fase 4-5; entidad no modelada aún) |
-| INV-14 | Responsable: nivel R3 en su periodo (enero→enero); método SORTEO solo sin voluntarios; sorteo reproducible | año | error | ⏳ pendiente (Fase 5) |
+| INV-14 | Responsable: nivel R3 en su periodo (enero→enero); método SORTEO solo sin voluntarios; sorteo reproducible | año | error | ✅ (Fase 5, decisión V-7) |
 
 ### Contratos del validador (verificados por la puerta de consistencia)
 - **C-1 (lookahead de dobletes, ref. S-5):** cualquier cómputo mensual de `dobletes` que luego se sume
@@ -165,6 +174,8 @@ Estado: ✅ implementado y con test · ⏳ pendiente (fase indicada).
 | V-4 | **Clasificación de severidad** (tras la puerta de consistencia): `error` protege equidad/seguridad/legitimidad; `aviso` es advisory/compensable/social. Aviso: INV-2 (Pequeño con 3), INV-8d (mochila), INV-10 (eventos), INV-11 (dif mensual entre R2), INV-12 (coherencia festivo). El resto, `error` | La normativa dice "cifras orientativas, el criterio obligatorio es la equidad": un cuadrante no debe bloquearse por reglas blandas. El mecanismo `aviso` no existía y varias reglas blandas bloqueaban cuadrantes válidos |
 | V-5 | Embarazo/paternidad se modela como `Bloqueo` motivo **BAJA** (para el descuento proporcional de la nota [a]) | Evita ampliar el enum; el descuento de disponibilidad es idéntico |
 | V-6 | `Bloqueo` es rango `desde`/`hasta` (no un día suelto) y siempre DURO; BLANDO no es un `Bloqueo`, es `Preferencias.fechasEvitar` (fechas sueltas, no enforced) | Corrige la spec para que coincida con `validate.js` (ya implementado y probado E2E en Fase 3-4): INV-6/7 operan sobre periodos, no días sueltos; colapsar DURO/BLANDO en una tabla habría mezclado "prohibido" con "preferiría no" |
+| V-7 | Responsable (Fase 5): (a) la `semilla` del sorteo la genera la app (no una fuente externa), pero el sorteo es puro/determinista sobre (candidatos, semilla) — recomputable a partir del registro guardado, y cambiar cualquiera de los dos a posteriori cambia el resultado (detecta manipulación); (b) si se ofrecen ≥2 voluntarios (la normativa solo cubre "sorteo en ausencia de voluntarios"), se sortea SOLO entre ellos, no entre todo el grupo de R3; (c) candidatos = residentes con nivel R3 exactamente en `periodoInicio` (1 de enero), derivado, nunca almacenado aparte | Respuestas del autor durante la Fase 5. (a) prioriza simplicidad de implementación sobre auditabilidad por terceros sin acceso a la app — aceptado conscientemente. (b) caso no cubierto por la normativa; se prefirió reutilizar el mismo mecanismo de sorteo antes que "gana el primero en ofrecerse" (más débil de auditar) |
+| V-8 | Bloqueo (Fase 5.x): la severidad depende del `motivo`, ya no es uniforme. BAJA sigue bloqueando la asignación (INV-5 sin cambios para ese motivo). VACACIONES y ROTACION dejan de bloquear: no producen ninguna violación (igual que `fechasEvitar`), pero sus fechas siguen alimentando INV-2 (exención <4 guardias/mes), INV-6 (ausencias simultáneas por cohorte) e INV-7 (cobertura viernes/sábado en rotación cercana) y el descuento proporcional de equidad — nunca dejaron de ser datos relevantes, solo dejaron de bloquear la asignación en sí. `Preferencias.fechasPreferidas` (BLANDO positivo) se retira de la pantalla y del esquema. Corrige además una contradicción real preexistente: INV-7 exigía al menos una guardia de viernes y una de sábado *dentro* del periodo de rotación cercana, mientras INV-5 prohibía *cualquier* asignación en ese mismo periodo (rotación era DURO) — nunca detectada porque los tests de INV-7 no comprobaban INV-5 en el mismo escenario | Petición del autor: una guardia sobre vacaciones/rotación no debería bloquearse en la app — "muy a nuestro pesar, debería ponerse guardias esos días" si no hay alternativa. Baja médica se mantiene DURA por seguridad/legalidad (no se puede exigir una guardia a alguien de baja): decisión explícita del autor, no un default heredado |
 | S-1 | Fechas ISO string + UTC, meses 1–12 | Mata la clase de bug del v1 (desfase +1 mes, `navMes` incoherente) |
 | S-2 | Nivel por aniversario personal, no por año académico | Normativa mide equidad por año de residencia individual; el Excel (año-entero) no puede expresar la nota [a] |
 | S-3 | Hueco entre periodos = nivel anterior; solape = inválido | Baja retrasa promoción; no existe des-promoción |
@@ -183,9 +194,9 @@ Estado: ✅ implementado y con test · ⏳ pendiente (fase indicada).
 - [x] `v2/domain/equity.js` — `validateResidencyYearClose`: INV-3 + INV-4 (cierre de año), 15 tests
 - [ ] INV-12 (coherencia festivo) + `calendar.bridgesOfMonth()` — cierra S-4 (puentes derivados, no dato libre)
 - [ ] INV-13 (Imaginaria) — entidad + dos listas rotatorias por grupo (Fase 4-5)
-- [ ] INV-14 (Responsable R3, sorteo reproducible) — (Fase 5)
+- [x] `v2/domain/responsible.js` — `eligibleCandidates`, `resolveMethod`, `drawResponsible`, `validateResponsible`: INV-14 (Responsable R3, sorteo reproducible), 19 tests — Fase 5, backend (acciones `estadoResponsable`/`ofrecerseResponsable`/`retirarVoluntariadoResponsable`/`ejecutarSorteoResponsable`/`listResponsables`, tabla `voluntariosResponsable`) y cliente (`Responsable.jsx`) probados E2E en navegador real
 
-**Núcleo de dominio (invariantes de mes y de cierre): 122 tests en verde, cero dependencias, cero I/O.**
-Lagunas conocidas y aplazadas con su fase, tras la puerta de consistencia (§5: INV-12/13/14). Fuera
+**Núcleo de dominio (invariantes de mes y de cierre): 151 tests en verde, cero dependencias, cero I/O.**
+Lagunas conocidas y aplazadas con su fase, tras la puerta de consistencia (§5: INV-12/13). Fuera
 del núcleo puro (proceso, Fase 2+): comunicación trimestral a tutoría y envío del cuadrante a
 Coordinación (Raquel); responsabilidad del busca del Pequeño; distribución de tareas intra-guardia.
