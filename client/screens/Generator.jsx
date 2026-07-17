@@ -4,11 +4,12 @@
 // (validateMonth, sin red) la respuesta que devuelva — "la IA propone, el validador dispone"
 // (spec.md §5), mismo esquema visual de violaciones que CalendarScreen.
 import { COLOR, S, ANOS } from "./client/lib/design-tokens.js";
-import { defaultTrainingPeriods, levelOn, groupOf } from "./v2/domain/residents.js";
+import { defaultTrainingPeriods, levelOn, groupOf, periodOn } from "./v2/domain/residents.js";
 import { addDays, addYears, toISO } from "./v2/domain/calendar.js";
 import { validateMonth } from "./v2/domain/validate.js";
+import { accumulatedTally } from "./v2/domain/accumulate.js";
 
-const { useState, useMemo } = React;
+const { useState, useMemo, useEffect } = React;
 const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
 
 const GRUPO_LABEL = { MAYOR: "Mayor", PEQUENO: "Pequeño" };
@@ -33,20 +34,49 @@ function agruparPorNivel(residentes, iso) {
   return porNivel;
 }
 
-function construirPrompt({ mes, anio, nombreMes, porNivel }) {
+const MOTIVO_LABEL = { BAJA: "BAJA", VACACIONES: "VACACIONES", ROTACION: "ROTACIÓN" };
+
+/** Texto de la sección de bloqueos activos del mes — BAJA es obligatorio, el resto es evitable (V-8). */
+function construirBloqueosTexto(bloqueos) {
+  if (!bloqueos || bloqueos.length === 0) return "BLOQUEOS ACTIVOS ESTE MES (por residenteId): ninguno.";
+  const lineas = bloqueos.map((b) => {
+    const etiqueta = MOTIVO_LABEL[b.motivo] + (b.motivo === "ROTACION" && b.provincia ? ` (${b.provincia})` : "");
+    return b.motivo === "BAJA"
+      ? `  - id="${b.residenteId}" — ${etiqueta} del ${b.desde} al ${b.hasta}: OBLIGATORIO no asignarle guardia ningún día de ese rango.`
+      : `  - id="${b.residenteId}" — ${etiqueta} del ${b.desde} al ${b.hasta}: evita asignarle guardia si puedes; si no hay alternativa razonable, sí se le puede asignar.`;
+  }).join("\n");
+  return `BLOQUEOS ACTIVOS ESTE MES (por residenteId):\n${lineas}`;
+}
+
+/** Texto del contaje acumulado de un residente en SU año de residencia en curso, o null si aún no tiene. */
+function resumenAcumulado(acc) {
+  if (!acc) return null;
+  return `total=${acc.total}, findes=${acc.finde}, festivos=${acc.festivos}, prefestivos=${acc.prefestivos}, dobletes=${acc.dobletes}`;
+}
+
+function construirPrompt({ mes, anio, nombreMes, porNivel, acumulados, bloqueosDelMes }) {
   const bloques = ANOS.map((nivel) => {
     const lista = porNivel[nivel];
     if (!lista.length) return null;
     const grupo = GRUPO_LABEL[groupOf(nivel)];
-    const filas = lista.map((r) => `  - id="${r.id}" — ${r.nombre}`).join("\n");
+    const filas = lista.map((r) => {
+      const resumen = resumenAcumulado(acumulados.get(r.id));
+      const llevo = resumen ? `llevo hasta ahora: ${resumen}` : "sin guardias registradas todavía este año de residencia";
+      return `  - id="${r.id}" — ${r.nombre} (${llevo})`;
+    }).join("\n");
     return `${nivel} (${grupo}):\n${filas}`;
   }).filter(Boolean).join("\n\n");
 
   return `Eres el generador del cuadrante de guardias de Radiodiagnóstico (Hospital Dr. Balmis).
 
-RESIDENTES ACTIVOS EN ${nombreMes.toUpperCase()} — usa el "id" EXACTO como residenteId, nunca el nombre:
+RESIDENTES ACTIVOS EN ${nombreMes.toUpperCase()} — usa el "id" EXACTO como residenteId, nunca el
+nombre. Junto a cada uno se indica el contaje acumulado de SU año de residencia en curso
+(desde su último aniversario, hasta fin del mes anterior): úsalo para repartir con equidad
+(±1) entre compañeros del mismo nivel, compensando a quien ya lleve más o menos guardias:
 
 ${bloques || "(sin residentes activos este mes)"}
+
+${construirBloqueosTexto(bloqueosDelMes)}
 
 NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
 1. Cada día lleva exactamente 1 guardia (G/GF/GP) de un residente Mayor (R3/R4) y 1 de un
@@ -55,15 +85,16 @@ NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
 2. Cada residente hace entre 4 y 6 guardias computables (G+GF+GP) al mes; un Pequeño puede
    bajar excepcionalmente a 3 si la oferta de días no da para más.
 3. Reparte con equidad (±1) dentro de cada año de residencia: total de guardias, findes,
-   festivos, prefestivos y dobletes.
+   festivos, prefestivos y dobletes — usa el contaje acumulado de arriba como punto de
+   partida, no repartas el mes como si todos empezaran de cero.
 4. El 3.º puesto (código 3P) y las guardias cedidas/compradas no cuentan para el mínimo ni
    el máximo de guardias del punto 2.
-5. No asignes guardia a un residente en un periodo de vacaciones, rotación externa o baja
-   que conozcas por el contexto de esta conversación.
+5. Respeta la sección BLOQUEOS ACTIVOS de arriba: BAJA es obligatorio no asignar; VACACIONES
+   y ROTACIÓN evita asignar si puedes, pero puedes hacerlo si no hay alternativa razonable.
 6. Como máximo 2 residentes de la misma promoción (año de incorporación) pueden estar
    ausentes a la vez en rotación externa.
-7. Si un residente rota en Alicante o provincia colindante, cúbrele guardia de viernes y de
-   sábado durante esa rotación.
+7. Si un residente rota en Alicante o provincia colindante (ver BLOQUEOS ACTIVOS), cúbrele
+   guardia de viernes y de sábado durante esa rotación.
 8. El 3.º puesto recorre lunes→domingo antes de repetir día, con equidad entre voluntarios.
 9. 2 residentes R2 el mismo día solo se admite desde el 1 de diciembre y justificado, o en
    un día de evento del servicio (Navidad, despedida).
@@ -95,9 +126,82 @@ function GeneratorScreen() {
   const { mes, anio, residentes, api, showToast, setTab, setLoading } = app;
 
   const iso15 = useMemo(() => toISO(anio, mes, 15), [anio, mes]);
+  const monthStart = useMemo(() => toISO(anio, mes, 1), [anio, mes]);
   const nombreMes = useMemo(() => nombreMesDe(anio, mes), [anio, mes]);
   const porNivel = useMemo(() => agruparPorNivel(residentes, iso15), [residentes, iso15]);
-  const promptText = useMemo(() => construirPrompt({ mes, anio, nombreMes, porNivel }), [mes, anio, nombreMes, porNivel]);
+
+  // Bloqueos del equipo y guardias históricas del entorno del mes (Fase 6.1): el prompt
+  // portátil necesita datos reales, no "lo que sepa la IA por contexto" — y el validador
+  // (comprobar(), abajo) necesita las mismas dos cosas para INV-5/6/7 (bloqueos) e INV-7
+  // cross-mes (contrato C-2: la rotación puede empezar en un mes anterior al generado).
+  // `historicas` incluye deliberadamente 1-2 días DENTRO del mes generado (lookahead de
+  // doblete, contrato C-1) — comprobar() recorta ese solape antes de usarlo (ver abajo)
+  // para no duplicar esos días frente a la respuesta pegada por el usuario.
+  const [bloqueos, setBloqueos] = useState([]);
+  const [historicas, setHistoricas] = useState([]);
+  const [cargandoContexto, setCargandoContexto] = useState(true);
+  const [contextError, setContextError] = useState(null);
+  const [retryTick, setRetryTick] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setCargandoContexto(true);
+      setContextError(null);
+      setLoading(true);
+
+      const rBloqueos = await api.listBloqueos(anio, mes);
+      if (cancelled) return;
+      if (!rBloqueos.ok) {
+        setLoading(false);
+        setContextError("No se pudieron cargar los bloqueos: " + rBloqueos.error);
+        setCargandoContexto(false);
+        return;
+      }
+
+      // Rango del histórico: cubre (a) desde el inicio del año de residencia en curso más
+      // antiguo entre los residentes activos (para accumulatedTally, contrato C-1) y (b)
+      // desde la fecha REAL de cualquier bloqueo ROTACION que termine este mes (para INV-7
+      // cross-mes, contrato C-2 — igual que Calendar.jsx: el aniversario del residente no
+      // tiene por qué coincidir con el inicio de su rotación). El límite superior entra 1-2
+      // días dentro del mes generado solo para el lookahead de doblete de (a).
+      const desdesAcumulado = residentes
+        .map((r) => {
+          const fin = r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1);
+          const periodo = periodOn(defaultTrainingPeriods(r.fechaInicio, fin), monthStart);
+          return periodo ? periodo.start : null;
+        })
+        .filter(Boolean);
+      const desdesRotacion = rBloqueos.bloqueos
+        .filter((b) => b.motivo === "ROTACION" && b.desde < monthStart)
+        .map((b) => b.desde);
+      const candidatos = [...desdesAcumulado, ...desdesRotacion];
+
+      const rHist = candidatos.length === 0
+        ? { ok: true, asignaciones: [] }
+        : await api.listAsignacionesRango(candidatos.reduce((min, d) => (d < min ? d : min)), addDays(monthStart, 1));
+      setLoading(false);
+      if (cancelled) return;
+      if (!rHist.ok) {
+        setContextError("No se pudo cargar el histórico de guardias: " + rHist.error);
+        setCargandoContexto(false);
+        return;
+      }
+      setBloqueos(rBloqueos.bloqueos);
+      setHistoricas(rHist.asignaciones);
+      setCargandoContexto(false);
+    })();
+    return () => { cancelled = true; };
+  }, [anio, mes, residentes, retryTick]);
+
+  const acumulados = useMemo(
+    () => accumulatedTally(residentes, historicas, addDays(monthStart, -1)),
+    [residentes, historicas, monthStart]
+  );
+  const promptText = useMemo(
+    () => construirPrompt({ mes, anio, nombreMes, porNivel, acumulados, bloqueosDelMes: bloqueos }),
+    [mes, anio, nombreMes, porNivel, acumulados, bloqueos]
+  );
 
   const [respuesta, setRespuesta] = useState("");
   const [parseError, setParseError] = useState(null);
@@ -143,7 +247,14 @@ function GeneratorScreen() {
     const ctx = {
       mes, anio,
       residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
-      asignaciones: asignacionesRespuesta,
+      // El histórico (meses anteriores, ya cargado para el contaje acumulado) más la
+      // respuesta del asistente: INV-7 (contrato C-2) necesita ver la rotación completa,
+      // no solo el mes generado, y sin bloqueos aquí INV-5/6/7 nunca se comprobaban.
+      // `historicas` trae 1-2 días DENTRO de este mes (lookahead de doblete, C-1) — se
+      // recortan aquí para no duplicarlos frente a `asignacionesRespuesta`, que ya cubre
+      // el mes completo.
+      asignaciones: [...historicas.filter((a) => a.fecha < monthStart), ...asignacionesRespuesta],
+      bloqueos,
     };
     try {
       setParseError(null);
@@ -185,6 +296,16 @@ function GeneratorScreen() {
         respuesta que te devuelva.
       </Info>
 
+      {contextError && (
+        <Aviso color={COLOR.red} bg={COLOR.redLight}>
+          {contextError} — el prompt y la validación pueden faltar bloqueos o contaje
+          acumulado hasta que reintentes.
+          <div style={{ marginTop: 8 }}>
+            <Btn onClick={() => setRetryTick((t) => t + 1)}>🔄 Reintentar</Btn>
+          </div>
+        </Aviso>
+      )}
+
       <Card title={`1. Prompt para ${nombreMes}`}>
         <textarea readOnly value={promptText} rows={12} style={{
           ...S.input, width: "100%", boxSizing: "border-box", fontFamily: MONO_FONT,
@@ -205,7 +326,9 @@ function GeneratorScreen() {
           placeholder='{"asignaciones": [{"fecha":"YYYY-MM-DD","residenteId":"...","codigo":"G"}]}'
           style={{ ...S.input, width: "100%", boxSizing: "border-box", fontFamily: MONO_FONT, fontSize: 12, resize: "vertical" }} />
         <div style={{ marginTop: 10 }}>
-          <Btn onClick={comprobar} disabled={!respuesta.trim()}>Comprobar y aplicar</Btn>
+          <Btn onClick={comprobar} disabled={!respuesta.trim() || cargandoContexto || !!contextError} aria-busy={cargandoContexto}>
+            {cargandoContexto ? "Cargando contexto…" : "Comprobar y aplicar"}
+          </Btn>
         </div>
       </Card>
 

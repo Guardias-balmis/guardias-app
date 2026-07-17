@@ -58,6 +58,17 @@ export function handleRequest(rawBody, deps) {
           return { ok: true, asignaciones: all.filter((a) => a.fecha.startsWith(prefix)) };
         });
 
+      // A diferencia de listAsignaciones (filtra por mes/año), esta filtra por rango de
+      // fechas ISO [desde,hasta] pudiendo cruzar meses o años — la usa el cliente para el
+      // contrato C-2 (INV-7 necesita las asignaciones de TODO el periodo de rotación,
+      // aunque empiece en un mes anterior) y para el contaje acumulado del generador (§4).
+      case "listAsignacionesRango":
+        return authed(req, deps, () => {
+          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+          const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
+          return { ok: true, asignaciones: all.filter((a) => a.fecha >= req.desde && a.fecha <= req.hasta) };
+        });
+
       case "guardarAsignaciones":
         return authed(req, deps, () => {
           if (!Array.isArray(req.cambios) || req.cambios.length === 0) return { ok: false, error: "cambios vacío" };

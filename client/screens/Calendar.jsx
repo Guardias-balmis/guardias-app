@@ -107,13 +107,33 @@ function CalendarScreen() {
     // todos. Desde la decisión V-8, solo BAJA bloquea la asignación (INV-5); VACACIONES y
     // ROTACION siguen alimentando INV-6/7 sin bloquear.
     const rBloqueos = await app.api.listBloqueos(anio, mes);
+    if (!rBloqueos.ok) { setValidando(false); setViolaciones(null); showToast("Error cargando bloqueos para validar: " + rBloqueos.error, "err"); return; }
+    const bloqueos = rBloqueos.bloqueos;
+
+    // Contrato C-2 (spec.md §5): INV-7 evalúa la rotación cercana solo en el mes en que
+    // TERMINA, pero necesita las guardias del residente de TODO el periodo — que puede
+    // empezar en un mes anterior al validado. listAsignaciones (arriba, en el useEffect)
+    // solo trae el mes en curso, así que faltaba el histórico si la rotación cruzaba mes.
+    const monthStart = datesOfMonth(anio, mes)[0];
+    const desdeRotacion = bloqueos
+      .filter((b) => b.motivo === "ROTACION" && b.desde < monthStart)
+      .reduce((min, b) => (min === null || b.desde < min ? b.desde : min), null);
+    let historicas = [];
+    if (desdeRotacion) {
+      const rHist = await app.api.listAsignacionesRango(desdeRotacion, addDays(monthStart, -1));
+      if (!rHist.ok) { setValidando(false); setViolaciones(null); showToast("Error cargando histórico de rotación: " + rHist.error, "err"); return; }
+      historicas = rHist.asignaciones;
+    }
+
     setValidando(false);
-    if (!rBloqueos.ok) { showToast("Error cargando bloqueos para validar: " + rBloqueos.error, "err"); return; }
     const ctx = {
       mes, anio,
       residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
-      asignaciones: residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo }))),
-      bloqueos: rBloqueos.bloqueos,
+      asignaciones: [
+        ...historicas,
+        ...residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo }))),
+      ],
+      bloqueos,
     };
     setViolaciones(validateMonth(ctx));
   };
@@ -125,9 +145,9 @@ function CalendarScreen() {
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
       <Card>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <button style={S.navBtn} onClick={prevMonth}>◀</button>
+          <button style={S.navBtn} onClick={prevMonth} disabled={validando}>◀</button>
           <div style={{ fontSize: 18, fontWeight: 700, color: COLOR.blueDark, textTransform: "capitalize" }}>{nombreMesDe(anio, mes)}</div>
-          <button style={S.navBtn} onClick={nextMonth}>▶</button>
+          <button style={S.navBtn} onClick={nextMonth} disabled={validando}>▶</button>
         </div>
       </Card>
 

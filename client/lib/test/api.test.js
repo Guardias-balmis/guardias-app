@@ -101,6 +101,16 @@ test("makeApi.guardarAsignaciones manda el array de cambios", async () => {
   assert.deepEqual(sent.cambios, cambios);
 });
 
+test("makeApi.listAsignacionesRango manda desde/hasta", async () => {
+  const fetchImpl = fakeFetch(200, { ok: true, asignaciones: [] });
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "s" });
+  await api.listAsignacionesRango("2026-05-01", "2026-07-31");
+  const sent = JSON.parse(fetchImpl.calls[0].init.body);
+  assert.equal(sent.action, "listAsignacionesRango");
+  assert.equal(sent.desde, "2026-05-01");
+  assert.equal(sent.hasta, "2026-07-31");
+});
+
 test("makeApi: acciones del Responsable mandan la action y el anio correctos", async () => {
   const fetchImpl = fakeFetch(200, { ok: true });
   const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "s" });

@@ -53,6 +53,7 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
     whoami: () => authed("whoami"),
     listResidentes: () => authed("listResidentes"),
     listAsignaciones: (anio, mes) => authed("listAsignaciones", { anio, mes }),
+    listAsignacionesRango: (desde, hasta) => authed("listAsignacionesRango", { desde, hasta }),
     guardarAsignaciones: (cambios) => authed("guardarAsignaciones", { cambios }),
     misPreferencias: (anio, mes) => authed("misPreferencias", { anio, mes }),
     guardarPreferencias: (anio, mes, prefs) => authed("guardarPreferencias", { anio, mes, prefs }),

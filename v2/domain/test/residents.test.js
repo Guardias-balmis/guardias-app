@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  defaultTrainingPeriods, levelOn, groupOf, isActiveOn, validateTrainingPeriods,
+  defaultTrainingPeriods, levelOn, groupOf, isActiveOn, validateTrainingPeriods, periodOn,
 } from "../residents.js";
 
 // Residente de ejemplo del brief: inicio 2024-05-07 (los desfases respecto a junio son NORMALES).
@@ -60,6 +60,29 @@ test("groupOf: R3/R4 MAYOR, R1/R2 PEQUENO, resto null", () => {
   assert.equal(groupOf("R4"), "MAYOR");
   assert.equal(groupOf("FINALIZADO"), null);
   assert.equal(groupOf("PENDIENTE"), null);
+});
+
+test("periodOn devuelve el periodo formativo que contiene la fecha", () => {
+  assert.deepEqual(periodOn(periods, "2024-05-07"), { year: 1, start: "2024-05-07", end: "2025-05-06" });
+  assert.deepEqual(periodOn(periods, "2026-07-16"), { year: 3, start: "2026-05-07", end: "2027-05-06" });
+  assert.deepEqual(periodOn(periods, "2026-05-06"), { year: 2, start: "2025-05-07", end: "2026-05-06" }); // último día de R2
+  assert.deepEqual(periodOn(periods, "2028-05-06"), { year: 4, start: "2027-05-07", end: "2028-05-06" }); // último día
+});
+
+test("periodOn: null antes de empezar (PENDIENTE) o tras el último periodo (FINALIZADO)", () => {
+  assert.equal(periodOn(periods, "2024-05-06"), null);
+  assert.equal(periodOn(periods, "2028-05-07"), null);
+});
+
+test("periodOn: en un hueco entre periodos devuelve el periodo ANTERIOR (S-3, igual que levelOn)", () => {
+  const edited = [
+    { year: 1, start: "2024-05-07", end: "2025-05-06" },
+    { year: 2, start: "2025-05-07", end: "2026-05-06" },
+    { year: 3, start: "2026-07-01", end: "2027-06-30" },
+    { year: 4, start: "2027-07-01", end: "2028-06-30" },
+  ];
+  assert.deepEqual(periodOn(edited, "2026-06-01"), { year: 2, start: "2025-05-07", end: "2026-05-06" });
+  assert.deepEqual(periodOn(edited, "2026-07-01"), { year: 3, start: "2026-07-01", end: "2027-06-30" });
 });
 
 test("isActiveOn deriva actividad de los periodos", () => {

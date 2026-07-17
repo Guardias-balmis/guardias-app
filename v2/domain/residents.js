@@ -49,6 +49,25 @@ export function levelOn(periods, iso) {
 }
 
 /**
+ * El periodo formativo (objeto, no la etiqueta "R{k}") que contiene una fecha —
+ * misma semántica que `levelOn` (S-3: en un hueco se conserva el periodo anterior),
+ * pero devuelve el registro completo {year,start,end} en vez de la cadena. Base del
+ * contaje acumulado del generador (spec §4: "la ventana es del residente").
+ * @returns {{year:number,start:string,end:string}|null} null si PENDIENTE o FINALIZADO
+ */
+export function periodOn(periods, iso) {
+  parseISO(iso);
+  if (compareISO(iso, periods[0].start) < 0) return null;
+  const last = periods[periods.length - 1];
+  if (compareISO(iso, last.end) > 0) return null;
+  let current = null;
+  for (const p of periods) {
+    if (compareISO(p.start, iso) <= 0) current = p;
+  }
+  return current;
+}
+
+/**
  * Grupo de guardia por nivel (normativa: dos puestos, Mayor y Pequeño).
  * @returns {"MAYOR"|"PEQUENO"|null} null si no es asignable (PENDIENTE/FINALIZADO)
  */
