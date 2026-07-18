@@ -13,9 +13,15 @@
 
 1. **Con la cuenta del servicio** (la que será propietaria durable, no una personal), crea el
    Sheet de guardias y anota su **ID** (de la URL). Crea sus pestañas de datos con la fila de
-   cabecera: `residentes`, `periodos`, `bloqueos`, `asignaciones`, `responsables`, `sorteos`,
-   `preferencias` (cabeceras en `server/src/sheets-schema.js`). **La cuenta que despliega debe
+   cabecera: `residentes`, `periodos`, `bloqueos`, `asignaciones`, `responsables`,
+   `voluntariosResponsable`, `sorteos`, `preferencias`, `cuadrantes` (las 9 tablas de
+   `server/src/sheets-schema.js` — cabeceras exactas ahí). **La cuenta que despliega debe
    ser la propietaria del Sheet** (riesgo DR-2 del ADR): si no, añádela como editor.
+
+   No crees a mano ninguna otra pestaña: desde la Fase 7.1, "Publicar" en el cuadrante crea
+   solas (y reescribe por completo en cada publicación) una pestaña por mes con formato
+   "YYYY-MM" y una hoja "Resumen" — son un entregable proyectado, no datos de entrada; tocarlas
+   a mano no rompe nada pero se pierde en la siguiente publicación.
 
 2. **Proyecto de Apps Script** (script.google.com, misma cuenta): crea un proyecto y añade
    tres archivos con el contenido de `domain.gs`, `server-lib.gs` y `Code.gs`.
@@ -42,6 +48,12 @@
 - Login GIS → `POST` con el ID token → `{ok:true, session}`; reintento con el mismo nonce → falla.
 - `validar` con un cuadrante de prueba → devuelve las mismas violaciones que el cliente.
 - Matar el proceso a media `rebuildSheet` y confirmar que el siguiente intento se autorrepara.
+- **Fase 7.1, pendiente de verificar en vivo (código completo, sin Sheet real hasta hoy):**
+  `publicarCuadrante` con un cuadrante de prueba → abrir la pestaña "YYYY-MM" creada y
+  comprobar que las celdas de código y las fórmulas COUNTIF/SUMPRODUCT de cada fila calculan
+  el total esperado (no solo que la operación no da error); abrir "Resumen" y comprobar que
+  su SUMIF referencia esa pestaña por nombre y su MAXIFS/MINIFS de equidad calcula bien con
+  ≥2 residentes de la misma cohorte.
 
 ## Mantenimiento (ritual anual — requisito rector)
 Cada enero, el R3 responsable entrante **inicia sesión en la cuenta del servicio** y abre Gmail

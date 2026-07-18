@@ -20,6 +20,7 @@ import { validateMonth, buildMonthContext } from "../validate.js";
 import { validateThirdPost } from "../thirdpost.js";
 import { validateResidencyYearClose } from "../equity.js";
 import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../cuadrante.js";
+import { buildMonthSheetRows, buildResumenRows } from "../projection.js";
 import { handleRequest as esmHandleRequest } from "../../../server/src/router.js";
 import { issueSession } from "../../../server/src/session.js";
 
@@ -81,12 +82,15 @@ function runAll(api) {
     canUnpublish: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canUnpublish),
     canEdit: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canEdit),
     stateAfterEdit: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.stateAfterEdit),
+    monthSheet: api.buildMonthSheetRows({ anio: MONTH_CTX.anio, mes: MONTH_CTX.mes, residentes: MONTH_CTX.residentes, asignaciones: MONTH_CTX.asignaciones }),
+    resumen: api.buildResumenRows({ residentes: MONTH_CTX.residentes, publishedMonths: [{ mes: MONTH_CTX.mes, anio: MONTH_CTX.anio }] }),
   };
 }
 
 const esm = {
   weekday, levelOn, tally, validateMonth, validateThirdPost, validateResidencyYearClose,
   buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit,
+  buildMonthSheetRows, buildResumenRows,
 };
 
 // Carga el bundle en un ámbito global único, como hace Apps Script al concatenar los .gs.
@@ -98,7 +102,7 @@ function loadBundle(code) {
 
 test("el bundle expone la API pública esperada", () => {
   const Domain = loadBundle(buildBundle());
-  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "validateThirdPost", "levelOn", "groupOf", "weekday", "canValidate", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit"]) {
+  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "validateThirdPost", "levelOn", "groupOf", "weekday", "canValidate", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows"]) {
     assert.equal(typeof Domain[fn], "function", `Domain.${fn} debe ser función`);
   }
 });

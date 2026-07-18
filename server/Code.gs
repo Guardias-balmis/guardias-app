@@ -55,6 +55,8 @@ function deps_() {
       canUnpublish: Domain.canUnpublish,
       canEdit: Domain.canEdit,
       stateAfterEdit: Domain.stateAfterEdit,
+      buildMonthSheetRows: Domain.buildMonthSheetRows,
+      buildResumenRows: Domain.buildResumenRows,
     },
     newSeed: newSeed_,
     issueNonce: issueNonce_,

@@ -11,6 +11,7 @@ import { makeStore } from "../src/sheets-store.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "../../v2/domain/validate.js";
 import { parseISO } from "../../v2/domain/calendar.js";
 import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
+import { buildMonthSheetRows, buildResumenRows } from "../../v2/domain/projection.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -45,8 +46,9 @@ function makeDeps(overrides = {}) {
   return {
     now: 1_000_000, today: "2027-07-16", // dentro del mandato de RESP
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
+    ss, // expuesto para que los tests inspeccionen pestañas proyectadas (no lo usa el router)
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${nodeCrypto.randomUUID()}` }),
-    domain: { validateMonth, buildMonthContext, rotationHistoryStart, parseISO, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit },
+    domain: { validateMonth, buildMonthContext, rotationHistoryStart, parseISO, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, buildMonthSheetRows, buildResumenRows },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
     fetchTokeninfo: (idToken) => {
@@ -141,6 +143,107 @@ test("publicarCuadrante: el Responsable pasa un cuadrante VALIDADO a PUBLICADO",
   assert.equal(r.estado, "PUBLICADO");
 });
 
+test("publicarCuadrante: proyecta de verdad la pestaña mensual y la hoja Resumen al Sheet (Fase 7.1, V-11a)", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-05", residenteId: "resp-1", codigo: "G" }] }, deps);
+  call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  const r = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.proyeccion, { mensual: "2027-07", resumen: "Resumen" });
+
+  const mensual = deps.ss.read("2027-07");
+  assert.equal(mensual[0][0], "Residente");
+  const filaRita = mensual.find((row) => row[0] === "Rita");
+  assert.ok(filaRita, "la pestaña mensual debe incluir a Rita (RESP, activa en julio-2027)");
+  assert.equal(filaRita.slice(9)[4], "G"); // día 5 (índice 4 tras las 9 columnas fijas): el código real cae en la columna correcta
+
+  const resumen = deps.ss.read("Resumen");
+  assert.equal(resumen[0][0], "Residente");
+  assert.ok(resumen.some((row) => row[0] === "Rita"));
+});
+
+test("publicarCuadrante: una asignación de OTRO mes no se cuela en la pestaña publicada", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "guardarAsignaciones", session, cambios: [
+    { fecha: "2027-07-05", residenteId: "resp-1", codigo: "G" },
+    { fecha: "2027-08-05", residenteId: "resp-1", codigo: "GF" },
+  ] }, deps);
+  call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
+
+  const filaRita = deps.ss.read("2027-07").find((row) => row[0] === "Rita");
+  assert.equal(filaRita.slice(9)[4], "G"); // 5-jul, dentro del mes publicado
+  assert.ok(!filaRita.slice(9).includes("GF")); // el GF del 5-ago no aparece en la pestaña de julio
+});
+
+test("publicarCuadrante: publicar un segundo mes actualiza Resumen para incluir AMBOS meses", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
+  call({ action: "marcarValidado", session, mes: 8, anio: 2027 }, deps);
+  call({ action: "publicarCuadrante", session, mes: 8, anio: 2027 }, deps);
+
+  assert.ok(deps.ss.exists("2027-07"));
+  assert.ok(deps.ss.exists("2027-08"));
+  const resumen = deps.ss.read("Resumen");
+  const filaResp = resumen.find((row) => row[0] === "Rita");
+  assert.match(filaResp[2], /'2027-07'!/); // el Total de Resumen referencia AMBAS pestañas publicadas
+  assert.match(filaResp[2], /'2027-08'!/);
+});
+
+test("publicarCuadrante: si la proyección al Sheet falla, el cuadrante queda intacto en VALIDADO (nunca un PUBLICADO fantasma)", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  deps.store.rebuildSheet = () => { throw new Error("fallo simulado de la API de Sheets"); };
+  const r = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /fallo simulado/);
+  // estadoCuadrante no llama a rebuildSheet: comprobar el estado tras el fallo no necesita restaurarlo
+  assert.equal(call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "VALIDADO");
+});
+
+test("publicarCuadrante: si falla la escritura de Resumen TRAS haber escrito ya la pestaña mensual, el cuadrante queda en VALIDADO (nunca fantasma) aunque la pestaña mensual quede con un adelanto", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  const rebuildSheetReal = deps.store.rebuildSheet;
+  deps.store.rebuildSheet = (name, rows) => {
+    if (name === "Resumen") throw new Error("fallo simulado al escribir Resumen");
+    return rebuildSheetReal(name, rows);
+  };
+  const r = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /fallo simulado al escribir Resumen/);
+  assert.equal(call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "VALIDADO");
+  assert.ok(deps.ss.exists("2027-07")); // ventana de desincronización aceptada: ver comentario de projectCuadranteToSheets
+  assert.ok(!deps.ss.exists("Resumen"));
+});
+
+test("publicarCuadrante: tras un fallo parcial, reintentar Publicar sana del todo (ambas pestañas completas, sin residuo _tmp_)", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  const rebuildSheetReal = deps.store.rebuildSheet;
+  let falla = true;
+  deps.store.rebuildSheet = (name, rows) => {
+    if (falla && name === "Resumen") throw new Error("fallo simulado");
+    return rebuildSheetReal(name, rows);
+  };
+  const primero = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(primero.ok, false);
+  falla = false;
+  const segundo = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps); // sigue VALIDADO: se puede reintentar
+  assert.equal(segundo.ok, true);
+  assert.equal(segundo.estado, "PUBLICADO");
+  assert.ok(deps.ss.exists("2027-07"));
+  assert.ok(deps.ss.exists("Resumen"));
+  assert.ok(!deps.ss.listSheets().some((n) => n.startsWith("_tmp_")));
+});
+
 test("despublicarCuadrante: rechaza si no está PUBLICADO", () => {
   const deps = makeDeps();
   const session = loggedInAs(deps, "resp@gmail.com");
@@ -167,6 +270,19 @@ test("despublicarCuadrante: el Responsable revierte PUBLICADO a VALIDADO (para c
   const r = call({ action: "despublicarCuadrante", session, mes: 7, anio: 2027 }, deps);
   assert.equal(r.ok, true);
   assert.equal(r.estado, "VALIDADO");
+});
+
+test("despublicarCuadrante: NO toca ninguna pestaña proyectada del Sheet (decisión V-11b)", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
+  const mensualAntes = deps.ss.read("2027-07");
+  const resumenAntes = deps.ss.read("Resumen");
+  const r = call({ action: "despublicarCuadrante", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  assert.deepEqual(deps.ss.read("2027-07"), mensualAntes);
+  assert.deepEqual(deps.ss.read("Resumen"), resumenAntes);
 });
 
 test("guardarAsignaciones: rechaza cualquier edición de un mes PUBLICADO", () => {

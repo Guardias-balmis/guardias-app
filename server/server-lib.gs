@@ -523,6 +523,9 @@ function handleRequest(rawBody, deps) {
           return { ok: true, estado: "VALIDADO", violaciones };
         });
 
+      // Fase 7.1 (decisión V-11a): publicar proyecta de verdad al Sheet legible (pestaña
+      // mensual + Resumen) en el MISMO paso — "publicar" pasa a significar publicar de
+      // verdad. La proyección ocurre ANTES de escribir el estado: ver projectCuadranteToSheets.
       case "publicarCuadrante":
         return authed(req, deps, (session) => {
           const denegado = requireResponsable(session, "publicar el cuadrante");
@@ -530,8 +533,9 @@ function handleRequest(rawBody, deps) {
           const estadoActual = validCuadranteMesAnio(req, deps);
           if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
           if (!deps.domain.canPublish(estadoActual)) return { ok: false, error: "el cuadrante debe estar VALIDADO antes de publicarse" };
+          const proyeccion = projectCuadranteToSheets(deps, req.mes, req.anio);
           writeCuadranteEstado(deps, session, req.mes, req.anio, "PUBLICADO");
-          return { ok: true, estado: "PUBLICADO" };
+          return { ok: true, estado: "PUBLICADO", proyeccion };
         });
 
       case "despublicarCuadrante":
@@ -671,6 +675,41 @@ function buildCuadranteCtx(deps, mes, anio) {
   const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
   const historicas = desdeRotacion ? todasAsig.filter((a) => a.fecha >= desdeRotacion && a.fecha < monthStart) : [];
   return deps.domain.buildMonthContext({ mes, anio, residentes, historicas, asignacionesDelMes, bloqueos });
+}
+
+/**
+ * Escribe la proyección legible del mes (pestaña mensual "YYYY-MM" + hoja "Resumen") en el
+ * Sheet real — spec.md §7, decisión V-11a. Se llama ANTES de escribir el estado PUBLICADO
+ * (publicarCuadrante): si `rebuildSheet` lanza (fallo real de la API de Sheets), la
+ * excepción sube hasta el try/catch de `handleRequest` y el cuadrante queda intacto en
+ * VALIDADO — nunca un PUBLICADO fantasma con el Sheet a medio escribir. `rebuildSheet` ya
+ * es idempotente/autorreparable (sheets-store.js), así que basta con reintentar "Publicar".
+ * `publishedMonths` incluye el mes que se está publicando AHORA aunque su fila de estado
+ * todavía no exista en la tabla `cuadrantes` (se escribe después de esta función).
+ *
+ * Ventana de desincronización aceptada (revisión de 4 agentes, Fase 7.1): las dos llamadas a
+ * `rebuildSheet` (mensual, luego Resumen) no son una transacción conjunta — si la mensual
+ * tiene éxito pero Resumen falla, el Sheet queda con la pestaña "YYYY-MM" ya actualizada
+ * mientras el cuadrante sigue en VALIDADO (nunca PUBLICADO: eso sí está garantizado). El
+ * siguiente "Publicar" con éxito reescribe AMBAS pestañas desde cero y lo repara del todo;
+ * no se ha construido nada más elaborado (dos fases, rollback) porque la ventana es estrecha
+ * y de bajo impacto (~15 usuarios, latencia de Apps Script) frente a la complejidad de evitarla.
+ */
+function projectCuadranteToSheets(deps, mes, anio) {
+  const residentes = deps.store.readRecords("residentes");
+  const prefix = monthPrefix(anio, mes);
+  const asignacionesDelMes = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" })
+    .filter((a) => a.fecha.startsWith(prefix));
+
+  const mensual = deps.domain.buildMonthSheetRows({ anio, mes, residentes, asignaciones: asignacionesDelMes });
+  deps.store.rebuildSheet(mensual.sheetName, mensual.rows);
+
+  const otrosPublicados = deps.store.readLatest("cuadrantes", CUAD_KEY).filter((r) => r.estado === "PUBLICADO");
+  const publishedMonths = [...otrosPublicados.map((r) => ({ mes: r.mes, anio: r.anio })), { mes, anio }];
+  const resumen = deps.domain.buildResumenRows({ residentes, publishedMonths });
+  deps.store.rebuildSheet(resumen.sheetName, resumen.rows);
+
+  return { mensual: mensual.sheetName, resumen: resumen.sheetName };
 }
 
 /** Mandato enero→enero (INV-14) para el año dado: [YYYY-01-01, (YYYY+1)-01-01). */
