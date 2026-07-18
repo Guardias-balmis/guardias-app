@@ -16,9 +16,10 @@ import { buildBundle, buildServerBundle, transformModule } from "../../../build/
 import { weekday } from "../calendar.js";
 import { levelOn } from "../residents.js";
 import { tally } from "../tally.js";
-import { validateMonth } from "../validate.js";
+import { validateMonth, buildMonthContext } from "../validate.js";
 import { validateThirdPost } from "../thirdpost.js";
 import { validateResidencyYearClose } from "../equity.js";
+import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../cuadrante.js";
 import { handleRequest as esmHandleRequest } from "../../../server/src/router.js";
 import { issueSession } from "../../../server/src/session.js";
 
@@ -65,17 +66,28 @@ const EQ_CTX = {
 
 // Ejecuta toda la API pública sobre una implementación (ESM namespace o el Domain del bundle).
 function runAll(api) {
+  const ctx = api.buildMonthContext({ mes: MONTH_CTX.mes, anio: MONTH_CTX.anio, residentes: MONTH_CTX.residentes, asignacionesDelMes: MONTH_CTX.asignaciones, bloqueos: [] });
+  const violaciones = api.validateMonth(MONTH_CTX);
   return {
     weekday: api.weekday("2026-06-01"),
     level: api.levelOn(PERIODS, "2026-07-16"),
     tally: api.tally(TALLY_ASGS, { start: "2026-06-01", end: "2026-06-30" }),
-    month: api.validateMonth(MONTH_CTX),
+    month: violaciones,
     thirdpost: api.validateThirdPost(TP_CTX),
     equity: api.validateResidencyYearClose(EQ_CTX),
+    monthContext: ctx,
+    canValidate: [api.canValidate([]), api.canValidate(violaciones)],
+    canPublish: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canPublish),
+    canUnpublish: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canUnpublish),
+    canEdit: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canEdit),
+    stateAfterEdit: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.stateAfterEdit),
   };
 }
 
-const esm = { weekday, levelOn, tally, validateMonth, validateThirdPost, validateResidencyYearClose };
+const esm = {
+  weekday, levelOn, tally, validateMonth, validateThirdPost, validateResidencyYearClose,
+  buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit,
+};
 
 // Carga el bundle en un ámbito global único, como hace Apps Script al concatenar los .gs.
 function loadBundle(code) {
@@ -86,7 +98,7 @@ function loadBundle(code) {
 
 test("el bundle expone la API pública esperada", () => {
   const Domain = loadBundle(buildBundle());
-  for (const fn of ["validateMonth", "tally", "validateResidencyYearClose", "validateThirdPost", "levelOn", "groupOf", "weekday"]) {
+  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "validateThirdPost", "levelOn", "groupOf", "weekday", "canValidate", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit"]) {
     assert.equal(typeof Domain[fn], "function", `Domain.${fn} debe ser función`);
   }
 });

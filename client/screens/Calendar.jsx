@@ -2,15 +2,16 @@
 // PrefsScreen: no se crea un selector de mes propio aquí). Guarda por residenteId,
 // nunca por nombre (bug del v1); datesOfMonth/weekday para todo el cálculo de fechas
 // (nunca `new Date(anio, mes, ...)` a mano, para no reintroducir el desfase de mes).
-import { COLOR, S, ANOS, ANO_COLORS, ANO_TEXT, CODE_COLORS, CODE_LABELS, CODES_CYCLE, pillBtn } from "./client/lib/design-tokens.js";
+import { COLOR, S, ANOS, ANO_COLORS, ANO_TEXT, CODE_COLORS, CODE_LABELS, CODES_CYCLE, ESTADO_CUADRANTE, pillBtn } from "./client/lib/design-tokens.js";
 import { defaultTrainingPeriods, levelOn } from "./v2/domain/residents.js";
 import { datesOfMonth, weekday, isWeekend, addDays, addYears } from "./v2/domain/calendar.js";
 import { tally } from "./v2/domain/tally.js";
-import { validateMonth, rotationHistoryStart } from "./v2/domain/validate.js";
+import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/domain/validate.js";
+import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit } from "./v2/domain/cuadrante.js";
 import { todayISO } from "./client/lib/dates.js";
 
 const { useState, useEffect } = React;
-const { Card } = window.UI;
+const { Card, Btn, Aviso } = window.UI;
 
 function nivelDe(residente) {
   const fin = residente.fechaFin || addDays(addYears(residente.fechaInicio, 4), -1);
@@ -24,19 +25,28 @@ function nombreMesDe(anio, mes) {
 
 function CalendarScreen() {
   const app = window.useApp();
-  const { anio, mes, setAnio, setMes, residentes, showToast } = app;
+  const { anio, mes, setAnio, setMes, residentes, showToast, isResponsable } = app;
 
   const [asignaciones, setAsignaciones] = useState({}); // {[residenteId]: {[fecha]: codigo}}
   const [pendientes, setPendientes] = useState({});     // {[residenteId+"|"+fecha]: {fecha,residenteId,codigo}}
   const [guardando, setGuardando] = useState(false);
   const [validando, setValidando] = useState(false);
   const [violaciones, setViolaciones] = useState(null); // null = aún no validado
+  const [estado, setEstado] = useState("BORRADOR");
+  const [cambiandoEstado, setCambiandoEstado] = useState(false);
+  // Si estadoCuadrante falla (red, sesión) NO se asume BORRADOR: un mes realmente PUBLICADO
+  // parecería editable por error. Mientras estadoError esté activo se bloquea la edición igual
+  // que si estuviera PUBLICADO, y se muestra un aviso con reintento (mismo patrón que Generator.jsx).
+  const [estadoError, setEstadoError] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
+  const busy = guardando || validando || cambiandoEstado;
+  const bloqueadoPorPublicado = !canEdit(estado) || estadoError;
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       app.setLoading(true);
-      const r = await app.api.listAsignaciones(anio, mes);
+      const [r, rEstado] = await Promise.all([app.api.listAsignaciones(anio, mes), app.api.estadoCuadrante(anio, mes)]);
       if (cancelled) return;
       if (r.ok) {
         const idx = {};
@@ -48,12 +58,15 @@ function CalendarScreen() {
       } else {
         showToast("Error cargando cuadrante: " + r.error, "err");
       }
+      setEstadoError(!rEstado.ok);
+      if (rEstado.ok) setEstado(rEstado.estado); // en error se conserva el último estado conocido; estadoError ya bloquea la edición
+      else showToast("Error comprobando el estado del cuadrante: " + rEstado.error, "err");
       setPendientes({});
       setViolaciones(null);
       app.setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [anio, mes]);
+  }, [anio, mes, retryTick]);
 
   const prevMonth = () => {
     if (mes === 1) { setMes(12); setAnio(anio - 1); } else setMes(mes - 1);
@@ -79,8 +92,14 @@ function CalendarScreen() {
   const cicla = (residenteId, fecha) => {
     // Bloqueado mientras validando: validar() encadena dos peticiones de red y resuelve
     // contra el `asignaciones` capturado por closure al empezar — una edición a mitad de
-    // esa ventana quedaría silenciosamente ignorada por el resultado que llegue después.
-    if (validando) return;
+    // esa ventana quedaría silenciosamente ignorada por el resultado que llegue después. Por
+    // el mismo motivo, bloqueado mientras guardando: si se edita a mitad de un guardado en
+    // vuelo, el `setPendientes({})` al terminar ese guardado borraría la edición nueva sin
+    // haberla enviado nunca (pérdida de datos invisible — la celda seguiría mostrando el
+    // valor nuevo, pero el servidor nunca lo recibió).
+    // Bloqueado también si el mes está PUBLICADO (decisión V-9b): el servidor ya lo rechaza
+    // en guardarAsignaciones, esto solo evita que la celda parezca editable en la UI.
+    if (busy || bloqueadoPorPublicado) return;
     const actual = (asignaciones[residenteId] || {})[fecha] || "";
     const siguiente = CODES_CYCLE[(CODES_CYCLE.indexOf(actual) + 1) % CODES_CYCLE.length];
     setAsignaciones((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: siguiente } }));
@@ -97,6 +116,9 @@ function CalendarScreen() {
     setGuardando(false);
     if (r.ok) {
       setPendientes({});
+      // Editar un mes VALIDADO lo revierte a BORRADOR en el servidor (Fase 6.2) — se refleja
+      // aquí sin otra petición, con la misma regla de dominio que aplicó el servidor.
+      setEstado(stateAfterEdit(estado));
       showToast("Cuadrante guardado ✓");
     } else {
       showToast("Error guardando: " + r.error, "err");
@@ -126,17 +148,43 @@ function CalendarScreen() {
       historicas = rHist.asignaciones;
     }
 
-    setValidando(false);
-    const ctx = {
-      mes, anio,
-      residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
-      asignaciones: [
-        ...historicas,
-        ...residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo }))),
-      ],
+    const ctx = buildMonthContext({
+      mes, anio, residentes, historicas,
+      asignacionesDelMes: residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo }))),
       bloqueos,
-    };
-    setViolaciones(validateMonth(ctx));
+    });
+    const v = validateMonth(ctx);
+    setViolaciones(v);
+
+    // Decisión de Fase 6.2 (V-9/V-10): BORRADOR->VALIDADO es automático en cuanto el
+    // Responsable en mandato valida sin errores — sin botón aparte. El servidor revalida
+    // por su cuenta (nunca confía en `v`) y es quien de verdad decide si persiste el estado.
+    // `cambios.length === 0` es imprescindible: si hay ediciones sin guardar, lo que ve el
+    // cliente (con la edición) puede diferir de lo que el servidor validaría (sin ella) —
+    // publicar en ese hueco fijaría datos que nunca reflejaron lo que la pantalla mostraba.
+    if (canValidate(v) && isResponsable && estado !== "PUBLICADO" && cambios.length === 0) {
+      const rVal = await app.api.marcarValidado(anio, mes);
+      if (rVal.ok) { setEstado(rVal.estado); showToast("Cuadrante VALIDADO ✓"); }
+      // Si el servidor lo rechaza (p.ej. discrepancia con lo que ve el cliente) no interrumpe
+      // la vista de violaciones, que ya se mostró arriba con el resultado local.
+    }
+    setValidando(false);
+  };
+
+  const publicar = async () => {
+    setCambiandoEstado(true);
+    const r = await app.api.publicarCuadrante(anio, mes);
+    setCambiandoEstado(false);
+    if (r.ok) { setEstado(r.estado); showToast("Cuadrante PUBLICADO ✓"); }
+    else showToast("Error publicando: " + r.error, "err");
+  };
+
+  const despublicar = async () => {
+    setCambiandoEstado(true);
+    const r = await app.api.despublicarCuadrante(anio, mes);
+    setCambiandoEstado(false);
+    if (r.ok) { setEstado(r.estado); showToast("Cuadrante despublicado — vuelve a VALIDADO"); }
+    else showToast("Error despublicando: " + r.error, "err");
   };
 
   const errores = (violaciones || []).filter((v) => v.severidad === "error");
@@ -146,19 +194,49 @@ function CalendarScreen() {
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
       <Card>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <button style={S.navBtn} onClick={prevMonth} disabled={validando}>◀</button>
-          <div style={{ fontSize: 18, fontWeight: 700, color: COLOR.blueDark, textTransform: "capitalize" }}>{nombreMesDe(anio, mes)}</div>
-          <button style={S.navBtn} onClick={nextMonth} disabled={validando}>▶</button>
+          <button style={S.navBtn} onClick={prevMonth} disabled={busy}>◀</button>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: COLOR.blueDark, textTransform: "capitalize" }}>{nombreMesDe(anio, mes)}</div>
+            <span style={{ fontSize: 11, fontWeight: 700, color: ESTADO_CUADRANTE[estado].color, background: ESTADO_CUADRANTE[estado].bg, borderRadius: 8, padding: "2px 10px" }}>
+              {ESTADO_CUADRANTE[estado].label}
+            </span>
+          </div>
+          <button style={S.navBtn} onClick={nextMonth} disabled={busy}>▶</button>
         </div>
       </Card>
 
+      {estadoError && (
+        <Aviso color={COLOR.red} bg={COLOR.redLight}>
+          No se pudo comprobar el estado del cuadrante — no se puede editar hasta reintentar
+          (podría estar PUBLICADO sin que esta pantalla lo sepa todavía).
+          <div style={{ marginTop: 8 }}>
+            <Btn onClick={() => setRetryTick((t) => t + 1)}>🔄 Reintentar</Btn>
+          </div>
+        </Aviso>
+      )}
+
       <Card>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-          <button style={pillBtn(COLOR.blue)} onClick={guardar} disabled={guardando}>
+          <button style={pillBtn(COLOR.blue)} onClick={guardar} disabled={busy || bloqueadoPorPublicado}>
             {guardando ? "Guardando…" : `💾 Guardar${cambios.length ? ` (${cambios.length})` : ""}`}
           </button>
-          <button style={pillBtn(COLOR.greenMid)} onClick={validar} disabled={validando}>{validando ? "Validando…" : "✅ Validar"}</button>
+          <button style={pillBtn(COLOR.greenMid)} onClick={validar} disabled={busy}>{validando ? "Validando…" : "✅ Validar"}</button>
+          {isResponsable && canPublish(estado) && (
+            <button style={pillBtn(COLOR.blueDark)} onClick={publicar} disabled={busy}>
+              {cambiandoEstado ? "Publicando…" : "📢 Publicar"}
+            </button>
+          )}
+          {isResponsable && canUnpublish(estado) && (
+            <button style={pillBtn(COLOR.orange)} onClick={despublicar} disabled={busy}>
+              {cambiandoEstado ? "Despublicando…" : "↩️ Despublicar"}
+            </button>
+          )}
         </div>
+        {!estadoError && bloqueadoPorPublicado && (
+          <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10 }}>
+            Este cuadrante está publicado: no se puede editar{isResponsable ? " — usa Despublicar para corregirlo." : "."}
+          </div>
+        )}
 
         <div style={{ overflowX: "auto" }}>
           <table style={{ borderCollapse: "collapse", minWidth: 220 + dias.length * 32, fontSize: 12 }}>
@@ -191,7 +269,7 @@ function CalendarScreen() {
                       const codigo = porFecha[fecha] || "";
                       return (
                         <td key={fecha} onClick={() => cicla(r.id, fecha)} style={{
-                          ...S.td, textAlign: "center", cursor: "pointer", userSelect: "none",
+                          ...S.td, textAlign: "center", cursor: bloqueadoPorPublicado ? "default" : "pointer", userSelect: "none",
                           background: CODE_COLORS[codigo] || "transparent",
                           fontWeight: codigo ? 700 : 400, color: COLOR.cellText,
                         }}>{codigo || "·"}</td>

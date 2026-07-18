@@ -30,6 +30,12 @@ const TABLES = {
   // (Fase 5.x) la severidad dentro de `bloqueos` ya no es uniforme: solo motivo BAJA bloquea
   // la asignación (INV-5); VACACIONES/ROTACION son informativas.
   preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("fechasEvitar", "json"), col("notas")] },
+  // Fase 6.2: ciclo BORRADOR|VALIDADO|PUBLICADO por mes+año (spec.md §2 Cuadrante). Cada fila
+  // es UNA transición de estado (append-only, `readLatest` por mes|anio se queda con la
+  // última); `actorId`/`fecha` identifican quién la disparó y cuándo, sin distinguir un campo
+  // por tipo de transición (generadoPor/validadoPor/...) — el historial completo de quién hizo
+  // qué ya queda en las filas append-only anteriores si algún día hace falta auditarlo.
+  cuadrantes: { name: "cuadrantes", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("estado"), col("actorId"), col("fecha")] },
 };
 
 /** Cabecera (nombres de columna) de una tabla. */
@@ -298,6 +304,7 @@ var Router = (function () {
 
 const ASIG_KEY = (r) => `${r.fecha}|${r.residenteId}`;
 const PREF_KEY = (r) => `${r.residenteId}|${r.anio}|${r.mes}`;
+const CUAD_KEY = (r) => `${r.mes}|${r.anio}`;
 const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA"]); // enum de motivos válidos (severidad mixta desde V-8: solo BAJA bloquea la asignación)
 
 /**
@@ -355,11 +362,29 @@ function handleRequest(rawBody, deps) {
           return { ok: true, asignaciones: all.filter((a) => a.fecha >= req.desde && a.fecha <= req.hasta) };
         });
 
+      // Consciente del ciclo de estados (Fase 6.2): PUBLICADO bloquea cualquier edición del mes
+      // (decisión V-9b); editar un mes VALIDADO lo invalida y lo revierte a BORRADOR (decisión
+      // de Fase 6.2 — "vuelve a BORRADOR automáticamente", sin fricción para quien edita).
       case "guardarAsignaciones":
-        return authed(req, deps, () => {
+        return authed(req, deps, (session) => {
           if (!Array.isArray(req.cambios) || req.cambios.length === 0) return { ok: false, error: "cambios vacío" };
+          let fechas;
+          try {
+            fechas = req.cambios.map((c) => deps.domain.parseISO(c.fecha));
+          } catch (e) {
+            return { ok: false, error: "cambio con fecha inválida: " + e.message };
+          }
+          const meses = [...new Map(fechas.map((f) => [`${f.year}-${f.month}`, f])).values()]
+            .map((f) => ({ mes: f.month, anio: f.year, estado: currentCuadranteEstado(deps, f.month, f.year) }));
+          const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
+          if (publicado) return { ok: false, error: `el cuadrante de ${publicado.mes}/${publicado.anio} está PUBLICADO y no admite ediciones` };
+
           for (const c of req.cambios) {
             deps.store.appendRecord("asignaciones", { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen });
+          }
+          for (const m of meses) {
+            const siguiente = deps.domain.stateAfterEdit(m.estado);
+            if (siguiente !== m.estado) writeCuadranteEstado(deps, session, m.mes, m.anio, siguiente);
           }
           return { ok: true, guardados: req.cambios.length };
         });
@@ -472,6 +497,54 @@ function handleRequest(rawBody, deps) {
           mandatos: deps.store.readLatest("responsables", (r) => r.periodoInicio).sort((a, b) => (a.periodoInicio < b.periodoInicio ? -1 : 1)),
         }));
 
+      case "estadoCuadrante":
+        return authed(req, deps, () => {
+          if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
+          return { ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio) };
+        });
+
+      // BORRADOR->VALIDADO (Fase 6.2, decisión V-9/V-10): solo el Responsable en mandato, y
+      // revalidado AQUÍ con los datos del store (nunca se confía en un `violaciones` que
+      // mandara el cliente) — mismo principio que el rol derivado ("nunca un flag que el
+      // cliente pueda falsear").
+      case "marcarValidado":
+        return authed(req, deps, (session) => {
+          const denegado = requireResponsable(session, "validar el cuadrante");
+          if (denegado) return denegado;
+          const estadoActual = validCuadranteMesAnio(req, deps);
+          if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
+          if (estadoActual === "PUBLICADO") return { ok: false, error: "el cuadrante ya está publicado" };
+
+          const violaciones = deps.domain.validateMonth(buildCuadranteCtx(deps, req.mes, req.anio));
+          if (!deps.domain.canValidate(violaciones)) {
+            return { ok: false, error: "el cuadrante tiene errores, no se puede validar", violaciones };
+          }
+          writeCuadranteEstado(deps, session, req.mes, req.anio, "VALIDADO");
+          return { ok: true, estado: "VALIDADO", violaciones };
+        });
+
+      case "publicarCuadrante":
+        return authed(req, deps, (session) => {
+          const denegado = requireResponsable(session, "publicar el cuadrante");
+          if (denegado) return denegado;
+          const estadoActual = validCuadranteMesAnio(req, deps);
+          if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
+          if (!deps.domain.canPublish(estadoActual)) return { ok: false, error: "el cuadrante debe estar VALIDADO antes de publicarse" };
+          writeCuadranteEstado(deps, session, req.mes, req.anio, "PUBLICADO");
+          return { ok: true, estado: "PUBLICADO" };
+        });
+
+      case "despublicarCuadrante":
+        return authed(req, deps, (session) => {
+          const denegado = requireResponsable(session, "despublicar el cuadrante");
+          if (denegado) return denegado;
+          const estadoActual = validCuadranteMesAnio(req, deps);
+          if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
+          if (!deps.domain.canUnpublish(estadoActual)) return { ok: false, error: "el cuadrante no está publicado" };
+          writeCuadranteEstado(deps, session, req.mes, req.anio, "VALIDADO");
+          return { ok: true, estado: "VALIDADO" };
+        });
+
       default:
         return { ok: false, error: `acción desconocida: ${req.action}` };
     }
@@ -553,6 +626,51 @@ function activeBloqueosInMonth(deps, anio, mes) {
 
 function isYear(v) {
   return typeof v === "number" && Number.isInteger(v) && v > 2000 && v < 2100;
+}
+
+function isMonth(v) {
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 12;
+}
+
+/** Estado vigente (última fila gana, `readLatest` por mes|anio); sin fila = BORRADOR implícito. */
+function currentCuadranteEstado(deps, mes, anio) {
+  const fila = deps.store.readLatest("cuadrantes", CUAD_KEY).find((r) => r.mes === mes && r.anio === anio);
+  return fila ? fila.estado : "BORRADOR";
+}
+
+/** mes/anio de `req` válidos → estado vigente; inválidos → null (Fase 6.2, 3 acciones de estado). */
+function validCuadranteMesAnio(req, deps) {
+  if (!isYear(req.anio) || !isMonth(req.mes)) return null;
+  return currentCuadranteEstado(deps, req.mes, req.anio);
+}
+
+/** Añade la fila de transición de estado del cuadrante (Fase 6.2) — misma forma en las 4 acciones que la escriben. */
+function writeCuadranteEstado(deps, session, mes, anio, estado) {
+  deps.store.appendRecord("cuadrantes", { mes, anio, estado, actorId: session.sub, fecha: deps.today });
+}
+
+/** Exige que la sesión sea del Responsable en mandato (Fase 6.2, decisión V-9c); si no, el error a devolver. */
+function requireResponsable(session, accion) {
+  return session.rol === "responsable" ? null : { ok: false, error: `solo el Responsable puede ${accion}` };
+}
+
+/**
+ * Contexto de `validateMonth` para un mes, reconstruido ENTERAMENTE desde el store — nunca se
+ * confía en un `cuadrante` que mandara el cliente para decidir una transición de estado (mismo
+ * principio que el rol derivado: "nunca un flag que el cliente pueda falsear"). Incluye el
+ * histórico de rotación cross-mes (contrato C-2, spec.md §5), igual que Calendar.jsx/Generator.jsx
+ * — mismo ensamblado que ambos, vía `deps.domain.buildMonthContext`.
+ */
+function buildCuadranteCtx(deps, mes, anio) {
+  const residentes = deps.store.readRecords("residentes");
+  const bloqueos = activeBloqueosInMonth(deps, anio, mes);
+  const prefix = monthPrefix(anio, mes);
+  const monthStart = `${prefix}-01`;
+  const todasAsig = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
+  const asignacionesDelMes = todasAsig.filter((a) => a.fecha.startsWith(prefix));
+  const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
+  const historicas = desdeRotacion ? todasAsig.filter((a) => a.fecha >= desdeRotacion && a.fecha < monthStart) : [];
+  return deps.domain.buildMonthContext({ mes, anio, residentes, historicas, asignacionesDelMes, bloqueos });
 }
 
 /** Mandato enero→enero (INV-14) para el año dado: [YYYY-01-01, (YYYY+1)-01-01). */

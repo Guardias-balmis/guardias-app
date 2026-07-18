@@ -6,8 +6,9 @@
 import { COLOR, S, ANOS } from "./client/lib/design-tokens.js";
 import { defaultTrainingPeriods, levelOn, groupOf, periodOn } from "./v2/domain/residents.js";
 import { addDays, addYears, toISO } from "./v2/domain/calendar.js";
-import { validateMonth, rotationHistoryStart } from "./v2/domain/validate.js";
+import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/domain/validate.js";
 import { accumulatedTally } from "./v2/domain/accumulate.js";
+import { canEdit } from "./v2/domain/cuadrante.js";
 
 const { useState, useMemo, useEffect } = React;
 const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
@@ -146,6 +147,9 @@ function GeneratorScreen() {
   const [cargandoContexto, setCargandoContexto] = useState(true);
   const [contextError, setContextError] = useState(null);
   const [retryTick, setRetryTick] = useState(0);
+  // Estado del cuadrante (Fase 6.2): un mes PUBLICADO no admite aplicar el generador — el
+  // servidor ya lo rechaza en guardarAsignaciones, esto solo lo refleja en la UI.
+  const [estadoCuadrante, setEstadoCuadrante] = useState("BORRADOR");
 
   useEffect(() => {
     let cancelled = false;
@@ -154,11 +158,14 @@ function GeneratorScreen() {
       setContextError(null);
       setLoading(true);
 
-      const rBloqueos = await api.listBloqueos(anio, mes);
+      const [rBloqueos, rEstado] = await Promise.all([api.listBloqueos(anio, mes), api.estadoCuadrante(anio, mes)]);
       if (cancelled) return;
-      if (!rBloqueos.ok) {
+      // Un fallo de estadoCuadrante pasa por el MISMO contextError que un fallo de bloqueos
+      // (no se distingue cuál falló): si no se sabe el estado real, no se puede asegurar que
+      // el mes no esté PUBLICADO, así que se trata igual de mal que no tener bloqueos.
+      if (!rBloqueos.ok || !rEstado.ok) {
         setLoading(false);
-        setContextError("No se pudieron cargar los bloqueos: " + rBloqueos.error);
+        setContextError(!rBloqueos.ok ? ("No se pudieron cargar los bloqueos: " + rBloqueos.error) : ("No se pudo comprobar el estado del cuadrante: " + rEstado.error));
         setCargandoContexto(false);
         // Se resetean (no se dejan los del mes anterior): con contextError activo el
         // prompt/comprobar() no deben mostrar datos reales de OTRO mes como si fueran de este.
@@ -166,6 +173,7 @@ function GeneratorScreen() {
         setHistoricas([]);
         return;
       }
+      setEstadoCuadrante(rEstado.estado);
 
       // Rango del histórico: cubre (a) desde el inicio del año de residencia en curso más
       // antiguo entre los residentes activos (para accumulatedTally, contrato C-1) y (b)
@@ -252,18 +260,17 @@ function GeneratorScreen() {
       setParsedAsignaciones(null);
       return;
     }
-    const ctx = {
-      mes, anio,
-      residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
-      // El histórico (meses anteriores, ya cargado para el contaje acumulado) más la
-      // respuesta del asistente: INV-7 (contrato C-2) necesita ver la rotación completa,
-      // no solo el mes generado, y sin bloqueos aquí INV-5/6/7 nunca se comprobaban.
-      // `historicas` trae 1-2 días DENTRO de este mes (lookahead de doblete, C-1) — se
-      // recortan aquí para no duplicarlos frente a `asignacionesRespuesta`, que ya cubre
-      // el mes completo.
-      asignaciones: [...historicas.filter((a) => a.fecha < monthStart), ...asignacionesRespuesta],
+    // El histórico (meses anteriores, ya cargado para el contaje acumulado) más la respuesta
+    // del asistente: INV-7 (contrato C-2) necesita ver la rotación completa, no solo el mes
+    // generado, y sin bloqueos aquí INV-5/6/7 nunca se comprobaban. `historicas` trae 1-2 días
+    // DENTRO de este mes (lookahead de doblete, C-1) — se recortan aquí para no duplicarlos
+    // frente a `asignacionesRespuesta`, que ya cubre el mes completo.
+    const ctx = buildMonthContext({
+      mes, anio, residentes,
+      historicas: historicas.filter((a) => a.fecha < monthStart),
+      asignacionesDelMes: asignacionesRespuesta,
       bloqueos,
-    };
+    });
     try {
       setParseError(null);
       setViolaciones(validateMonth(ctx));
@@ -277,7 +284,8 @@ function GeneratorScreen() {
 
   const errores = (violaciones || []).filter((v) => v.severidad === "error");
   const avisos = (violaciones || []).filter((v) => v.severidad === "aviso");
-  const puedeAplicar = violaciones !== null && errores.length === 0 && parsedAsignaciones && parsedAsignaciones.length > 0;
+  const cuadrantePublicado = !canEdit(estadoCuadrante);
+  const puedeAplicar = violaciones !== null && errores.length === 0 && parsedAsignaciones && parsedAsignaciones.length > 0 && !cuadrantePublicado;
 
   const aplicar = async () => {
     setApplying(true);
@@ -375,6 +383,11 @@ function GeneratorScreen() {
                 Hay errores bloqueantes: no se puede aplicar este cuadrante tal cual.
                 Corrígelo a mano en la pantalla Cuadrante, o pide al asistente que corrija
                 estos puntos concretos y vuelve a pegar aquí la respuesta.
+              </Aviso>
+            ) : cuadrantePublicado ? (
+              <Aviso>
+                El cuadrante de {nombreMes} ya está PUBLICADO: no admite ediciones. Si hace
+                falta corregirlo, el Responsable puede despublicarlo desde la pantalla Cuadrante.
               </Aviso>
             ) : (
               <Btn onClick={aplicar} disabled={applying || !puedeAplicar} color={COLOR.greenMid}>

@@ -21,6 +21,12 @@ export const TABLES = {
   // (Fase 5.x) la severidad dentro de `bloqueos` ya no es uniforme: solo motivo BAJA bloquea
   // la asignación (INV-5); VACACIONES/ROTACION son informativas.
   preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("fechasEvitar", "json"), col("notas")] },
+  // Fase 6.2: ciclo BORRADOR|VALIDADO|PUBLICADO por mes+año (spec.md §2 Cuadrante). Cada fila
+  // es UNA transición de estado (append-only, `readLatest` por mes|anio se queda con la
+  // última); `actorId`/`fecha` identifican quién la disparó y cuándo, sin distinguir un campo
+  // por tipo de transición (generadoPor/validadoPor/...) — el historial completo de quién hizo
+  // qué ya queda en las filas append-only anteriores si algún día hace falta auditarlo.
+  cuadrantes: { name: "cuadrantes", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("estado"), col("actorId"), col("fecha")] },
 };
 
 /** Cabecera (nombres de columna) de una tabla. */

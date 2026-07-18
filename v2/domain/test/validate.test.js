@@ -5,7 +5,7 @@
 // comportamiento (aceptar/rechazar) es idéntico a la normativa; solo se unifica la etiqueta.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateMonth, rotationHistoryStart } from "../validate.js";
+import { validateMonth, rotationHistoryStart, buildMonthContext } from "../validate.js";
 
 // ── helpers de construcción ──
 const R = (id, fechaInicio, fechaFin) => ({ id, fechaInicio, fechaFin });
@@ -644,4 +644,25 @@ test("rotationHistoryStart: con varias rotaciones cercanas, devuelve el desde M�
     { motivo: "ROTACION", provincia: "valencia", desde: "2026-06-15", hasta: "2026-08-02" },
   ];
   assert.equal(rotationHistoryStart(bloqueos, "2026-08-01"), "2026-06-15");
+});
+
+// ── buildMonthContext (Fase 6.2: única forma del ctx de validateMonth, reusada por
+// Calendar.jsx, Generator.jsx y server/src/router.js en vez de reimplementarla cada vez) ──
+test("buildMonthContext: proyecta cada residente a {id,fechaInicio,fechaFin} descartando el resto", () => {
+  const r = { id: "r1", nombre: "Ana", fechaInicio: "2024-05-27", fechaFin: "2028-05-26", email: "a@x.com" };
+  const ctx = buildMonthContext({ mes: 7, anio: 2026, residentes: [r], asignacionesDelMes: [], bloqueos: [] });
+  assert.deepEqual(ctx.residentes, [{ id: "r1", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" }]);
+});
+
+test("buildMonthContext: concatena historicas + asignacionesDelMes, historicas primero", () => {
+  const hist = [{ residenteId: "r1", fecha: "2026-06-30", codigo: "G" }];
+  const mesActual = [{ residenteId: "r1", fecha: "2026-07-01", codigo: "G" }];
+  const ctx = buildMonthContext({ mes: 7, anio: 2026, residentes: [], historicas: hist, asignacionesDelMes: mesActual, bloqueos: [] });
+  assert.deepEqual(ctx.asignaciones, [...hist, ...mesActual]);
+});
+
+test("buildMonthContext: historicas es opcional (por defecto [])", () => {
+  const mesActual = [{ residenteId: "r1", fecha: "2026-07-01", codigo: "G" }];
+  const ctx = buildMonthContext({ mes: 7, anio: 2026, residentes: [], asignacionesDelMes: mesActual, bloqueos: [] });
+  assert.deepEqual(ctx.asignaciones, mesActual);
 });

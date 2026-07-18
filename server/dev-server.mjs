@@ -18,8 +18,10 @@ import nodeCrypto from "node:crypto";
 import { handleRequest } from "./src/router.js";
 import { makeStore } from "./src/sheets-store.js";
 import { headerOf, TABLES, recordToRow } from "./src/sheets-schema.js";
-import { validateMonth } from "../v2/domain/validate.js";
+import { validateMonth, rotationHistoryStart, buildMonthContext } from "../v2/domain/validate.js";
+import { parseISO } from "../v2/domain/calendar.js";
 import { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible } from "../v2/domain/responsible.js";
+import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../v2/domain/cuadrante.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = Number(process.argv[2] || 8787);
@@ -55,6 +57,7 @@ const ss = memorySS({
   voluntariosResponsable: [headerOf(TABLES.voluntariosResponsable)],
   asignaciones: [headerOf(TABLES.asignaciones)],
   preferencias: [headerOf(TABLES.preferencias)],
+  cuadrantes: [headerOf(TABLES.cuadrantes)],
 });
 const nonces = new Set();
 const crypto = {
@@ -69,7 +72,7 @@ function deps() {
     now, today: new Date().toISOString().slice(0, 10),
     clientId: DEV_CLIENT_ID, sessionSecret: "dev-secret-no-usar-en-produccion", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => nodeCrypto.randomUUID() }),
-    domain: { validateMonth, eligibleCandidates, resolveMethod, drawResponsible, validateResponsible },
+    domain: { validateMonth, buildMonthContext, rotationHistoryStart, parseISO, eligibleCandidates, resolveMethod, drawResponsible, validateResponsible, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit },
     newSeed: () => nodeCrypto.randomUUID(),
     issueNonce: () => { const n = nodeCrypto.randomUUID(); nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),

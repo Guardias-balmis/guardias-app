@@ -67,5 +67,9 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
     retirarVoluntariadoResponsable: (anio) => authed("retirarVoluntariadoResponsable", { anio }),
     ejecutarSorteoResponsable: (anio) => authed("ejecutarSorteoResponsable", { anio }),
     listResponsables: () => authed("listResponsables"),
+    estadoCuadrante: (anio, mes) => authed("estadoCuadrante", { anio, mes }),
+    marcarValidado: (anio, mes) => authed("marcarValidado", { anio, mes }),
+    publicarCuadrante: (anio, mes) => authed("publicarCuadrante", { anio, mes }),
+    despublicarCuadrante: (anio, mes) => authed("despublicarCuadrante", { anio, mes }),
   };
 }

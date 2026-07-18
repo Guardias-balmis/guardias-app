@@ -16,7 +16,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // Orden topológico: cada módulo se define después de sus dependencias.
-const DOMAIN_MODULES = ["calendar", "residents", "tally", "thirdpost", "equity", "validate", "responsible"];
+const DOMAIN_MODULES = ["calendar", "residents", "tally", "thirdpost", "equity", "validate", "responsible", "cuadrante"];
 const SERVER_MODULES = ["sheets-schema", "sheets-store", "session", "verify-token", "router"];
 
 const DOMAIN_DIR = fileURLToPath(new URL("../v2/domain/", import.meta.url));

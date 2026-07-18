@@ -59,6 +59,22 @@ export function rotationHistoryStart(bloqueos, monthStart) {
 }
 
 /**
+ * Ensambla el ctx que espera `validateMonth` a partir de las piezas que cada pantalla/acción ya
+ * tiene cargadas por separado (residentes completos, histórico de fuera del mes ya acotado por
+ * `rotationHistoryStart`/contrato C-1, asignaciones del propio mes, bloqueos) — evita reimplementar
+ * la misma forma de objeto de forma independiente en Calendar.jsx, Generator.jsx y el router.
+ * @param {object} p { mes, anio, residentes, historicas?, asignacionesDelMes, bloqueos }
+ */
+export function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos }) {
+  return {
+    mes, anio,
+    residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
+    asignaciones: [...historicas, ...asignacionesDelMes],
+    bloqueos,
+  };
+}
+
+/**
  * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos?, excepciones?,
  *                        eventos?, designadosNavidad? }
  * @returns {{invariante:string, severidad:'error'|'aviso', fecha?:string, residenteId?:string, detalle:string}[]}

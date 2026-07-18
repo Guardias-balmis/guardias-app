@@ -34,6 +34,15 @@ export const CODE_COLORS = { G: "#C6EFCE", GF: "#FCE4D6", GP: "#FCE4D6", "3P": "
 export const CODE_LABELS = { G: "Guardia", GF: "G. Festiva", GP: "G. Prefestivo", "3P": "3.º Puesto", V: "Vacaciones", R: "Rotación", B: "Baja" };
 export const CODES_CYCLE = ["G", "GF", "GP", "3P", "V", "R", "B", ""];
 
+// Ciclo de estados del cuadrante (Fase 6.2, spec.md §2 — mismos valores que v2/domain/cuadrante.js
+// STATES). Un solo mapa por estado, no tres paralelos (color/fondo/etiqueta): así no pueden
+// desincronizarse entre sí si se añade o retoca un estado.
+export const ESTADO_CUADRANTE = {
+  BORRADOR: { color: COLOR.grayDark, bg: COLOR.grayMid, label: "📝 Borrador" },
+  VALIDADO: { color: COLOR.blue, bg: COLOR.bluePale, label: "✅ Validado" },
+  PUBLICADO: { color: COLOR.greenMid, bg: COLOR.greenLight, label: "📢 Publicado" },
+};
+
 export const DIAS_SEMANA = ["L", "M", "X", "J", "V", "S", "D"];
 export const DIAS_NOMBRE = { L: "Lunes", M: "Martes", X: "Miércoles", J: "Jueves", V: "Viernes", S: "Sábado", D: "Domingo" };
 

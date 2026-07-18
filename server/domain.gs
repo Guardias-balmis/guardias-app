@@ -649,6 +649,22 @@ function rotationHistoryStart(bloqueos, monthStart) {
 }
 
 /**
+ * Ensambla el ctx que espera `validateMonth` a partir de las piezas que cada pantalla/acción ya
+ * tiene cargadas por separado (residentes completos, histórico de fuera del mes ya acotado por
+ * `rotationHistoryStart`/contrato C-1, asignaciones del propio mes, bloqueos) — evita reimplementar
+ * la misma forma de objeto de forma independiente en Calendar.jsx, Generator.jsx y el router.
+ * @param {object} p { mes, anio, residentes, historicas?, asignacionesDelMes, bloqueos }
+ */
+function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos }) {
+  return {
+    mes, anio,
+    residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
+    asignaciones: [...historicas, ...asignacionesDelMes],
+    bloqueos,
+  };
+}
+
+/**
  * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos?, excepciones?,
  *                        eventos?, designadosNavidad? }
  * @returns {{invariante:string, severidad:'error'|'aviso', fecha?:string, residenteId?:string, detalle:string}[]}
@@ -867,7 +883,7 @@ function validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, v
   }
 }
 
-  return { rotationHistoryStart, validateMonth };
+  return { rotationHistoryStart, buildMonthContext, validateMonth };
 })();
 
 // ── responsible.js ──
@@ -1038,5 +1054,43 @@ function validateResponsible(responsable, ctx) {
   return { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible };
 })();
 
+// ── cuadrante.js ──
+var Cuadrante = (function () {
+// Ciclo de estados del Cuadrante (spec.md §2, decisión V-9/V-10, Fase 6.2):
+// BORRADOR -> VALIDADO -> PUBLICADO. PURO: solo las reglas de qué transición es válida en
+// qué estado. La persistencia (tabla `cuadrantes`) y el permiso por rol de sesión (V-9c: solo
+// el Responsable publica/despublica) viven en server/src/router.js.
+
+const STATES = ["BORRADOR", "VALIDADO", "PUBLICADO"];
+
+/** BORRADOR->VALIDADO exige cero violaciones DURAS (severidad "error", spec.md §5). */
+function canValidate(violaciones) {
+  return violaciones.every((v) => v.severidad !== "error");
+}
+
+/** VALIDADO->PUBLICADO. */
+function canPublish(estado) {
+  return estado === "VALIDADO";
+}
+
+/** PUBLICADO->VALIDADO, para corregir un cuadrante ya publicado. */
+function canUnpublish(estado) {
+  return estado === "PUBLICADO";
+}
+
+/** PUBLICADO bloquea cualquier edición del mes (decisión V-9b); BORRADOR/VALIDADO se pueden tocar. */
+function canEdit(estado) {
+  return estado !== "PUBLICADO";
+}
+
+/** Estado tras editar asignaciones: un mes VALIDADO deja de estarlo (vuelve a BORRADOR) sin
+ * fricción para quien edita. PUBLICADO nunca llega aquí: `canEdit` ya bloquea el guardado antes. */
+function stateAfterEdit(estado) {
+  return estado === "VALIDADO" ? "BORRADOR" : estado;
+}
+
+  return { STATES, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit };
+})();
+
 // ── API pública ──
-var Domain = Object.assign({}, Calendar, Residents, Tally, Thirdpost, Equity, Validate, Responsible);
+var Domain = Object.assign({}, Calendar, Residents, Tally, Thirdpost, Equity, Validate, Responsible, Cuadrante);

@@ -125,3 +125,17 @@ test("makeApi: acciones del Responsable mandan la action y el anio correctos", a
   ]);
   assert.equal(acciones[0].anio, 2027);
 });
+
+test("makeApi: acciones del ciclo de estados del cuadrante mandan anio/mes correctos", async () => {
+  const fetchImpl = fakeFetch(200, { ok: true });
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "s" });
+  await api.estadoCuadrante(2027, 7);
+  await api.marcarValidado(2027, 7);
+  await api.publicarCuadrante(2027, 7);
+  await api.despublicarCuadrante(2027, 7);
+  const acciones = fetchImpl.calls.map((c) => JSON.parse(c.init.body));
+  assert.deepEqual(acciones.map((a) => a.action), [
+    "estadoCuadrante", "marcarValidado", "publicarCuadrante", "despublicarCuadrante",
+  ]);
+  for (const a of acciones) { assert.equal(a.anio, 2027); assert.equal(a.mes, 7); }
+});
