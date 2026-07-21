@@ -17,13 +17,13 @@ var SheetsSchema = (function () {
 const col = (key, type = "string") => ({ key, type });
 
 const TABLES = {
-  residentes: { name: "residentes", columns: [col("id"), col("nombre"), col("email"), col("fechaInicio"), col("fechaFin")] },
-  periodos: { name: "periodos", columns: [col("id"), col("residenteId"), col("anio", "number"), col("fechaInicio"), col("fechaFin")] },
-  bloqueos: { name: "bloqueos", columns: [col("id"), col("residenteId"), col("desde"), col("hasta"), col("motivo"), col("provincia"), col("guardiasEnCentroExterno", "bool"), col("activo", "bool")] },
-  asignaciones: { name: "asignaciones", columns: [col("id"), col("fecha"), col("residenteId"), col("codigo"), col("puesto"), col("origen")] },
-  responsables: { name: "responsables", columns: [col("id"), col("periodoInicio"), col("periodoFin"), col("residenteId"), col("metodo"), col("voluntarios", "json"), col("semilla"), col("candidatos", "json"), col("fechaSorteo")] },
-  voluntariosResponsable: { name: "voluntariosResponsable", columns: [col("id"), col("residenteId"), col("periodoInicio"), col("activo", "bool")] },
-  sorteos: { name: "sorteos", columns: [col("id"), col("fecha"), col("motivo"), col("semilla"), col("candidatos", "json"), col("resultado", "json")] },
+  residentes: { name: "residentes", columns: [col("id"), col("nombre"), col("email"), col("fechaInicio", "date"), col("fechaFin", "date")] },
+  periodos: { name: "periodos", columns: [col("id"), col("residenteId"), col("anio", "number"), col("fechaInicio", "date"), col("fechaFin", "date")] },
+  bloqueos: { name: "bloqueos", columns: [col("id"), col("residenteId"), col("desde", "date"), col("hasta", "date"), col("motivo"), col("provincia"), col("guardiasEnCentroExterno", "bool"), col("activo", "bool")] },
+  asignaciones: { name: "asignaciones", columns: [col("id"), col("fecha", "date"), col("residenteId"), col("codigo"), col("puesto"), col("origen")] },
+  responsables: { name: "responsables", columns: [col("id"), col("periodoInicio", "date"), col("periodoFin", "date"), col("residenteId"), col("metodo"), col("voluntarios", "json"), col("semilla"), col("candidatos", "json"), col("fechaSorteo", "date")] },
+  voluntariosResponsable: { name: "voluntariosResponsable", columns: [col("id"), col("residenteId"), col("periodoInicio", "date"), col("activo", "bool")] },
+  sorteos: { name: "sorteos", columns: [col("id"), col("fecha", "date"), col("motivo"), col("semilla"), col("candidatos", "json"), col("resultado", "json")] },
   // Fase 4: diasPreferidos/diasEvitar (día de semana genérico) y rotDe/rotHasta/vacDe/vacHasta
   // (número de día suelto) del v1 se sustituyen por fechas concretas (BLANDO) y por la tabla
   // `bloqueos` — spec.md §5 Fase 4: "distingue DURO vs BLANDO, son cosas distintas". Desde V-8
@@ -35,7 +35,7 @@ const TABLES = {
   // última); `actorId`/`fecha` identifican quién la disparó y cuándo, sin distinguir un campo
   // por tipo de transición (generadoPor/validadoPor/...) — el historial completo de quién hizo
   // qué ya queda en las filas append-only anteriores si algún día hace falta auditarlo.
-  cuadrantes: { name: "cuadrantes", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("estado"), col("actorId"), col("fecha")] },
+  cuadrantes: { name: "cuadrantes", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("estado"), col("actorId"), col("fecha", "date")] },
 };
 
 /** Cabecera (nombres de columna) de una tabla. */
@@ -67,6 +67,10 @@ function serialize(value, type) {
     case "number": return String(value);
     case "bool": return value ? "TRUE" : "FALSE";
     case "json": return JSON.stringify(value);
+    // Bug real (Fase 2.6/7.1, primer uso en vivo): Sheets detecta un string "YYYY-MM-DD" y
+    // convierte la celda a tipo Fecha interno; el apóstrofe fuerza texto plano (invisible
+    // tras guardar, por UI o por API) para que la celda se quede como el string que mandamos.
+    case "date": return `'${value}`;
     default: return String(value);
   }
 }
@@ -77,8 +81,22 @@ function deserialize(cell, type) {
     case "number": return Number(cell);
     case "bool": return cell === true || cell === "TRUE" || cell === "true";
     case "json": try { return JSON.parse(cell); } catch { return undefined; }
+    // Contraparte de "date" en serialize: si el apóstrofe no llegó a evitar la conversión
+    // (celda ya corrompida de antes de este fix, o algún borde de Sheets que lo ignore),
+    // `cell` llega como un Date real — se recupera "YYYY-MM-DD" con getters LOCALES (no
+    // UTC: Apps Script corre con el huso horario del proyecto, el mismo que ancló la
+    // medianoche de esa celda — distinto del "siempre UTC" del dominio, pensado para el
+    // navegador). Si no, es el string con apóstrofe (el `ss` falso de los tests no simula
+    // el despojo de Sheets, así que llega literal).
+    case "date": return cell instanceof Date ? isoFromLocalDate(cell) : String(cell).replace(/^'/, "");
     default: return String(cell);
   }
+}
+
+function isoFromLocalDate(d) {
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
   return { TABLES, headerOf, recordToRow, rowsToRecords };

@@ -46,6 +46,41 @@ test("tipos bool y json se serializan y recuperan", () => {
   assert.equal(back.provincia, "Valencia");
 });
 
+// ── tipo "date": bug real encontrado en el primer uso en vivo (Fase 2.6/7.1, 2026-07-21) ──
+// Google Sheets detecta un string "YYYY-MM-DD" y convierte la celda a tipo Fecha interno;
+// Apps Script (SpreadsheetApp.getValues()) devuelve entonces un Date real, no el string
+// original. serialize() prefija con un apóstrofe (fuerza texto plano en Sheets — invisible
+// tras guardar, tanto por UI como por API) para que esto no vuelva a pasar; deserialize()
+// recupera "YYYY-MM-DD" tanto de un Date real (ya corrompido antes de este fix, o si algún
+// borde de Sheets ignora el apóstrofe) como del string con apóstrofe (el fake `ss` de los
+// tests no simula el despojo de Sheets, así que el apóstrofe SÍ llega literal a deserialize).
+test('serialize de tipo "date" prefija con apóstrofe (fuerza texto plano en Sheets)', () => {
+  const row = recordToRow(TABLES.residentes, { id: "r1", nombre: "Ana", email: "a@x.com", fechaInicio: "2024-05-07", fechaFin: "2028-05-06" });
+  assert.equal(row[3], "'2024-05-07");
+  assert.equal(row[4], "'2028-05-06");
+});
+
+test('deserialize de tipo "date" despoja el apóstrofe de un string (round-trip vía el fake ss)', () => {
+  const back = rowsToRecords(TABLES.residentes, [headerOf(TABLES.residentes), recordToRow(TABLES.residentes, { id: "r1", nombre: "Ana", email: "a@x.com", fechaInicio: "2024-05-07", fechaFin: "2028-05-06" })])[0];
+  assert.equal(back.fechaInicio, "2024-05-07");
+  assert.equal(back.fechaFin, "2028-05-06");
+});
+
+test('deserialize de tipo "date" recupera "YYYY-MM-DD" de un Date real (celda ya autoconvertida por Sheets)', () => {
+  // new Date(y, m, d) interpreta los componentes en hora LOCAL — igual que los getters
+  // locales que usa deserialize — así que el test es portable con independencia del huso
+  // horario de la máquina que lo ejecute (no hace falta que coincida con Europe/Madrid).
+  const back = rowsToRecords(TABLES.residentes, [headerOf(TABLES.residentes), ["r1", "Ana", "a@x.com", new Date(2024, 4, 7), new Date(2028, 4, 6)]])[0];
+  assert.equal(back.fechaInicio, "2024-05-07");
+  assert.equal(back.fechaFin, "2028-05-06");
+});
+
+test('deserialize de tipo "date" con celda vacía sigue dando undefined (borrado lógico intacto)', () => {
+  const back = rowsToRecords(TABLES.residentes, [headerOf(TABLES.residentes), ["r1", "Ana", "a@x.com", "", ""]])[0];
+  assert.equal(back.fechaInicio, undefined);
+  assert.equal(back.fechaFin, undefined);
+});
+
 // ── append-only ──
 test("appendRecord genera UUID, escribe cabecera si falta y NO reescribe filas previas", () => {
   const ss = fakeSS();
