@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Guardias · Dr. Balmis — an on-call-shift ("guardia") scheduling tool for Radiodiagnóstico residents at Hospital General Universitario Dr. Balmis. It is mid-rewrite ("v2"): domain-driven design, Google Sheets as both datastore and deliverable, a Google Apps Script Web App backend, and a no-build-step React client loaded via Babel Standalone in the browser. Guiding goal (README.md): the app must run ≥10 years with no administrator — R1–R4 levels are derived from dates rather than stored, history is never deleted, and no secret ever lives in the browser.
+Guardias · Dr. Balmis — an on-call-shift ("guardia") scheduling tool for Radiodiagnóstico residents at Hospital General Universitario Dr. Balmis. Architecture: domain-driven design, Google Sheets as both datastore and deliverable, a Google Apps Script Web App backend, and a no-build-step React client loaded via Babel Standalone in the browser. Guiding goal (README.md): the app must run ≥10 years with no administrator — R1–R4 levels are derived from dates rather than stored, history is never deleted, and no secret ever lives in the browser.
+
+The "v2" rewrite is live: `main` served the old v1 client until the cutover on 2026-07-24, and now serves this codebase. Residents are testing it in production against the real Sheet, so treat anything reaching `main` as reaching them.
 
 Shift-code vocabulary used everywhere (domain, UI, Sheets) — never translate or rename: `G` guardia ordinaria · `GF` guardia festiva · `GP` guardia prefestivo · `3P` tercer puesto (voluntario) · `V` vacaciones · `R` rotación externa · `B` baja.
 
@@ -71,6 +73,16 @@ Two rules this creates, both easy to violate without an obvious error:
 
 One more anti-regression convention specific to this layer: assignments are keyed by `residenteId`, never by resident name — `Calendar.jsx` has an explicit note against reintroducing that regression.
 
-## Branch / deploy model
+## Branch / deploy model — two people push here concurrently
 
-`main` is production: GitHub Pages serves `index.html` from `main`, and **every push to `main` deploys live**. All v2 rewrite work happens on the `v2` branch; `main` is not touched until the final cutover. Don't push rewrite-in-progress work to `main`.
+`main` is both production and the shared trunk: GitHub Pages serves `index.html` from `main`, and **every push to `main` deploys live to the residents using the app**. There is no staging environment. Note that a live deploy is not limited to `client/` — the `.jsx` screens import `v2/domain/*.js` straight into the browser, so a half-finished validator change on `main` is immediately what residents run. (`server/*.gs` is the exception: it only reaches Apps Script when someone pastes it in and redeploys by hand.)
+
+Two collaborators commit to `main` in parallel, on different areas:
+- **Quique** (repo owner, `Molecule97`) — backend, domain, client: works on short `backend/*` branches and merges to `main`.
+- **Agustín** (`aguslagio24`) — app design plus new business rules and variables: works on `docs/*` branches and merges via pull request.
+
+Consequences worth internalizing, because getting them wrong has already cost real work:
+- **Always `git fetch` and check `origin/main` before starting anything and again before pushing.** `main` moves without warning. A local `main` that looked current an hour ago may be behind by several merged PRs.
+- **At the start of a session, read what changed since you last saw the repo** (`git log --oneline -15`, and `git log -p` on anything surprising) instead of assuming the state described in this file or in memory is still accurate. Agustín's rule/design documents in `docs/` are the most likely thing to have moved, and they often propose changes to invariants that `spec.md` and `v2/domain/` do not implement yet — a proposal in `docs/` is not the implemented behaviour, and vice versa.
+- **Never resolve a divergence between `main` and another branch by overwriting a whole tree** without first checking, file by file, what only exists on the other side. The 2026-07-24 cutover nearly deleted five merged PRs of Agustín's design documents this exact way; the push was rejected for being non-fast-forward, which is the only reason it did not happen.
+- Neither collaborator's area is exclusive by tooling, only by convention — nothing in the repo prevents a conflicting edit, so prefer a branch over a direct push whenever a change is not trivially safe to deploy.
