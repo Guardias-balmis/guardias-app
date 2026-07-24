@@ -139,11 +139,16 @@ const server = http.createServer(async (req, res) => {
         .replace(/<script src="https:\/\/accounts\.google\.com\/gsi\/client"[^>]*><\/script>/, "")
         .replace("</head>", GOOGLE_STUB + "\n</head>"));
     } else if (filePath === "/client/config.js") {
-      // client/config.js trae las constantes de despliegue sin rellenar (README-deploy
-      // paso 5); aquí, y SOLO en la respuesta HTTP del dev-server, se sustituyen.
+      // Desde la Fase 2.6, client/config.js lleva las constantes del despliegue REAL (ya no
+      // placeholders) — un .replace() de cadena exacta contra "PENDIENTE_DE_DESPLIEGUE" ya no
+      // encontraría nada y devolvería el fichero SIN TOCAR, haciendo que este servidor de
+      // desarrollo sirviera en silencio el EXEC_URL/CLIENT_ID reales: cualquier prueba local
+      // acabaría escribiendo en el Sheet de producción sin que nadie lo notara. La regex
+      // sustituye el valor ACTUAL sea cual sea (placeholder o real), aquí y SOLO en la
+      // respuesta HTTP de este servidor — nunca en el fichero del repo.
       out = Buffer.from(data.toString("utf8")
-        .replace('EXEC_URL = "PENDIENTE_DE_DESPLIEGUE"', 'EXEC_URL = "http://127.0.0.1:' + PORT + '/exec"')
-        .replace('GOOGLE_CLIENT_ID = "PENDIENTE_DE_DESPLIEGUE"', 'GOOGLE_CLIENT_ID = "' + DEV_CLIENT_ID + '"'));
+        .replace(/EXEC_URL = "[^"]*"/, 'EXEC_URL = "http://127.0.0.1:' + PORT + '/exec"')
+        .replace(/GOOGLE_CLIENT_ID = "[^"]*"/, 'GOOGLE_CLIENT_ID = "' + DEV_CLIENT_ID + '"'));
     }
     res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream" });
     res.end(out);
