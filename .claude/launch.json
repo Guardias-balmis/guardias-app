@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "guardias-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server/dev-server.mjs"],
+      "port": 8787
+    },
+    {
+      "name": "guardias-static",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8080"],
+      "port": 8080
+    }
+  ]
+}

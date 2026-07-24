@@ -1,0 +1,91 @@
+// Esquema de las pestañas de datos normalizadas (ADR-002 D-3). PURO: solo define las tablas
+// y el mapeo fila↔registro por tipos. La fuente de verdad es append-only con clave UUID
+// (spec §2 / ADR-001 §3): nunca se reescribe una fila cruda, solo se añaden.
+//
+// Los valores viajan a/desde el Sheet como celdas; cada columna declara su tipo para
+// recuperar números/booleanos/JSON sin ambigüedad (un `anio` debe volver como number, no "3").
+
+const col = (key, type = "string") => ({ key, type });
+
+export const TABLES = {
+  residentes: { name: "residentes", columns: [col("id"), col("nombre"), col("email"), col("fechaInicio", "date"), col("fechaFin", "date")] },
+  periodos: { name: "periodos", columns: [col("id"), col("residenteId"), col("anio", "number"), col("fechaInicio", "date"), col("fechaFin", "date")] },
+  bloqueos: { name: "bloqueos", columns: [col("id"), col("residenteId"), col("desde", "date"), col("hasta", "date"), col("motivo"), col("provincia"), col("guardiasEnCentroExterno", "bool"), col("activo", "bool")] },
+  asignaciones: { name: "asignaciones", columns: [col("id"), col("fecha", "date"), col("residenteId"), col("codigo"), col("puesto"), col("origen")] },
+  responsables: { name: "responsables", columns: [col("id"), col("periodoInicio", "date"), col("periodoFin", "date"), col("residenteId"), col("metodo"), col("voluntarios", "json"), col("semilla"), col("candidatos", "json"), col("fechaSorteo", "date")] },
+  voluntariosResponsable: { name: "voluntariosResponsable", columns: [col("id"), col("residenteId"), col("periodoInicio", "date"), col("activo", "bool")] },
+  sorteos: { name: "sorteos", columns: [col("id"), col("fecha", "date"), col("motivo"), col("semilla"), col("candidatos", "json"), col("resultado", "json")] },
+  // Fase 4: diasPreferidos/diasEvitar (día de semana genérico) y rotDe/rotHasta/vacDe/vacHasta
+  // (número de día suelto) del v1 se sustituyen por fechas concretas (BLANDO) y por la tabla
+  // `bloqueos` — spec.md §5 Fase 4: "distingue DURO vs BLANDO, son cosas distintas". Desde V-8
+  // (Fase 5.x) la severidad dentro de `bloqueos` ya no es uniforme: solo motivo BAJA bloquea
+  // la asignación (INV-5); VACACIONES/ROTACION son informativas.
+  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("fechasEvitar", "json"), col("notas")] },
+  // Fase 6.2: ciclo BORRADOR|VALIDADO|PUBLICADO por mes+año (spec.md §2 Cuadrante). Cada fila
+  // es UNA transición de estado (append-only, `readLatest` por mes|anio se queda con la
+  // última); `actorId`/`fecha` identifican quién la disparó y cuándo, sin distinguir un campo
+  // por tipo de transición (generadoPor/validadoPor/...) — el historial completo de quién hizo
+  // qué ya queda en las filas append-only anteriores si algún día hace falta auditarlo.
+  cuadrantes: { name: "cuadrantes", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("estado"), col("actorId"), col("fecha", "date")] },
+};
+
+/** Cabecera (nombres de columna) de una tabla. */
+export function headerOf(table) {
+  return table.columns.map((c) => c.key);
+}
+
+/** Registro → fila de celdas, en el orden de las columnas. */
+export function recordToRow(table, record) {
+  return table.columns.map((c) => serialize(record[c.key], c.type));
+}
+
+/** [cabecera, ...filas] → registros. Ignora la cabecera y mapea por posición de columna. */
+export function rowsToRecords(table, values) {
+  if (!values || values.length <= 1) return [];
+  return values.slice(1).map((row) => {
+    const rec = {};
+    table.columns.forEach((c, i) => {
+      const v = deserialize(row[i], c.type);
+      if (v !== undefined) rec[c.key] = v;
+    });
+    return rec;
+  });
+}
+
+function serialize(value, type) {
+  if (value === undefined || value === null) return "";
+  switch (type) {
+    case "number": return String(value);
+    case "bool": return value ? "TRUE" : "FALSE";
+    case "json": return JSON.stringify(value);
+    // Bug real (Fase 2.6/7.1, primer uso en vivo): Sheets detecta un string "YYYY-MM-DD" y
+    // convierte la celda a tipo Fecha interno; el apóstrofe fuerza texto plano (invisible
+    // tras guardar, por UI o por API) para que la celda se quede como el string que mandamos.
+    case "date": return `'${value}`;
+    default: return String(value);
+  }
+}
+
+function deserialize(cell, type) {
+  if (cell === undefined || cell === null || cell === "") return undefined;
+  switch (type) {
+    case "number": return Number(cell);
+    case "bool": return cell === true || cell === "TRUE" || cell === "true";
+    case "json": try { return JSON.parse(cell); } catch { return undefined; }
+    // Contraparte de "date" en serialize: si el apóstrofe no llegó a evitar la conversión
+    // (celda ya corrompida de antes de este fix, o algún borde de Sheets que lo ignore),
+    // `cell` llega como un Date real — se recupera "YYYY-MM-DD" con getters LOCALES (no
+    // UTC: Apps Script corre con el huso horario del proyecto, el mismo que ancló la
+    // medianoche de esa celda — distinto del "siempre UTC" del dominio, pensado para el
+    // navegador). Si no, es el string con apóstrofe (el `ss` falso de los tests no simula
+    // el despojo de Sheets, así que llega literal).
+    case "date": return cell instanceof Date ? isoFromLocalDate(cell) : String(cell).replace(/^'/, "");
+    default: return String(cell);
+  }
+}
+
+function isoFromLocalDate(d) {
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}

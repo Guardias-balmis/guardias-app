@@ -1,0 +1,213 @@
+# spec.md · Especificación de dominio de guardias-app v2
+
+> Artefacto versionado y diffable. Fuentes de verdad: `docs/normativa.pdf` (v2.0) y
+> `docs/guardias_radiodiagnostico_balmis_v2.xlsm`. Si esta spec contradice la normativa, gana la
+> normativa y la spec tiene un bug. Arquitectura: `docs/adr/001-arquitectura.md`.
+
+## 1. Principios
+
+1. **Derivar > almacenar.** Todo lo computable desde fechas se computa; el nivel R1–R4 no existe como dato.
+2. **La identidad es un UUID.** Nunca la posición, nunca el nombre, nunca el email (ambos pueden cambiar).
+3. **Nunca se borra un residente.** `activo` es derivado; el historial es sagrado.
+4. **El dominio es puro.** Cero I/O, cero React, cero Sheets. Mismo código en cliente y servidor.
+5. **Fechas como strings ISO `YYYY-MM-DD`** y aritmética en UTC. Meses **1–12**. (El cliente v1 tiene un bug de desfase +1 mes por usar índices 0-based de JS; esta clase de bug queda prohibida por convención.)
+
+## 2. Modelo de dominio
+
+```
+Residente {
+  id: UUID                      # estable para siempre
+  nombre: string                # mutable, solo presentación
+  email: string                 # mutable, clave de login (comparación case-insensitive)
+  fechaInicioResidencia: date   # p.ej. 2024-05-07 — los desfases respecto a junio son NORMALES
+  fechaFinResidencia: date      # normalmente inicio + 4 años − 1 día; puede alargarse (bajas)
+}
+PeriodoFormativo {              # 4 por residente; generados por defecto, editables (nota [a] normativa)
+  residenteId, anio: 1..4, fechaInicio: date, fechaFin: date
+}
+Bloqueo {
+  id: UUID, residenteId
+  desde: date, hasta: date      # RANGO inclusivo, no un día suelto (decisión V-6)
+  tipo: mixto                   # solo BAJA bloquea la asignación (INV-5); VACACIONES/ROTACION
+                                 # ya no bloquean, son informativas, pero siguen alimentando
+                                 # INV-2/6/7 y la equidad (decisión V-8, Fase 5.x)
+  motivo: VACACIONES | ROTACION | BAJA   # embarazo/paternidad → BAJA (decisión V-5)
+  provincia?: string            # solo ROTACION: Alicante/Valencia/Murcia/Albacete activa INV-7
+  guardiasEnCentroExterno?: bool
+  activo: bool                  # cancelación = reinserción con mismo id y activo=false (append-only)
+}
+# Pendiente de modelar (§5 INV-13/14): Imaginaria (dos listas rotatorias por grupo) y la validación
+# del Responsable (nivel R3, sorteo reproducible). Ver Estado de implementación (§7).
+Asignacion {
+  fecha: date, residenteId, codigo: G|GF|GP|3P, puesto: MAYOR|PEQUENO|TERCERO
+  origen?: CEDIDA | COMPRADA    # si existe, se excluye del cómputo anual (INV-4)
+}
+Cuadrante { mes: 1..12, anio, estado: BORRADOR|VALIDADO|PUBLICADO, actorId, fecha }
+# actorId/fecha (Fase 6.2, decisión V-10): quién disparó la ÚLTIMA transición y cuándo — no un
+# campo por tipo de transición (generadoPor/validadoPor/...): cada fila `cuadrantes` es append-only,
+# así que el historial completo de quién hizo qué transición ya vive en las filas anteriores.
+Responsable { periodoInicio, periodoFin, residenteId, metodo: VOLUNTARIO|SORTEO,
+              voluntarios[], semilla?, candidatos[]?, fechaSorteo? }   # sorteo reproducible y auditable
+Excepcion {                     # degrada una violación DURA→AVISO donde la normativa lo permite
+  invariante, ambito: {mes?|fecha?|residenteId?}, justificacion, registradaPor, fecha
+}
+```
+
+**DURO vs BLANDO (decisión V-6, Fase 4; refinada por V-8, Fase 5.x):** `Bloqueo` y una
+preferencia PERSONAL siguen siendo entidades DISTINTAS, no dos tipos de una misma tabla. Pero
+dentro de `Bloqueo` la severidad ya no es uniforme por entidad, depende del `motivo` (V-8):
+**BAJA sigue siendo DURA** — INV-5 prohíbe asignar guardia esos días, por seguridad/legalidad
+(no se puede exigir una guardia a alguien de baja médica o embarazo). **VACACIONES y ROTACION
+dejaron de bloquear la asignación**: son informativas para el generador, igual que una
+preferencia BLANDA — pero sus fechas SIGUEN alimentando INV-2 (exención del mínimo mensual),
+INV-6 (ausencias simultáneas por cohorte) e INV-7 (cobertura viernes/sábado en rotación
+cercana): no se volvieron irrelevantes, solo dejaron de bloquear la asignación en sí. Una
+preferencia PERSONAL ("preferiría no este día") sigue viviendo en `Preferencias.fechasEvitar`
+(fechas concretas sueltas, no un rango), informativa y **nunca** comprobada por el validador.
+`Preferencias.fechasPreferidas` (BLANDO positivo, "quiero guardia aquí") se retiró en Fase 5.x
+a petición del autor: no aportaba suficiente valor frente a la complejidad de mantenerlo.
+
+## 3. Reglas derivadas (funciones puras)
+
+### 3.1 Periodos por defecto — `defaultTrainingPeriods(inicio, fin)`
+- Periodo k (1..3): `[inicio + (k−1) años, inicio + k años − 1 día]`. Periodo 4: `[inicio + 3 años, fin]`.
+- Aniversarios 29-feb se ajustan a 28-feb en años no bisiestos.
+- Editables después (bajas/embarazo, nota [a]): se permiten huecos entre periodos (promoción
+  retrasada), **nunca solapes**.
+
+### 3.2 Nivel — `nivel(periodos, fecha)`
+- `PENDIENTE` si `fecha < periodos[0].fechaInicio`.
+- `FINALIZADO` si `fecha > último.fechaFin`.
+- Si no: `R{k}` del **último periodo cuyo inicio ≤ fecha** (en un hueco entre periodos se conserva
+  el nivel anterior: una baja retrasa la promoción, no des-promociona).
+- Consecuencia: cada residente sube en **su aniversario** (en la práctica, mayo); en junio ya han
+  subido todos → cumple DoD-2 sin cron. Un residente con `FINALIZADO` deja de listarse por cálculo
+  y su historial queda intacto.
+
+### 3.3 Grupo — `grupo(nivel)`
+`R3|R4 → MAYOR`, `R1|R2 → PEQUENO`, resto → `null` (no asignable).
+
+### 3.4 Calendario
+- Día de semana desde la fecha ISO (L,M,X,J,V,S,D); fin de semana = S|D.
+- **Año académico** de una fecha: `mes ≥ 6 → año`, si no `año − 1` (jun-2026→may-2027 ⇒ 2026).
+- **Trimestre**: T1 jun-ago, T2 sep-nov, T3 dic-feb, T4 mar-may (T3 cruza el año natural).
+- **Festivos**: son *datos de entrada* (lista de fechas por año, la carga el responsable). Nunca se
+  calculan ni se delegan a la IA (el cliente v1 le pedía al modelo "identifícalos tú": prohibido).
+- **Puente**: día laborable (L–V, no festivo) cuyos dos vecinos son cada uno festivo o fin de semana.
+  (Cubre: viernes tras jueves festivo; lunes ante martes festivo.)
+
+## 4. Semántica del contaje — `contaje(asignaciones, ventana, festivos)`
+
+Replica la semántica del Excel salvo mejoras documentadas. Devuelve por residente:
+
+| Métrica | Definición | Fórmula Excel equivalente |
+|---|---|---|
+| `total` | nº de G + GF + GP | `O = C + D + M` (Resumen Anual) |
+| `findes` | guardias (G/GF/GP) en sábado o domingo | `SUMPRODUCT((S∨D)·guardia)` |
+| `festivos` | nº de GF | columna GF |
+| `prefestivos` | nº de GP | columna GP |
+| `dobletes` | viernes con guardia **y** domingo (+2 días) con guardia | `SUMPRODUCT((V)·g(d)·g(d+2))` |
+| `tercerPuesto` | nº de 3P | columna 3P |
+| `cedidasCompradas` | nº de asignaciones con `origen` (informativo) | — |
+
+- **Contaje "tonto a propósito" (decisión T-1):** `tally(asignaciones, ventana)` cuenta códigos por
+  fecha y **no recibe la lista de festivos**: `festivos` se deriva del código GF, no de un calendario.
+  La coherencia código-vs-festivo oficial es el invariante **INV-12** (§5, pendiente), no la
+  responsabilidad del contador (evita "corregir" en silencio y desincronizarse del Excel de referencia).
+- **`puentes` NO es una métrica del contaje.** La normativa exige equidad de **puentes libres**
+  (días puente en los que el residente **no** hace guardia) — una métrica de *ausencia*, no de guardia.
+  Se computa en el validador con contexto de calendario (INV-3), no en `tally`. *(Corrección de la
+  puerta de consistencia: la revisión 1 de esta spec confundía "guardias en puente" —que nadie
+  necesita— con "puentes libres".)*
+- **INV-4:** asignaciones con `origen` CEDIDA/COMPRADA y las 3P **no** entran en `total` ni en las
+  métricas de equidad; se registran aparte (contadores `tercerPuesto` y `cedidasCompradas`). Una
+  guardia comprada **no puede formar la mitad de un doblete**.
+- **Doblete en borde de mes** (viernes 31-jul → domingo 2-ago): el dominio lo computa por **fechas
+  reales** y lo atribuye **al mes del viernes**. *Mejora deliberada sobre el Excel*, que al operar
+  por columnas de mes pierde estos dobletes y distorsiona la equidad anual. La proyección a Sheets
+  (Fase 7) documentará la discrepancia de borde de sus fórmulas degradadas.
+- **La ventana es del residente** (su año de residencia, aniversario→aniversario), no el año
+  académico. El validador recibe el acumulado del año en curso: la normativa exige compensar entre
+  meses ("quien asuma más guardias un mes lo vea compensado en los siguientes").
+
+## 5. Invariantes — `validateMonth(cuadrante, contexto) → violaciones[]`
+
+`violacion = {invariante, severidad: DURA|AVISO, fecha?, residenteId?, detalle}`.
+Un cuadrante con violaciones **DURAS** no puede pasar a `VALIDADO`. Las `Excepcion` registradas
+degradan a AVISO solo donde la normativa lo permite (columna "Excepciones").
+
+Severidad `error` **bloquea** el paso a `VALIDADO`; `aviso` informa pero no bloquea (decisión V-4).
+Estado: ✅ implementado y con test · ⏳ pendiente (fase indicada).
+
+| # | Regla operativa | Ámbito | Severidad | Estado |
+|---|---|---|---|---|
+| INV-1 | Cada día: exactamente 1 MAYOR y 1 PEQUENO (por nivel derivado a esa fecha) | día | error | ✅ |
+| INV-2 | 4 ≤ guardias computables/mes ≤ 6 por residente activo | mes | error (>6, o <4 en Mayor); **aviso** (Pequeño con 3, por infra-oferta); exento en febrero/vacaciones/baja/R1-verano | ✅ |
+| INV-3 | Al cierre del año de residencia: dif ≤ 1 con cada compañero del mismo año en total, findes, festivos, **prefestivos**, puentes libres y dobletes V-D | año personal | error | ✅ (prefestivos añadido tras la puerta de consistencia) |
+| INV-4 | 3P/cedidas/compradas fuera del cómputo | contaje | error | ✅ (vía `tally`) |
+| INV-5 | Ninguna asignación sobre Bloqueo motivo BAJA (vacaciones/rotación ya no bloquean la asignación, decisión V-8) | día | error | ✅ |
+| INV-6 | Máx. 2 residentes de la misma promoción en rotación externa simultánea; rotación prioritaria sobre vacaciones | día | error | ✅ |
+| INV-7 | Rotación en Alicante/colindante → ≥1 guardia en viernes y ≥1 en sábado dentro del periodo | periodo | error (evaluado solo en el mes de fin) | ✅ (ver contrato C-2) |
+| INV-8 | 3P: cubrir L→D antes de repetir día (por voluntario); dif ≤ 1 entre voluntarios al cierre; prioridad a días con R1 de mochila | año | error (repetición, no-voluntario, equidad al cierre); **aviso** (prioridad mochila) | ✅ |
+| INV-9 | 2×R2 el mismo día: solo desde el 1-dic del año académico con Excepcion justificada, **o** en un día de evento | día | error si no justificado | ✅ (fix P0-3: los eventos eximen con independencia del mes) |
+| INV-10 | Navidad y despedida: 2 R2 por sorteo documentado; los de Navidad libres en la despedida | evento | **aviso** | ✅ |
+| INV-11 | Junio–agosto: ningún R1 asignado; recuento de Pequeños entre R2 del mismo año (dif ≤ 1, compensable) | mes | error (R1 asignado); **aviso** (dif entre R2) | ✅ |
+| INV-12 | Coherencia código↔festivo: GF solo en día festivo; G/GP no en festivo | día | aviso | ⏳ pendiente (necesita `bridgesOfMonth` y la lista de festivos como entrada) |
+| INV-13 | Imaginaria: dos listas rotatorias por grupo; la sustitución de una incidencia sale de la lista del grupo del incidente; una guardia de incidencia cedida/comprada NO descuenta de la imaginaria | evento | error | ⏳ pendiente (Fase 4-5; entidad no modelada aún) |
+| INV-14 | Responsable: nivel R3 en su periodo (enero→enero); método SORTEO solo sin voluntarios; sorteo reproducible | año | error | ✅ (Fase 5, decisión V-7) |
+
+### Contratos del validador (verificados por la puerta de consistencia)
+- **C-1 (lookahead de dobletes, ref. S-5):** cualquier cómputo mensual de `dobletes` que luego se sume
+  (p. ej. la proyección a Sheets de la Fase 7, o los acumulados de `equity`) debe pasar a `tally` las
+  asignaciones **más los ~2 primeros días del mes siguiente**, porque el domingo de un doblete de un
+  viernes-31 cae fuera del mes. `tally` hace el *lookahead* correctamente **si el dato está presente**;
+  omitirlo reintroduce el bug del Excel que S-5 corrige. `validateResidencyYearClose` es correcto para
+  el mes de cierre (el domingo posterior al aniversario pertenece al año siguiente).
+- **C-2 (periodo de INV-7):** `validateMonth` evalúa INV-7 solo en el mes en que **termina** la rotación,
+  y para ello `asignaciones` debe incluir las guardias del residente **de todo el periodo** de rotación
+  (que puede abarcar meses anteriores), no solo las del mes validado.
+
+## 6. Decisiones registradas
+
+| # | Decisión | Motivo |
+|---|---|---|
+| V-1 | **Reconciliación INV-1/INV-9:** un día con 2 Pequeños **ambos R2** lo gobierna INV-9 (excepción 2×R2); cualquier otro día defectuoso (2 mayores, R1+R2, falta puesto) es INV-1 | Los agentes de diseño de tests etiquetaron la misma situación con códigos distintos. El comportamiento aceptar/rechazar es el de la normativa; solo se unifica la etiqueta. La excepción 2×R2 solo se plantea cuando ambos son exactamente R2 |
+| V-2 | **Cohorte (promoción) = año natural de `fechaInicio`**; distinta del **nivel** (derivado por fecha). INV-6/INV-11 comparan por cohorte; el rol Mayor/Pequeño usa nivel | El caso del aniversario de mayo: tres residentes de la promoción 2024 siguen siendo "el mismo año" aunque su nivel computado difiera unos días |
+| V-3 | Severidades `error` (bloqueante) / `aviso` (informativo) | Alineado con la salida del validador; mapea DURA→error, AVISO→aviso |
+| V-4 | **Clasificación de severidad** (tras la puerta de consistencia): `error` protege equidad/seguridad/legitimidad; `aviso` es advisory/compensable/social. Aviso: INV-2 (Pequeño con 3), INV-8d (mochila), INV-10 (eventos), INV-11 (dif mensual entre R2), INV-12 (coherencia festivo). El resto, `error` | La normativa dice "cifras orientativas, el criterio obligatorio es la equidad": un cuadrante no debe bloquearse por reglas blandas. El mecanismo `aviso` no existía y varias reglas blandas bloqueaban cuadrantes válidos |
+| V-5 | Embarazo/paternidad se modela como `Bloqueo` motivo **BAJA** (para el descuento proporcional de la nota [a]) | Evita ampliar el enum; el descuento de disponibilidad es idéntico |
+| V-6 | `Bloqueo` es rango `desde`/`hasta` (no un día suelto) y siempre DURO; BLANDO no es un `Bloqueo`, es `Preferencias.fechasEvitar` (fechas sueltas, no enforced) | Corrige la spec para que coincida con `validate.js` (ya implementado y probado E2E en Fase 3-4): INV-6/7 operan sobre periodos, no días sueltos; colapsar DURO/BLANDO en una tabla habría mezclado "prohibido" con "preferiría no" |
+| V-7 | Responsable (Fase 5): (a) la `semilla` del sorteo la genera la app (no una fuente externa), pero el sorteo es puro/determinista sobre (candidatos, semilla) — recomputable a partir del registro guardado, y cambiar cualquiera de los dos a posteriori cambia el resultado (detecta manipulación); (b) si se ofrecen ≥2 voluntarios (la normativa solo cubre "sorteo en ausencia de voluntarios"), se sortea SOLO entre ellos, no entre todo el grupo de R3; (c) candidatos = residentes con nivel R3 exactamente en `periodoInicio` (1 de enero), derivado, nunca almacenado aparte | Respuestas del autor durante la Fase 5. (a) prioriza simplicidad de implementación sobre auditabilidad por terceros sin acceso a la app — aceptado conscientemente. (b) caso no cubierto por la normativa; se prefirió reutilizar el mismo mecanismo de sorteo antes que "gana el primero en ofrecerse" (más débil de auditar) |
+| V-8 | Bloqueo (Fase 5.x): la severidad depende del `motivo`, ya no es uniforme. BAJA sigue bloqueando la asignación (INV-5 sin cambios para ese motivo). VACACIONES y ROTACION dejan de bloquear: no producen ninguna violación (igual que `fechasEvitar`), pero sus fechas siguen alimentando INV-2 (exención <4 guardias/mes), INV-6 (ausencias simultáneas por cohorte) e INV-7 (cobertura viernes/sábado en rotación cercana) y el descuento proporcional de equidad — nunca dejaron de ser datos relevantes, solo dejaron de bloquear la asignación en sí. `Preferencias.fechasPreferidas` (BLANDO positivo) se retira de la pantalla y del esquema. Corrige además una contradicción real preexistente: INV-7 exigía al menos una guardia de viernes y una de sábado *dentro* del periodo de rotación cercana, mientras INV-5 prohibía *cualquier* asignación en ese mismo periodo (rotación era DURO) — nunca detectada porque los tests de INV-7 no comprobaban INV-5 en el mismo escenario | Petición del autor: una guardia sobre vacaciones/rotación no debería bloquearse en la app — "muy a nuestro pesar, debería ponerse guardias esos días" si no hay alternativa. Baja médica se mantiene DURA por seguridad/legalidad (no se puede exigir una guardia a alguien de baja): decisión explícita del autor, no un default heredado |
+| V-9 | Fase 6 (generador): (a) se trocea en **6.1** (prompt con contaje acumulado + bloqueos reales inyectados, y validación multi-mes correcta — contrato C-2) y **6.2** aparte (ciclo de estados BORRADOR→VALIDADO→PUBLICADO); (b) en Fase 6, PUBLICADO es un estado **interno de la app** (bloquea ediciones del mes) — la proyección real a la pestaña del Sheet legible por humanos queda para la Fase 7, tal y como ya preveía este documento; (c) solo el Responsable R3 en su periodo (rol de Fase 5) puede pasar un cuadrante de VALIDADO a PUBLICADO | Respuestas del autor antes de empezar la Fase 6: trocear reduce el riesgo por entrega, mismo patrón que 4.0/4.1-4.2 y 5/5.x; reutilizar el rol Responsable evita inventar un permiso nuevo; separar PUBLICADO=interno de PUBLICADO=Sheets evita mezclar el ciclo de estados de la Fase 6 con el trabajo de proyección real de la Fase 7 |
+| V-10 | Fase 6.2 (ciclo de estados): (a) BORRADOR→VALIDADO es **automático** en cuanto el Responsable en mandato pulsa Validar y sale sin errores (sin botón "Marcar validado" aparte) — pero el servidor siempre revalida por su cuenta contra los datos del store, nunca confía en el resultado que calculó el cliente; (b) editar un mes VALIDADO lo revierte a BORRADOR sin fricción (guardar ya lo permite, no hace falta "desmarcar" antes); (c) PUBLICADO **sí se puede revertir**: el Responsable puede despublicar (PUBLICADO→VALIDADO) para corregir y volver a publicar — no es un estado terminal en esta fase; (d) solo el Responsable en mandato puede marcar VALIDADO, no cualquier residente | Respuestas del autor antes de empezar la 6.2. (a) simplicidad de UI sin sacrificar seguridad, mismo principio que el rol derivado ("nunca un flag que el cliente pueda falsear"); (c) sin vía de corrección, un error publicado por descuido quedaría sin arreglo hasta la Fase 7; (d) el Responsable controla todo el ciclo VALIDADO→PUBLICADO, no solo el último paso |
+| V-11 | Fase 7.1 (proyección a Sheets): (a) `publicarCuadrante` proyecta de verdad la pestaña mensual + "Resumen" en el MISMO paso — no hay una acción separada "proyectar"; (b) despublicar (PUBLICADO→VALIDADO) **no toca** ninguna pestaña ya proyectada, se queda con la última proyección hasta la siguiente publicación; (c) "Resumen" agrupa la equidad por **cohorte de ingreso** (mismo criterio que INV-3/V-2), no por nivel actual como hacía "Resumen Anual" del .xlsm; (d) alcance de esta entrega: pestaña mensual + Resumen; Contaje Trimestral queda para una Fase 7.2 aparte | Respuestas del autor antes de empezar la 7.1 (sábado, sin acceso aún a la cuenta de Google del servicio — "adelantemos lo que podamos"). (a) simplicidad: "publicar" pasa a significar publicar de verdad, un solo concepto; `rebuildSheet` (server/src/sheets-store.js, ya implementado en Fase 2 pero sin invocador hasta ahora) es idempotente/autorreparable por shadow-swap, así que reintentar "Publicar" basta ante un fallo parcial — y `router.js` proyecta ANTES de escribir el estado PUBLICADO, para que un fallo de la API de Sheets deje el cuadrante intacto en VALIDADO en vez de un PUBLICADO fantasma con el Sheet a medias; (b) evita que el Sheet "parpadee" mientras alguien lo mira, coherente con que despublicar es para corregir y volver a publicar enseguida; (c) consistencia con el validador real — un umbral "Resumen" agrupado por nivel actual mostraría una equidad distinta de la que INV-3 exige de verdad; (d) menos fórmulas sin verificar en vivo antes del lunes (cuando llega el acceso), mismo patrón de troceo que 4.1/4.2 y 6.1/6.2. **Simplificación NO preguntada, a validar con el autor:** "Resumen" acumula TODOS los meses publicados desde siempre (no por año académico como el .xlsm, que se recreaba cada año) — el `.xlsm` legado no tenía en realidad pestañas por mes (una sola hoja "Cuadrante Anual" con 12 bloques apilados; "1 pestaña/mes" es arquitectura nueva, no una copia), así que no había un precedente literal que replicar. La equidad de INV-3 es por año de residencia individual, no por año académico ni acumulada de por vida — esta hoja es una lectura aproximada, no sustituye al validador |
+| S-1 | Fechas ISO string + UTC, meses 1–12 | Mata la clase de bug del v1 (desfase +1 mes, `navMes` incoherente) |
+| S-2 | Nivel por aniversario personal, no por año académico | Normativa mide equidad por año de residencia individual; el Excel (año-entero) no puede expresar la nota [a] |
+| S-3 | Hueco entre periodos = nivel anterior; solape = inválido | Baja retrasa promoción; no existe des-promoción |
+| S-4 | Festivos como datos, jamás derivados por IA | El v1 delegaba festivos al modelo: alucinables |
+| S-5 | Doblete de borde de mes contado por fechas reales, atribuido al mes del viernes | El Excel los pierde; la equidad anual es la que manda |
+| S-6 | Cero dependencias en el dominio (`node:test`, ES modules) | Durabilidad 10 años: sin toolchain que se pudra |
+| S-7 | Código en inglés, dominio documentado en español (JSDoc), códigos G/GF/GP/3P/V/R/B literales | Convención del proyecto |
+
+## 7. Estado de implementación
+
+- [x] `v2/domain/calendar.js` — calendario puro (S-1)
+- [x] `v2/domain/residents.js` — periodos, nivel, grupo, activo (S-2, S-3)
+- [x] `v2/domain/tally.js` — contaje (§4), 19 tests
+- [x] `v2/domain/validate.js` — `validateMonth`: INV-1,2,5,6,7,9,10,11 (§5), 45 tests
+- [x] `v2/domain/thirdpost.js` — `validateThirdPost`: INV-8 (rotación, equidad, mochila), 19 tests
+- [x] `v2/domain/equity.js` — `validateResidencyYearClose`: INV-3 + INV-4 (cierre de año), 15 tests
+- [ ] INV-12 (coherencia festivo) + `calendar.bridgesOfMonth()` — cierra S-4 (puentes derivados, no dato libre)
+- [ ] INV-13 (Imaginaria) — entidad + dos listas rotatorias por grupo (Fase 4-5)
+- [x] `v2/domain/responsible.js` — `eligibleCandidates`, `resolveMethod`, `drawResponsible`, `validateResponsible`: INV-14 (Responsable R3, sorteo reproducible), 19 tests — Fase 5, backend (acciones `estadoResponsable`/`ofrecerseResponsable`/`retirarVoluntariadoResponsable`/`ejecutarSorteoResponsable`/`listResponsables`, tabla `voluntariosResponsable`) y cliente (`Responsable.jsx`) probados E2E en navegador real
+- [x] `v2/domain/accumulate.js` — `accumulatedTally`: contaje acumulado por residente en SU año de residencia en curso (§4, decisión V-9/Fase 6.1), respeta el lookahead de doblete (C-1); usa `periodOn` (nuevo en `residents.js`, misma semántica que `levelOn` pero devuelve el periodo completo). Backend: acción `listAsignacionesRango` (rango de fechas ISO, cruza meses/años). Cliente: `Generator.jsx` inyecta contaje acumulado y bloqueos reales en el prompt portátil (antes decía "que conozcas por el contexto de esta conversación" sin datos); `comprobar()` pasa por fin `bloqueos` a `validateMonth` (antes INV-5/6/7 nunca se comprobaban desde el Generador). Bug real preexistente desde la Fase 4 encontrado al diseñar la 6.1 (no en el propio código nuevo): `Calendar.jsx` tampoco cumplía el contrato C-2 (INV-7 solo veía las asignaciones del mes validado, nunca las de un mes anterior de una rotación en curso) — corregido junto con el mismo fix en el Generador. Cerrada con una puerta de consistencia de 4 agentes (normativa, referencias colgantes, cobertura de tests, UI) que encontró y corrigió 4 fallos reales antes de cerrar: `Generator.jsx` duplicaba las asignaciones del día 1-2 del mes en `comprobar()` (el histórico se pide con lookahead hasta 2 días dentro del mes nuevo para el doblete de borde, pero se reusaba sin recortar); el `desde` del histórico en `Generator.jsx` se calculaba por aniversario del residente en vez de por la fecha real del bloqueo ROTACION (podía no alcanzar lo bastante atrás); un fallo de red al cargar bloqueos/histórico en el Generador dejaba la pantalla operativa en silencio (INV-5 podía no comprobarse nunca sin avisar); y una condición de carrera en `Calendar.jsx` si se cambiaba de mes a mitad de una validación en vuelo (ahora ◀/▶ se deshabilitan mientras `validando`)
+- [x] `v2/domain/cuadrante.js` — `canValidate`/`canPublish`/`canUnpublish`/`canEdit`/`stateAfterEdit`: ciclo de estados BORRADOR→VALIDADO→PUBLICADO (§2, decisión V-10, Fase 6.2), 9 tests. `v2/domain/validate.js` gana `buildMonthContext` (ensambla el ctx de `validateMonth` — una sola vez, reusada por Calendar.jsx/Generator.jsx/router.js en vez de reimplementar la misma forma de objeto tres veces). Backend: tabla `cuadrantes` (append-only, `readLatest` por mes|anio, sin fila = BORRADOR implícito), acciones `estadoCuadrante`/`marcarValidado`/`publicarCuadrante`/`despublicarCuadrante` (las 3 últimas solo Responsable en mandato; `marcarValidado` **revalida en el servidor** contra el store, nunca confía en el `violaciones` que calculó el cliente), `guardarAsignaciones` ahora bloquea ediciones de un mes PUBLICADO y revierte VALIDADO→BORRADOR al guardar. Cliente: `Calendar.jsx` muestra el estado (badge + botones Validar/Publicar/Despublicar, solo Responsable) y bloquea la rejilla si PUBLICADO; `Generator.jsx` bloquea "Aplicar" igual. 30 tests nuevos (9 dominio + 17 router + 1 api.js + 3 buildMonthContext). Cerrada con una puerta de consistencia de 8 agentes en paralelo (línea a línea, comportamiento eliminado, cross-file, reuse, simplificación, eficiencia, altitud, convenciones) que encontró y corrigió: nombres de función en español violando S-7 (`puedeValidar`→`canValidate` etc.); `Calendar.jsx`/`Generator.jsx` reimplementaban inline la misma regla que ya vivía en el dominio nuevo (ahora la importan); `router.js` reconstruía a mano el ctx de `validateMonth` tres veces (ahora `buildMonthContext` compartido) y repetía el guard de rol/mes-anio/escritura de transición en 3-4 sitios (extraído a `requireResponsable`/`validCuadranteMesAnio`/`writeCuadranteEstado`); `guardarAsignaciones` partía la fecha a mano (`slice`+`split`) en vez de `parseISO`, lo que dejaba pasar fechas imposibles sin aviso claro; un fallo de red al comprobar `estadoCuadrante` se asumía silenciosamente como BORRADOR en ambas pantallas (mismo patrón de bug que ya se había corregido en 6.1, reintroducido aquí — ahora bloquea la edición y avisa); en `Calendar.jsx`, el botón Publicar no se deshabilitaba mientras había una validación en vuelo (carrera con `marcarValidado`), y `cicla()` (editar celda) no se bloqueaba durante un guardado en curso (podía perder una edición en silencio); validar con cambios sin guardar podía disparar `marcarValidado` sobre datos del servidor distintos de lo que mostraba la pantalla (ahora se omite si hay cambios pendientes). Evaluado y NO corregido (mismo criterio que Fase 6.1): la relectura de `asignaciones`/`bloqueos` en `marcarValidado` duplica una lectura que el cliente ya hizo en una petición separada momentos antes — inherente a que el servidor revalida por su cuenta y nunca confía en el cliente, magnitud irrelevante frente a la latencia de Apps Script/Sheets a esta escala (~15 usuarios)
+- [x] `v2/domain/projection.js` — proyección a Sheets legible (Fase 7.1, decisión V-11): `buildMonthSheetRows` (pestaña "YYYY-MM": código día a día como valor + totales G/GF/GP/3P/Total/Fines de Semana/Dobletes V-D como fórmulas COUNTIF/SUMPRODUCT locales a la propia fila, mismo idioma que "Cuadrante Anual" del .xlsm legado) y `buildResumenRows` (hoja "Resumen": SUMIF encadenado cruzando TODAS las pestañas mensuales publicadas por nombre de hoja + MAXIFS/MINIFS de equidad por cohorte de ingreso), 23 tests. El doblete V-D solo empareja viernes/domingo DENTRO del propio mes (nunca ve la pestaña siguiente) — misma limitación que ya tenía el .xlsm, aceptada en S-5/§4, no corregida aquí a propósito. Backend: `router.js`, acción `publicarCuadrante` ahora proyecta de verdad (`store.rebuildSheet`, ya implementado en Fase 2 pero sin invocador hasta esta fase) ANTES de escribir el estado PUBLICADO — un fallo de la API de Sheets deja el cuadrante intacto en VALIDADO, nunca un PUBLICADO fantasma; `despublicarCuadrante` no toca ninguna pestaña (V-11b). 7 tests nuevos de router (proyección real con valor exacto de celda, asignación de otro mes no se filtra, acumulación de Resumen a través de 2 meses, fallo de Sheets no persiste el estado, fallo específico de Resumen tras mensual ya escrito, reintento tras fallo sana del todo). `build/build-gas.mjs` (`DOMAIN_MODULES`) y `server/Code.gs` (`deps.domain`) actualizados; `server/domain.gs` regenerado. **Código completo, sin verificar en vivo**: no hay Sheet real hasta que llegue el acceso a la cuenta del servicio (mismo bloqueo que dejó pendiente 2.6) — la corrección de las fórmulas SUMPRODUCT/MAXIFS está probada por igualdad de texto contra fórmulas construidas a mano, no por ejecución real en Google Sheets. Contaje Trimestral (la 3ª pieza de "Resumen/Contaje" del plan) queda para una Fase 7.2 aparte (V-11d). Cerrada con una puerta de consistencia de 4 agentes en paralelo (lógica/fórmulas, integración en router, cobertura de tests, documentación) que encontró y corrigió un bug real: `buildMonthSheetRows` no excluía las guardias cedidas/compradas (`origen`) de los totales, contradiciendo `tally.js`/INV-4 (una guardia cedida contaba igual que una propia en G/GF/GP/Total/Fines de Semana/Dobletes, y ese Total inflado se arrastraba a "Resumen" por SUMIF, distorsionando también la equidad) — ahora se marca con "*" en la celda (p.ej. "G*") para que COUNTIF/SUMPRODUCT la excluyan sin cambiar las fórmulas; el 3P NO se marca (tally.js lo cuenta siempre, con independencia del origen). Además: `buildResumenRows` deduplica `publishedMonths` (defensivo, ningún invocador actual lo dispara). Limitaciones evaluadas y NO corregidas (documentadas en el código): el SUMIF de "Resumen" cruza por nombre de residente, no por id — dos homónimos activos el mismo mes mezclarían sus totales, mismo riesgo que ya tenía el .xlsm legado; si `rebuildSheet` falla en "Resumen" tras haber tenido éxito en la pestaña mensual, esta queda con un adelanto visible mientras el cuadrante sigue en VALIDADO (nunca PUBLICADO) hasta el siguiente "Publicar" con éxito, que repara ambas pestañas — ventana estrecha, de bajo impacto frente a la complejidad de una transacción conjunta a esta escala (~15 usuarios)
+
+- [x] `server/src/sheets-schema.js` — nuevo tipo de columna `"date"` (bug real de primer uso en vivo, 2026-07-21, tras conceder acceso a la cuenta del servicio): Google Sheets detecta un string `"YYYY-MM-DD"` y convierte la celda a tipo Fecha interno; `SpreadsheetApp.getValues()` devuelve entonces un `Date` real, no el string original, y `deserialize` hacía `String(fecha)` esperando ya-texto — producía basura tipo `"Tue May 07 2024 00:00:00 GMT+0200..."` que rompía `parseISO` en cascada (pantalla en blanco). Se manifestó en la primera alta autoservicio real (residentes.fechaInicio) pero afectaba a las 8 columnas de fecha del esquema por igual — ningún test lo detectó antes porque el `ss` falso de los tests nunca simula la autoconversión de tipos de Sheets. Fix: `serialize` prefija con apóstrofe (fuerza texto plano en Sheets, invisible tras guardar); `deserialize` recupera `"YYYY-MM-DD"` tanto de un `Date` real (getters LOCALES, no UTC — Apps Script corre con el huso horario del proyecto, el mismo que ancló la medianoche de esa celda) como del string con apóstrofe (el `ss` falso no simula el despojo de Sheets). 4 tests nuevos. Columnas marcadas `"date"`: residentes/periodos.fechaInicio/fechaFin, bloqueos.desde/hasta, asignaciones.fecha, responsables.periodoInicio/periodoFin/fechaSorteo, voluntariosResponsable.periodoInicio, sorteos.fecha, cuadrantes.fecha. **Verificado en vivo el mismo día** (2026-07-21): el autor repegó `server-lib.gs`, desplegó nueva versión, y confirmó que el login/alta ya funciona correctamente contra el Sheet real — el `Date` que ya estaba corrompido se autorreparó solo al releer, sin tocar la celda a mano
+
+**Núcleo de dominio (invariantes de mes y de cierre): 151 tests en verde, cero dependencias, cero I/O.**
+Lagunas conocidas y aplazadas con su fase, tras la puerta de consistencia (§5: INV-12/13). Fuera
+del núcleo puro (proceso, Fase 2+): comunicación trimestral a tutoría y envío del cuadrante a
+Coordinación (Raquel); responsabilidad del busca del Pequeño; distribución de tareas intra-guardia.

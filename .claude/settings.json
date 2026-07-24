@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test *)",
+      "Bash(npm run build)",
+      "Bash(node --test server/test/router-cuadrante.test.js *)",
+      "Bash(node --test v2/domain/test/validate.test.js *)",
+      "Bash(node --test v2/domain/test/projection.test.js *)",
+      "Bash(node --test client/lib/test/api.test.js *)",
+      "mcp__Claude_Browser__read_page",
+      "mcp__Claude_Browser__get_page_text",
+      "mcp__Claude_Browser__read_console_messages",
+      "mcp__Claude_Browser__read_network_requests",
+      "mcp__Claude_Browser__find",
+      "mcp__Claude_Browser__preview_logs"
+    ]
+  }
+}

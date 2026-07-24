@@ -1,0 +1,10 @@
+{
+  "name": "guardias-app",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "node build/build-gas.mjs",
+    "test": "node --test 'v2/domain/test/*.test.js' 'server/test/*.test.js' 'client/lib/test/*.test.js'"
+  }
+}
