@@ -53,14 +53,34 @@ test("INV-1: 3P no cuenta como puesto (Mayor+Pequeño+3P es válido)", () => {
   assert.equal(only(v, "INV-1").length, 0);
 });
 
-test("INV-1: día con solo Mayor → falta el Pequeño", () => {
+test("INV-1: día con solo Mayor → aviso, no error (decisión V-12: infra-cobertura admisible)", () => {
   // julio: día 31 solo ANA
   const asgs = coverMonth(7, 2026, 31, [asg("ANA", "2026-07-31", "G")]); // ELENA no asignada ese día
   const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA], asignaciones: asgs });
   const i1 = only(v, "INV-1");
   assert.equal(i1.length, 1);
   assert.equal(i1[0].fecha, "2026-07-31");
+  assert.equal(i1[0].severidad, "aviso");
   assert.match(i1[0].detalle, /peque/i);
+});
+
+test("INV-1: día con solo Pequeño → aviso, falta el Mayor (V-12)", () => {
+  const asgs = coverMonth(7, 2026, 31, [asg("ELENA", "2026-07-31", "G")]); // ANA no asignada ese día
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA], asignaciones: asgs });
+  const i1 = only(v, "INV-1");
+  assert.equal(i1.length, 1);
+  assert.equal(i1[0].fecha, "2026-07-31");
+  assert.equal(i1[0].severidad, "aviso");
+  assert.match(i1[0].detalle, /mayor/i);
+});
+
+test("INV-1: día sin nadie de guardia (0 personas) sigue siendo error duro, no se degrada a aviso", () => {
+  const asgs = coverMonth(7, 2026, 31, [asg("ANA", "2026-07-31", "3P")]); // 3P no cuenta como puesto: ese día queda sin nadie de guardia
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA], asignaciones: asgs });
+  const i1 = only(v, "INV-1");
+  assert.equal(i1.length, 1);
+  assert.equal(i1[0].fecha, "2026-07-31");
+  assert.equal(i1[0].severidad, "error");
 });
 
 test("INV-1: febrero de 28 días no inventa violaciones en días fantasma", () => {

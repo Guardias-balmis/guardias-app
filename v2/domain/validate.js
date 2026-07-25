@@ -123,12 +123,20 @@ export function validateMonth(ctx) {
 
     if (mayores.length === 1 && pequenos.length === 1) continue; // día correcto
 
-    // Cualquier otra combinación es INV-1
+    if (mayores.length + pequenos.length === 1) {
+      // Infra-cobertura puntual admisible (decisión V-12): comida de Navidad, despedida de
+      // R4, sobrecarga con rotantes externos u otra circunstancia real — cubrir con 1 sola
+      // persona no bloquea, pero se avisa para que el Responsable confirme que fue
+      // intencionado. 0 personas ese día sigue sin ser admisible (cae al caso general).
+      const faltante = mayores.length === 1 ? "Pequeño" : "Mayor";
+      violations.push(aviso("INV-1", `Guardia del ${fecha} cubierta por 1 sola persona (falta el puesto de ${faltante})`, { fecha }));
+      continue;
+    }
+
+    // Cualquier otra combinación (0 personas cubriendo, o 2+ en composición incorrecta) es INV-1 duro
     let detalle;
     if (mayores.length >= 2) detalle = `Dos o más Residentes Mayores el ${fecha}; falta el puesto de Pequeño`;
     else if (pequenos.length >= 2) detalle = `Dos Residentes Pequeños el ${fecha} (la excepción 2×R2 exige que ambos sean R2)`;
-    else if (mayores.length === 0 && pequenos.length === 1) detalle = `Falta el puesto de Residente Mayor el ${fecha}`;
-    else if (pequenos.length === 0 && mayores.length === 1) detalle = `Falta el puesto de Residente Pequeño el ${fecha}`;
     else detalle = `Día ${fecha} sin cubrir con exactamente 1 Mayor y 1 Pequeño (mayores=${mayores.length}, pequeños=${pequenos.length})`;
     violations.push(err("INV-1", detalle, { fecha }));
   }
