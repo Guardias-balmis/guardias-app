@@ -19,6 +19,7 @@ npm run build                                     # node build/build-gas.mjs —
 node --test v2/domain/test/validate.test.js       # single domain test file (swap filename: tally.test.js, equity.test.js, ...)
 node --test 'v2/domain/test/*.test.js'            # domain layer only
 node --test 'v2/domain/test/*.test.js' 'server/test/*.test.js'   # domain + server (bundle-parity-sensitive changes)
+node --test test/docs-trazabilidad.test.js        # spec.md §5/§8 vs docs/ traceability gate (see below)
 
 node server/dev-server.mjs                        # local full-stack dev: serves client + real router.js over an in-memory store,
                                                    # with faked Google token verification (dev:<email>:<nonce>) — port 8787
@@ -72,6 +73,34 @@ Two rules this creates, both easy to violate without an obvious error:
 `client/config.js` holds `EXEC_URL` and `GOOGLE_CLIENT_ID` as committed, non-secret constants (by design — zero secrets in the browser); treat edits to it as deploy-affecting, not routine config. Session tokens live in `sessionStorage` under `guardias_session` (never `localStorage`, so they clear on tab close). `client/lib/api.js` sends every request as a CORS "simple request" (`Content-Type: text/plain`, `credentials: "omit"`, identity as a bearer value inside the JSON body) specifically to avoid an OPTIONS preflight that Apps Script cannot answer — don't add an `Authorization` header or custom content type. `callBackend` never throws; all failures normalize to `{ok:false, error}`.
 
 One more anti-regression convention specific to this layer: assignments are keyed by `residenteId`, never by resident name — `Calendar.jsx` has an explicit note against reintroducing that regression.
+
+## Where a business rule is allowed to come from
+
+`spec.md` is the single register of domain rules, and it has three parts that must not be confused:
+**§5** the invariants in force (`INV-1`..`INV-14`), **§5.1** where each one's authority comes from
+(a quoted passage of `docs/normativa.pdf`, or an explicit "extensión sin respaldo normativo"), and
+**§8** the queue of *proposed* rules that are not in force yet.
+
+Everything under `docs/` other than `normativa.pdf` and `adr/` is a **proposal**, not behaviour. A
+proposal does not introduce a rule; it adds a row to §8 citing the `INV-n` it touches. Only on
+reaching `aceptado` does §5 or `v2/domain/` change. Read §8 before implementing anything a `docs/`
+file describes — several of those documents contradict invariants that are already implemented and
+tested.
+
+`normativa.pdf` outranks everything, including this file and `spec.md` (§0 says so explicitly).
+When a proposal and an implemented invariant disagree, the question is not who wrote which, it is
+what the normativa says — and it does not always side with the code: §8 records two points (P-7, P-8)
+where it backs the proposal instead.
+
+`test/docs-trazabilidad.test.js` enforces the mechanical half of this and runs inside `npm test`:
+every `INV-n` cited in §8 exists in §5, every invariant in §5 has a procedencia in §5.1, every
+proposal has a valid state, and **no document cites a file that does not exist**. That last one is
+the important one: the `docs/` proposals were written with AI assistance and cite ten documents that
+have never existed in this repo (`VACATION_IMPACT_MODEL.md`, `DOMAIN_MODEL.md`, an "SRS", a
+`.docx` rule catalogue…). Citations generated for plausibility are the characteristic failure mode
+here — the existing ones are frozen as known debt in the test, and any new one fails the suite.
+The test checks traceability, never semantics: it cannot tell that weighted-points equity
+contradicts `dif ≤ 1`. That still needs a person.
 
 ## Branch / deploy model — two people push here concurrently
 

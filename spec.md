@@ -156,6 +156,59 @@ Estado: ✅ implementado y con test · ⏳ pendiente (fase indicada).
 | INV-13 | Imaginaria: dos listas rotatorias por grupo; la sustitución de una incidencia sale de la lista del grupo del incidente; una guardia de incidencia cedida/comprada NO descuenta de la imaginaria | evento | error | ⏳ pendiente (Fase 4-5; entidad no modelada aún) |
 | INV-14 | Responsable: nivel R3 en su periodo (enero→enero); método SORTEO solo sin voluntarios; sorteo reproducible | año | error | ✅ (Fase 5, decisión V-7) |
 
+### 5.1 Procedencia normativa de cada invariante
+
+Cada invariante declara de dónde sale su autoridad. Existe porque en julio de 2026 aparecieron en
+`docs/` ocho documentos de propuesta que discutían las mismas reglas sin citar ni una vez un `INV-n`,
+apoyándose en una numeración propia (`RN-nn`, `CN-nn`, `RF-nn`) y en documentos que no existen en el
+repo: era imposible saber si una propuesta corregía la normativa, la reinterpretaba o la ignoraba.
+Regla derivada: **una regla nueva se cita contra `docs/normativa.pdf`, o se declara explícitamente
+como extensión sin respaldo normativo** (decisión libre del autor, igual de legítima, pero marcada).
+Recordatorio de §0: si esta spec contradice la normativa, gana la normativa.
+
+- **INV-1** — normativa p.1 §Organización: «Hay dos puestos de guardia, uno de Residente Mayor (R3 y
+  R4) y otro de Residente Pequeño (R1 y R2). No puede haber dos residentes mayores ni dos pequeños,
+  salvo en las excepciones previstas en este documento». La degradación a aviso del día cubierto por
+  1 sola persona es decisión V-12, no normativa.
+- **INV-2** — p.1: «el mínimo de guardias por residentes debe ser 4 y máximo de 6 guardias al mes»,
+  con el «salvo excepciones (por ejemplo febrero o vacaciones)» que funda la exención.
+- **INV-3** — p.1 funda tres ejes: «diferencia máxima de 1 guardia total, 1 fin de semana y 1
+  festivo»; **prefestivos** sale del recuento exigido en p.1 («totales, fines de semana, prefestivos
+  y festivos»); **dobletes** de p.1 («un número equivalente de fines de semana dobles […] diferencia
+  máxima de 1»); **puentes libres** de p.4 («un número equivalente de puentes libres, con una
+  diferencia máxima de 1»). La ventana «año de residencia» es literal de p.2.
+- **INV-4** — p.2: «El conteo anual no incluye: tercer puesto de guardia ni guardias
+  cedida/comprada».
+- **INV-5** — **sin cita literal.** La normativa solo trata la baja en la nota [a] de p.2, y para
+  descontar disponibilidad («se descontará de forma proporcional»), no para prohibir la asignación.
+  Que BAJA bloquee es decisión V-5/V-8, fundada en seguridad y legalidad, no en la normativa.
+- **INV-6** — p.2: «no ausentarse más de dos residentes del mismo año simultáneamente, teniendo en
+  cuenta que no coincidan con periodo vacacional y siendo prioritarias sobre las vacaciones».
+- **INV-7** — p.2: «se deberá realizar al menos una de las guardias de viernes y sábado que
+  correspondan al periodo». ⚠️ **Redacción ambigua en la propia normativa**: «al menos una de las
+  guardias de viernes y sábado» admite leerse como *una de entre {viernes, sábado}* (disyunción) o
+  como *una de viernes y una de sábado* (conjunción). El código implementa la **conjunción**. Ver
+  P-6 en §8: es el único punto donde la ambigüedad es de la fuente y no de la interpretación.
+- **INV-8** — p.2-3: voluntariedad («será siempre voluntario»), lista rotatoria L-D antes de repetir
+  día (con el ejemplo del domingo), «la diferencia máxima de 3.º puestos acumulados entre estos
+  voluntarios no supere 1 al final del año de residencia», y la prioridad de mochila: «Los Residentes
+  que hagan tercer puesto siempre deben cubrir primero los días que haya un R1».
+- **INV-9** — p.3: «a partir de diciembre-enero, nunca antes», «carácter excepcional y deberán estar
+  justificadas por necesidades organizativas objetivas», y el cierre de equidad «no difiera en más
+  de 1 respecto a sus compañeros del mismo año».
+- **INV-10** — p.3: «Se cubrirá por dos R2, a sorteo, salvo que alguien no quiera acudir […] Los
+  designados para Navidad estarán libres en la despedida».
+- **INV-11** — p.1: «En junio, julio y agosto, dado que se organizan sin los R1, el recuento se hará
+  en el grupo de Residentes pequeños (R1 y R2), entre los residentes del mismo año, de manera que no
+  superará 1 guardia de diferencia».
+- **INV-12** — **sin cita literal.** La normativa no define coherencia código↔festivo en ninguna
+  parte; es una comprobación de consistencia interna derivada de S-4 (los festivos son datos de
+  entrada). Extensión sin respaldo normativo, aplazada.
+- **INV-13** — p.4: «Se dispone de dos listas de Imaginaria. Una para residentes mayores y otra para
+  residentes pequeños […] La cesión/compra de guardia de incidencia NO descuenta de la imaginaria».
+- **INV-14** — p.2: «recae sobre un R3 de enero a enero de R4 […] Está designado por sorteo en
+  ausencia de voluntarios».
+
 ### Contratos del validador (verificados por la puerta de consistencia)
 - **C-1 (lookahead de dobletes, ref. S-5):** cualquier cómputo mensual de `dobletes` que luego se sume
   (p. ej. la proyección a Sheets de la Fase 7, o los acumulados de `equity`) debe pasar a `tally` las
@@ -212,3 +265,57 @@ Estado: ✅ implementado y con test · ⏳ pendiente (fase indicada).
 Lagunas conocidas y aplazadas con su fase, tras la puerta de consistencia (§5: INV-12/13). Fuera
 del núcleo puro (proceso, Fase 2+): comunicación trimestral a tutoría y envío del cuadrante a
 Coordinación (Raquel); responsabilidad del busca del Pequeño; distribución de tareas intra-guardia.
+
+## 8. Registro de propuestas
+
+Cola única de reglas propuestas y **no** vigentes. Existe porque los ocho documentos de `docs/`
+(julio 2026, autoría de Agustín) proponen reglas de negocio sin citar ningún `INV-n`, de modo que
+nadie podía saber si una propuesta corregía un invariante, lo ampliaba o lo desconocía. Un documento
+de `docs/` **no introduce una regla**: propone una fila aquí, y solo al pasar a `aceptado` se toca
+§5 o el dominio.
+
+Estados: `propuesto` (sin decidir) · `aceptado` (decidido, sin implementar) · `implementado` ·
+`rechazado` (decidido en contra; se registra para que no vuelva a proponerse sin datos nuevos).
+
+| # | Propuesta | Origen | Toca | Respaldo en `normativa.pdf` | Estado |
+|---|---|---|---|---|---|
+| P-1 | Medir la equidad con un **índice de puntos ponderados** (pesos por tipo de día, decimales) en lugar de contadores enteros | `EQUITY_SYSTEM.md`, `reglas-equidad-descanso.md`, `impacto-descanso-pesos-propuestos.md` | INV-3, INV-4 | **En contra.** p.1 y p.2 fijan «diferencia máxima de 1» sobre cada eje por separado, y el umbral 1 solo tiene sentido sobre guardias enteras | `propuesto` |
+| P-2 | Tratar **vacaciones y rotación como bloqueo DURO** que impide asignar guardia | `casos-de-prueba-validador.md` (D1), `paquete-generacion-prompt.md` | INV-5, V-8 | **Ausente.** p.2 hace la rotación «prioritaria sobre las vacaciones» pero nunca prohíbe asignar guardia en esos días | `propuesto` |
+| P-3 | Redefinir la **«mochila» del R1** como un tercero que cubre al R1 | `reglas-equidad-descanso.md`, `EQUITY_SYSTEM.md`, `GUARD_COMPOSITION_RULES.md`, `paquete-generacion-prompt.md` | INV-8, INV-1 | **En contra.** p.3 es literal: «Los Residentes que hagan tercer puesto siempre deben cubrir primero los días que haya un R1» | `propuesto` |
+| P-4 | Comparar la equidad **fuera de la cohorte** (R4 con R3) | `EQUITY_SYSTEM.md` (§4), `reglas-equidad-descanso.md` | INV-3, V-2 | **En contra.** «del mismo año formativo» / «del mismo año» aparece cinco veces (p.1, p.2, p.3, p.4) | `propuesto` |
+| P-5 | Mochila del R1 activa de **junio a diciembre** | `EQUITY_SYSTEM.md`, `GUARD_COMPOSITION_RULES.md`, `paquete-generacion-prompt.md` | INV-11, INV-2 | **En contra.** p.1: «En junio, julio y agosto, dado que se organizan sin los R1» | `propuesto` |
+| P-6 | Leer INV-7 como **viernes _o_ sábado** en vez de viernes _y_ sábado | `casos-de-prueba-validador.md` (D3) | INV-7 | **Ambiguo en la fuente.** p.2 dice «al menos una de las guardias de viernes y sábado», que admite ambas lecturas | `propuesto` |
+| P-7 | **Un cuadrante independiente por grupo** (Mayores y Pequeños) en vez de uno único mensual | `casos-de-prueba-validador.md` (G3/CO2) | INV-1, V-9, V-10, V-11 | **A favor.** p.1: «Los residentes se dividen en 2 grupos […] Cada grupo organizará las guardias de forma independiente al otro […] Cada grupo elaborará un cuadrante provisional» | `propuesto` |
+| P-8 | Comprobar la equidad también **al cierre de cada trimestre**, no solo del año de residencia | `EQUITY_SYSTEM.md`; ya previsto como Fase 7.2 | INV-3 | **A favor.** p.2: «una vez cerrado el cuadrante trimestral, la diferencia de número de guardias entre residentes del mismo año no supere 1» | `propuesto` |
+| P-9 | Catálogo cerrado de **tipos de guardia y horarios** (`TipoGuardia`, retribución, tramos) | `GUARD_SHIFT_TIME_RULES.md` | T-1, S-4, INV-12 | **Ausente.** La normativa no menciona horarios, tramos ni retribución en ninguna de sus 4 páginas: extensión sin respaldo normativo, decisión libre del autor | `propuesto` |
+
+### 8.1 Las tres que no puede zanjar la normativa
+
+**P-6 (ambigüedad real de la fuente).** Es el único punto donde la ambigüedad está en la normativa y
+no en su lectura. El código exige conjunción (una de viernes **y** una de sábado), que es la lectura
+más exigente y la coherente con el propósito declarado en la misma frase («para evitar la sobrecarga
+del resto del grupo»). Si se adopta la disyunción, INV-7 se relaja y hay que reescribir sus tests.
+Se resuelve preguntando a tutoría, no leyendo el PDF otra vez.
+
+**P-7 y P-8 (la normativa respalda la propuesta, no el código).** Son las dos donde el contraste dio
+la razón a `docs/` y no a `v2/domain`. P-7 es la más profunda: el ciclo BORRADOR→VALIDADO→PUBLICADO
+(V-9/V-10) y la proyección a Sheets (V-11) asumen **un** cuadrante mensual, mientras la normativa
+describe dos organizados por separado. No es un cambio de umbral, es un cambio de la unidad sobre la
+que operan las Fases 6 y 7 — decidir antes de seguir construyendo encima. P-8 ya estaba prevista
+como Fase 7.2, así que solo falta reconocer que su autoridad es normativa y no un extra opcional.
+
+### 8.2 Referencias documentales inexistentes
+
+Los documentos de `docs/` citan como fuentes vigentes al menos diez artefactos que **nunca han
+existido en este repo** (verificado con `git log --all --diff-filter=A`, no solo con `ls`):
+`VACATION_IMPACT_MODEL.md`, `DOMAIN_MODEL.md`, `DOMAIN_DESIGN_CALENDARIO.md`,
+`DOMAIN_DESIGN_PLANIFICACION.md`, `FLEXIBLE_COHORTS_REVIEW.md`, `INSTITUTIONAL_CONTINUITY.md`,
+`Reglas_de_Negocio_App_Guardias.docx`, un «SRS», un «Diseño Técnico del Motor de Planificación» y un
+«Diseño de Base de Datos» — más las entidades `ParametroConfiguracion` y `BalanceEquidadHistorico`,
+que se dan por modeladas y no están en las 9 tablas de `server/src/sheets-schema.js`.
+
+Son citas generadas por plausibilidad al redactar con asistencia de IA, no documentos perdidos. El
+problema práctico: `EQUITY_SYSTEM.md` construye todo su índice sobre un «RN-24» que nadie puede
+leer, así que **esas afirmaciones no son auditables por nadie**, ni hoy ni dentro de diez años.
+`test/docs-trazabilidad.test.js` congela la lista como deuda conocida y falla ante cualquier
+referencia **nueva** a un fichero que no exista.
