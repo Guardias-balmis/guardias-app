@@ -10,6 +10,8 @@ import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "../../v2/domain/validate.js";
 import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, validateQuarterClose, quarterCloseWindow } from "../../v2/domain/equity.js";
+import { groupOnDate } from "../../v2/domain/residents.js";
+import { eligibleCandidates } from "../../v2/domain/responsible.js";
 import { parseISO } from "../../v2/domain/calendar.js";
 import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
 import { buildMonthSheetRows, buildResumenRows } from "../../v2/domain/projection.js";
@@ -55,6 +57,7 @@ function makeDeps(overrides = {}) {
     domain: {
       validateMonth, buildMonthContext, rotationHistoryStart, parseISO,
       validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, validateQuarterClose, quarterCloseWindow,
+      groupOnDate, eligibleCandidates,
       canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, buildMonthSheetRows, buildResumenRows,
     },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
@@ -408,4 +411,77 @@ test("marcarValidado: un mes que no cierra trimestre ni año no comprueba ningú
   const r = call({ action: "marcarValidado", session, mes: 10, anio: 2027 }, deps);
   assert.equal(r.ok, true);
   assert.equal(r.violaciones.filter((v) => v.invariante === "INV-3").length, 0);
+});
+
+
+// --- Permiso del ciclo sin Responsable designado (decisión V-16) -----------------------------
+// La regla base sigue siendo "lo mueve el Responsable en mandato". Lo nuevo: si NADIE tiene el
+// mandato vigente, el ciclo no se queda bloqueado — lo puede mover cualquier Mayor (R3/R4 hoy).
+// `today` de estos tests es 2027-07-16, cuando RESP y OTRO (alta 2024-05-27) son R4.
+
+/** Igual que makeDeps pero con la tabla de responsables VACÍA: nadie tiene el mandato. */
+function makeDepsSinMandato() {
+  const deps = makeDeps();
+  const ss = deps.ss;
+  ss.overwrite("responsables", [headerOf(TABLES.responsables)]);
+  return deps;
+}
+
+test("V-16 sin mandato vigente: un Mayor puede validar aunque no sea Responsable", () => {
+  const deps = stubClean(makeDepsSinMandato());
+  const session = loggedInAs(deps, "otro@gmail.com"); // Óscar, R4 en 2027-07-16, sin mandato
+  assert.equal(call({ action: "whoami", session }, deps).rol, "residente", "no se le llama Responsable");
+  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "VALIDADO");
+});
+
+test("V-16 sin mandato vigente: un Pequeño NO puede validar", () => {
+  const deps = stubClean(makeDepsSinMandato());
+  deps.store.appendRecord("residentes", { id: "peque-1", nombre: "Pepa", email: "peque@gmail.com", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }); // R2 en 2027-07-16
+  const session = loggedInAs(deps, "peque@gmail.com");
+  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /solo un R3 o R4/);
+  assert.equal(call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "BORRADOR");
+});
+
+test("V-16 sin mandato vigente: un Mayor también puede publicar y despublicar", () => {
+  const deps = stubClean(makeDepsSinMandato());
+  const session = loggedInAs(deps, "otro@gmail.com");
+  call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-05", residenteId: "otro-1", codigo: "G" }] }, deps);
+  call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "PUBLICADO");
+  assert.equal(call({ action: "despublicarCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "VALIDADO");
+});
+
+test("V-16: CON mandato de otra persona, un Mayor sigue sin poder (la excepción es solo la ausencia)", () => {
+  const deps = stubClean(makeDeps()); // el mandato 2027 es de resp-1
+  const session = loggedInAs(deps, "otro@gmail.com"); // Óscar es R4, pero no es el titular
+  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /solo el Responsable/);
+});
+
+test("estadoCuadrante informa de si hay Responsable designado (lo usa el cliente para avisar)", () => {
+  const conMandato = stubClean(makeDeps());
+  const s1 = loggedInAs(conMandato, "resp@gmail.com");
+  assert.equal(call({ action: "estadoCuadrante", session: s1, mes: 7, anio: 2027 }, conMandato).sinResponsable, false);
+
+  const sinMandato = stubClean(makeDepsSinMandato());
+  const s2 = loggedInAs(sinMandato, "resp@gmail.com");
+  assert.equal(call({ action: "estadoCuadrante", session: s2, mes: 7, anio: 2027 }, sinMandato).sinResponsable, true);
+});
+
+test("estadoResponsable devuelve también el periodo SIGUIENTE (voluntariado abierto por adelantado)", () => {
+  const deps = makeDeps();
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = call({ action: "estadoResponsable", session, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(r.periodoInicio, "2027-01-01");
+  assert.equal(r.siguiente.anio, 2028);
+  assert.equal(r.siguiente.periodoInicio, "2028-01-01");
+  assert.equal(r.siguiente.mandato, null); // sin decidir
+  assert.deepEqual(r.siguiente.voluntarios, []);
+  assert.equal(r.siguiente.meHeOfrecido, false);
 });

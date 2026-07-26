@@ -5,6 +5,7 @@ import { defaultTrainingPeriods, levelOn } from "./v2/domain/residents.js";
 import { addDays, addYears } from "./v2/domain/calendar.js";
 import { todayISO } from "./client/lib/dates.js";
 
+const { useState, useEffect } = React;
 const { Card, QuickCard } = window.UI;
 
 function nivelDe(residente) {
@@ -15,6 +16,22 @@ function nivelDe(residente) {
 function HomeScreen() {
   const app = window.useApp();
   const { auth, residentes, myResidente, nivel, setTab } = app;
+
+  // Invitación al voluntariado del PRÓXIMO mandato de Responsable (decisión V-16). Se pide aparte
+  // y sin bloquear la pantalla: si falla, Inicio se muestra igual sin la tarjeta. Solo aparece
+  // para quien puede actuar de verdad —elegible, mandato sin decidir y no ofrecido aún—, así que
+  // se apaga sola en cuanto se ofrece o se decide: un aviso que no se puede atender es ruido.
+  const [proximoMandato, setProximoMandato] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const r = await app.api.estadoResponsable(new Date().getUTCFullYear());
+      if (!cancelled && r.ok) setProximoMandato(r.siguiente || null);
+    })();
+    return () => { cancelled = true; };
+  }, [myResidente?.id]);
+  const puedoOfrecerme = proximoMandato && !proximoMandato.mandato
+    && proximoMandato.elegibles.includes(myResidente?.id) && !proximoMandato.meHeOfrecido;
   const hoy = new Date();
   const nombreMes = hoy.toLocaleDateString("es-ES", { month: "long", year: "numeric" });
 
@@ -47,6 +64,18 @@ function HomeScreen() {
           </div>
         </div>
       </Card>
+
+      {puedoOfrecerme && (
+        <Card title={`🙋 Responsable del contaje ${proximoMandato.anio}`}>
+          <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 10 }}>
+            El mandato de {proximoMandato.anio} (enero a enero) todavía no tiene a nadie y tú eres
+            elegible. Si nadie se ofrece, se decide por sorteo entre todos los R3.
+          </div>
+          <button onClick={() => setTab("responsable")} style={{ background: COLOR.blue, color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+            Ofrecerme voluntario →
+          </button>
+        </Card>
+      )}
 
       <Card title="📅 Mes en curso">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>

@@ -150,15 +150,18 @@ export function handleRequest(rawBody, deps) {
           return { ok: true };
         });
 
+      // Devuelve el periodo pedido Y el SIGUIENTE en la misma respuesta: el mandato se decide
+      // antes de que empiece, así que quien puede ofrecerse necesita ver el año que viene sin
+      // tener que adivinar que existe un selector de año (decisión V-16).
       case "estadoResponsable":
         return authed(req, deps, (session) => {
           if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
-          const { periodoInicio, periodoFin } = mandatoPeriod(req.anio);
           const residentes = deps.store.readRecords("residentes");
-          const elegibles = deps.domain.eligibleCandidates(residentes, periodoInicio);
-          const voluntarios = activeVolunteers(deps, periodoInicio);
-          const mandato = currentMandate(deps, periodoInicio);
-          return { ok: true, periodoInicio, periodoFin, elegibles, voluntarios, meHeOfrecido: voluntarios.includes(session.sub), mandato };
+          return {
+            ok: true,
+            ...periodoResponsable(deps, req.anio, session, residentes),
+            siguiente: periodoResponsable(deps, req.anio + 1, session, residentes),
+          };
         });
 
       case "ofrecerseResponsable":
@@ -217,7 +220,10 @@ export function handleRequest(rawBody, deps) {
       case "estadoCuadrante":
         return authed(req, deps, () => {
           if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
-          return { ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio) };
+          // `sinResponsable` viaja aquí y no en una acción aparte porque el cliente ya llama a
+          // estadoCuadrante al abrir el mes: es lo que le permite avisar de que nadie tiene el
+          // mandato y habilitar el ciclo a un Mayor (decisión V-16) sin una petición de más.
+          return { ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio), sinResponsable: mandatoVigente(deps) === null };
         });
 
       // BORRADOR->VALIDADO (Fase 6.2, decisión V-9/V-10): solo el Responsable en mandato, y
@@ -226,7 +232,7 @@ export function handleRequest(rawBody, deps) {
       // cliente pueda falsear").
       case "marcarValidado":
         return authed(req, deps, (session) => {
-          const denegado = requireResponsable(session, "validar el cuadrante");
+          const denegado = requireCicloPermiso(deps, session, "validar el cuadrante");
           if (denegado) return denegado;
           const estadoActual = validCuadranteMesAnio(req, deps);
           if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
@@ -250,7 +256,7 @@ export function handleRequest(rawBody, deps) {
       // verdad. La proyección ocurre ANTES de escribir el estado: ver projectCuadranteToSheets.
       case "publicarCuadrante":
         return authed(req, deps, (session) => {
-          const denegado = requireResponsable(session, "publicar el cuadrante");
+          const denegado = requireCicloPermiso(deps, session, "publicar el cuadrante");
           if (denegado) return denegado;
           const estadoActual = validCuadranteMesAnio(req, deps);
           if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
@@ -262,7 +268,7 @@ export function handleRequest(rawBody, deps) {
 
       case "despublicarCuadrante":
         return authed(req, deps, (session) => {
-          const denegado = requireResponsable(session, "despublicar el cuadrante");
+          const denegado = requireCicloPermiso(deps, session, "despublicar el cuadrante");
           if (denegado) return denegado;
           const estadoActual = validCuadranteMesAnio(req, deps);
           if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
@@ -437,9 +443,38 @@ function writeCuadranteEstado(deps, session, mes, anio, estado) {
   deps.store.appendRecord("cuadrantes", { mes, anio, estado, actorId: session.sub, fecha: deps.today });
 }
 
-/** Exige que la sesión sea del Responsable en mandato (Fase 6.2, decisión V-9c); si no, el error a devolver. */
-function requireResponsable(session, accion) {
-  return session.rol === "responsable" ? null : { ok: false, error: `solo el Responsable puede ${accion}` };
+/** El mandato de Responsable que cubre `today`, o null si no hay ninguno vigente (INV-14). */
+function mandatoVigente(deps) {
+  return deps.store.readLatest("responsables", (r) => r.periodoInicio)
+    .find((m) => m.periodoInicio <= deps.today && deps.today < m.periodoFin) || null;
+}
+
+/**
+ * Permiso para mover el ciclo del cuadrante (validar/publicar/despublicar).
+ *
+ * Regla base (decisión V-9c): lo hace el Responsable en mandato. Añadido de la decisión V-16:
+ * si NO hay mandato vigente el ciclo no se queda bloqueado — cualquier residente Mayor (R3/R4
+ * a día de hoy, derivado de fechas como todo lo demás) puede moverlo, y el cliente avisa de que
+ * no hay Responsable designado. El motivo es el de siempre: la app tiene que funcionar sin
+ * administrador, y en algún enero de los próximos diez años nadie lanzará el sorteo. Un cuadrante
+ * que no se puede publicar porque falta una fila en una tabla es peor que uno publicado por el
+ * R4 que estaba delante.
+ *
+ * Ojo con `session.rol`: se calcula en el login y viaja firmado dentro del token, así que puede
+ * ser de hace horas. La existencia del mandato se relee AQUÍ del store en cada llamada — si el
+ * sorteo se resolvió a mitad de la sesión de alguien, el permiso deja de ser el de su token.
+ */
+function requireCicloPermiso(deps, session, accion) {
+  const mandato = mandatoVigente(deps);
+  if (mandato) {
+    return mandato.residenteId === session.sub ? null : { ok: false, error: `solo el Responsable puede ${accion}` };
+  }
+  const residente = deps.store.readRecords("residentes").find((r) => r.id === session.sub);
+  const grupo = residente ? deps.domain.groupOnDate(residente, deps.today) : null;
+  if (grupo !== "MAYOR") {
+    return { ok: false, error: `no hay Responsable designado para este periodo: hasta que se decida, solo un R3 o R4 puede ${accion}` };
+  }
+  return null;
 }
 
 /**
@@ -494,6 +529,23 @@ function projectCuadranteToSheets(deps, mes, anio) {
   return { mensual: mensual.sheetName, resumen: resumen.sheetName };
 }
 
+/**
+ * Estado del mandato de un periodo: quién es elegible (R3 en el 1 de enero, derivado), quién se
+ * ha ofrecido, si ya está decidido. Extraído porque `estadoResponsable` lo devuelve para dos
+ * periodos (el pedido y el siguiente) y reimplementarlo dos veces es cómo se desincronizan.
+ */
+function periodoResponsable(deps, anio, session, residentes) {
+  const { periodoInicio, periodoFin } = mandatoPeriod(anio);
+  const voluntarios = activeVolunteers(deps, periodoInicio);
+  return {
+    anio, periodoInicio, periodoFin,
+    elegibles: deps.domain.eligibleCandidates(residentes, periodoInicio),
+    voluntarios,
+    meHeOfrecido: voluntarios.includes(session.sub),
+    mandato: currentMandate(deps, periodoInicio),
+  };
+}
+
 /** Mandato enero→enero (INV-14) para el año dado: [YYYY-01-01, (YYYY+1)-01-01). */
 function mandatoPeriod(anio) {
   return { periodoInicio: `${anio}-01-01`, periodoFin: `${anio + 1}-01-01` };
@@ -524,7 +576,8 @@ function authed(req, deps, fn) {
  * una corrección posterior (misma clave), la fila vieja no debe seguir concediendo el rol.
  */
 function resolveRol(store, residenteId, today) {
-  const mandatos = store.readLatest("responsables", (r) => r.periodoInicio);
-  const activo = mandatos.some((m) => m.residenteId === residenteId && m.periodoInicio <= today && today < m.periodoFin);
-  return activo ? "responsable" : "residente";
+  // Una sola definición de "el mandato que cubre hoy": la comparten el rol del token y el
+  // permiso del ciclo (requireCicloPermiso), que si no podrían discrepar.
+  const mandato = mandatoVigente({ store, today });
+  return mandato && mandato.residenteId === residenteId ? "responsable" : "residente";
 }

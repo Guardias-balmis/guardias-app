@@ -18,14 +18,20 @@ import nodeCrypto from "node:crypto";
 import { handleRequest } from "./src/router.js";
 import { makeStore } from "./src/sheets-store.js";
 import { headerOf, TABLES, recordToRow } from "./src/sheets-schema.js";
-import { validateMonth, rotationHistoryStart, buildMonthContext } from "../v2/domain/validate.js";
-import { parseISO } from "../v2/domain/calendar.js";
-import { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible } from "../v2/domain/responsible.js";
-import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../v2/domain/cuadrante.js";
-import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, validateQuarterClose, quarterCloseWindow } from "../v2/domain/equity.js";
-// Proyección: sin esto, Publicar fallaba en el dev-server desde la Fase 7.1 (nadie lo notó
-// porque el fake store escribe pestañas en memoria y solo se probó contra el Sheet real).
-import { buildMonthSheetRows, buildResumenRows } from "../v2/domain/projection.js";
+// El dominio ENTERO, igual que `deps.domain = Domain` en Code.gs: con listas de funciones a
+// mano, el dev-server se quedaba corto respecto a producción y fallaba solo en local (le
+// faltaban buildMonthSheetRows/buildResumenRows desde la Fase 7.1 y nadie lo notó).
+import * as Calendar from "../v2/domain/calendar.js";
+import * as Residents from "../v2/domain/residents.js";
+import * as Tally from "../v2/domain/tally.js";
+import * as Accumulate from "../v2/domain/accumulate.js";
+import * as Thirdpost from "../v2/domain/thirdpost.js";
+import * as Equity from "../v2/domain/equity.js";
+import * as Validate from "../v2/domain/validate.js";
+import * as Responsible from "../v2/domain/responsible.js";
+import * as CuadranteEstados from "../v2/domain/cuadrante.js";
+import * as Projection from "../v2/domain/projection.js";
+const DOMAIN = Object.assign({}, Calendar, Residents, Tally, Accumulate, Thirdpost, Equity, Validate, Responsible, CuadranteEstados, Projection);
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = Number(process.argv[2] || 8787);
@@ -58,14 +64,13 @@ const SEED_RESIDENTES = [
   { id: "res-elena", nombre: "Elena Sansano", email: "elena@gmail.com", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" },
   { id: "res-ivan", nombre: "Iván Cortés", email: "ivan@gmail.com", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" },
 ];
-// Mandato del año en curso para Ana (era R3 el 1 de enero de 2026, como exige INV-14): sin una
-// fila aquí nadie tiene rol `responsable` en local y todo el ciclo VALIDADO/PUBLICADO —incluida
-// la confirmación de equidad de V-14— era imposible de probar sin tocar el store a mano.
-const ANIO_MANDATO = Number(new Date().toISOString().slice(0, 4));
-const SEED_MANDATO = { id: "mandato-dev", periodoInicio: `${ANIO_MANDATO}-01-01`, periodoFin: `${ANIO_MANDATO + 1}-01-01`, residenteId: "res-ana", metodo: "VOLUNTARIO" };
+// SIN mandato de Responsable a propósito: es el estado real de producción (nadie lo ha decidido)
+// y desde la decisión V-16 es el caso interesante — el ciclo VALIDADO/PUBLICADO tiene que seguir
+// siendo usable por un Mayor. El otro camino (con mandato) se prueba con el flujo real de la
+// Fase 5: Ana era R3 el 1 de enero, así que puede ofrecerse y lanzar el sorteo desde la app.
 const ss = memorySS({
   residentes: [headerOf(TABLES.residentes), ...SEED_RESIDENTES.map((r) => recordToRow(TABLES.residentes, r))],
-  responsables: [headerOf(TABLES.responsables), recordToRow(TABLES.responsables, SEED_MANDATO)],
+  responsables: [headerOf(TABLES.responsables)],
   voluntariosResponsable: [headerOf(TABLES.voluntariosResponsable)],
   asignaciones: [headerOf(TABLES.asignaciones)],
   preferencias: [headerOf(TABLES.preferencias)],
@@ -84,13 +89,7 @@ function deps() {
     now, today: new Date().toISOString().slice(0, 10),
     clientId: DEV_CLIENT_ID, sessionSecret: "dev-secret-no-usar-en-produccion", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => nodeCrypto.randomUUID() }),
-    domain: {
-      validateMonth, buildMonthContext, rotationHistoryStart, parseISO,
-      validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, validateQuarterClose, quarterCloseWindow,
-      eligibleCandidates, resolveMethod, drawResponsible, validateResponsible,
-      canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit,
-      buildMonthSheetRows, buildResumenRows,
-    },
+    domain: DOMAIN,
     newSeed: () => nodeCrypto.randomUUID(),
     issueNonce: () => { const n = nodeCrypto.randomUUID(); nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
@@ -112,7 +111,10 @@ window.google = { accounts: { id: {
   initialize(cfg) { window.__devGisCfg = cfg; },
   renderButton(el) {
     const cfg = window.__devGisCfg;
-    const users = ["ana@gmail.com (ya vinculada)", "nueva@gmail.com (SIN vincular — prueba el alta)"];
+    // Varios residentes a propósito: el nivel se deriva de fechas, así que entrar como Ana (R4),
+    // Carlos (R3) o Elena (R2) es la única forma de probar en local lo que ve cada grupo —
+    // permisos del ciclo (V-16), elegibilidad del mandato (INV-14), avisos por nivel.
+    const users = ["ana@gmail.com (R4)", "carlos@gmail.com (R3)", "elena@gmail.com (R2)", "nueva@gmail.com (SIN vincular — prueba el alta)"];
     el.innerHTML = "";
     users.forEach((label) => {
       const email = label.split(" ")[0];

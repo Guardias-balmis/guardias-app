@@ -240,6 +240,28 @@ function isActiveOn(periods, iso) {
 }
 
 /**
+ * Periodos de un RESIDENTE (no de una lista de periodos ya calculada): usa los editados si los
+ * trae —bajas, nota [a]— y si no los deriva de fechaInicio/fechaFin, con el fallback de 4 años
+ * cuando no hay fechaFin. Existe para dejar de repetir ese mismo `fechaFin || addDays(addYears(
+ * …, 4), -1)` en cada fichero que necesita el nivel de alguien: era la misma línea copiada en
+ * siete sitios (deuda registrada en spec.md §6, retrospectiva de la Fase 6.1).
+ */
+function periodsOfResident(residente) {
+  if (residente.periodos) return residente.periodos;
+  const fin = residente.fechaFin || addDays(addYears(residente.fechaInicio, 4), -1);
+  return defaultTrainingPeriods(residente.fechaInicio, fin);
+}
+
+/**
+ * Grupo de guardia de un residente en una fecha: MAYOR (R3/R4), PEQUENO (R1/R2) o null si ese
+ * día no es asignable (PENDIENTE/FINALIZADO). Atajo sobre `periodsOfResident`+`levelOn`+
+ * `groupOf` para quien parte del residente y no de sus periodos.
+ */
+function groupOnDate(residente, iso) {
+  return groupOf(levelOn(periodsOfResident(residente), iso));
+}
+
+/**
  * Valida una lista de periodos (tras edición manual): exactamente 4, años 1..4 en
  * orden, cada periodo con inicio ≤ fin, sin solapes. Los huecos SÍ se permiten (S-3).
  * @returns {string[]} lista de errores en español, vacía si es válida
@@ -262,7 +284,7 @@ function validateTrainingPeriods(periods) {
   return errors;
 }
 
-  return { LEVELS, defaultTrainingPeriods, levelOn, periodOn, groupOf, isActiveOn, validateTrainingPeriods };
+  return { LEVELS, defaultTrainingPeriods, levelOn, periodOn, groupOf, isActiveOn, periodsOfResident, groupOnDate, validateTrainingPeriods };
 })();
 
 // ── tally.js ──

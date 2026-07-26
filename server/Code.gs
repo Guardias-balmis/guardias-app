@@ -39,29 +39,12 @@ function deps_() {
     sessionTtl: SESSION_TTL,
     crypto: crypto_(),
     store: sheetsStore_(),
-    domain: {
-      validateMonth: Domain.validateMonth,
-      buildMonthContext: Domain.buildMonthContext,
-      rotationHistoryStart: Domain.rotationHistoryStart,
-      parseISO: Domain.parseISO,
-      validateThirdPost: Domain.validateThirdPost,
-      validateResidencyYearClose: Domain.validateResidencyYearClose,
-      buildYearCloseContext: Domain.buildYearCloseContext,
-      yearCloseHistoryStart: Domain.yearCloseHistoryStart,
-      validateQuarterClose: Domain.validateQuarterClose,
-      quarterCloseWindow: Domain.quarterCloseWindow,
-      eligibleCandidates: Domain.eligibleCandidates,
-      resolveMethod: Domain.resolveMethod,
-      drawResponsible: Domain.drawResponsible,
-      validateResponsible: Domain.validateResponsible,
-      canValidate: Domain.canValidate,
-      canPublish: Domain.canPublish,
-      canUnpublish: Domain.canUnpublish,
-      canEdit: Domain.canEdit,
-      stateAfterEdit: Domain.stateAfterEdit,
-      buildMonthSheetRows: Domain.buildMonthSheetRows,
-      buildResumenRows: Domain.buildResumenRows,
-    },
+    // El dominio COMPLETO, no una lista de claves a mano: enumerarlas obligaba a repegar este
+    // fichero cada vez que el dominio crecía, y olvidarlo daba un "… is not a function" en
+    // producción (pasó el 2026-07-26 con quarterCloseWindow). `Domain` es el objeto plano que
+    // arma domain.gs; se ha verificado que ningún módulo del dominio exporta dos veces el mismo
+    // nombre, así que aplanarlo no puede ensombrecer nada en silencio.
+    domain: Domain,
     newSeed: newSeed_,
     issueNonce: issueNonce_,
     consumeNonce: consumeNonce_,

@@ -27,7 +27,7 @@ function nombreMesDe(anio, mes) {
 
 function CalendarScreen() {
   const app = window.useApp();
-  const { anio, mes, setAnio, setMes, residentes, showToast, isResponsable } = app;
+  const { anio, mes, setAnio, setMes, residentes, showToast, isResponsable, grupo } = app;
 
   const [asignaciones, setAsignaciones] = useState({}); // {[residenteId]: {[fecha]: codigo}}
   const [pendientes, setPendientes] = useState({});     // {[residenteId+"|"+fecha]: {fecha,residenteId,codigo}}
@@ -49,8 +49,16 @@ function CalendarScreen() {
   // parecería editable por error. Mientras estadoError esté activo se bloquea la edición igual
   // que si estuviera PUBLICADO, y se muestra un aviso con reintento (mismo patrón que Generator.jsx).
   const [estadoError, setEstadoError] = useState(false);
+  // Sin Responsable designado para el periodo, el ciclo lo puede mover cualquier Mayor
+  // (decisión V-16, mismo criterio que el servidor en requireCicloPermiso): la app no se queda
+  // bloqueada porque nadie haya lanzado el sorteo. Lo dice `estadoCuadrante`, no el token.
+  const [sinResponsable, setSinResponsable] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
   const busy = guardando || validando || cambiandoEstado;
+  // Mismo criterio que el servidor: el Responsable, o —si el mandato está sin decidir— cualquier
+  // Mayor. Aquí solo decide qué botones se ven; quien manda es requireCicloPermiso en el router.
+  const soyMayor = grupo === "MAYOR";
+  const puedeMoverCiclo = isResponsable || (sinResponsable && soyMayor);
   const bloqueadoPorPublicado = !canEdit(estado) || estadoError;
 
   useEffect(() => {
@@ -70,7 +78,7 @@ function CalendarScreen() {
         showToast("Error cargando cuadrante: " + r.error, "err");
       }
       setEstadoError(!rEstado.ok);
-      if (rEstado.ok) setEstado(rEstado.estado); // en error se conserva el último estado conocido; estadoError ya bloquea la edición
+      if (rEstado.ok) { setEstado(rEstado.estado); setSinResponsable(rEstado.sinResponsable === true); } // en error se conserva el último estado conocido; estadoError ya bloquea la edición
       else showToast("Error comprobando el estado del cuadrante: " + rEstado.error, "err");
       setPendientes({});
       setViolaciones(null);
@@ -192,13 +200,13 @@ function CalendarScreen() {
     // (forzar=true) es la que valida de verdad. El servidor no necesita saber nada de esto:
     // los avisos nunca le han bloqueado nada, la confirmación es de quien firma el cuadrante.
     const avisosEquidad = equityWarnings(v);
-    if (canValidate(v) && isResponsable && estado !== "PUBLICADO" && cambios.length === 0 && (avisosEquidad.length > 0 || !rCierres.ok) && !forzar) {
+    if (canValidate(v) && puedeMoverCiclo && estado !== "PUBLICADO" && cambios.length === 0 && (avisosEquidad.length > 0 || !rCierres.ok) && !forzar) {
       if (avisosEquidad.length > 0) setEquidadPorConfirmar(avisosEquidad.length);
       setValidando(false);
       return;
     }
 
-    if (canValidate(v) && isResponsable && estado !== "PUBLICADO" && cambios.length === 0) {
+    if (canValidate(v) && puedeMoverCiclo && estado !== "PUBLICADO" && cambios.length === 0) {
       const rVal = await app.api.marcarValidado(anio, mes);
       if (rVal.ok) { setEstado(rVal.estado); showToast("Cuadrante VALIDADO ✓"); }
       // Si el servidor lo rechaza (discrepancia con lo que ve el cliente) no se pisa la vista
@@ -259,20 +267,25 @@ function CalendarScreen() {
             {guardando ? "Guardando…" : `💾 Guardar${cambios.length ? ` (${cambios.length})` : ""}`}
           </button>
           <button style={pillBtn(COLOR.greenMid)} onClick={() => validar()} disabled={busy}>{validando ? "Validando…" : "✅ Validar"}</button>
-          {isResponsable && canPublish(estado) && (
+          {puedeMoverCiclo && canPublish(estado) && (
             <button style={pillBtn(COLOR.blueDark)} onClick={publicar} disabled={busy}>
               {cambiandoEstado ? "Publicando…" : "📢 Publicar"}
             </button>
           )}
-          {isResponsable && canUnpublish(estado) && (
+          {puedeMoverCiclo && canUnpublish(estado) && (
             <button style={pillBtn(COLOR.orange)} onClick={despublicar} disabled={busy}>
               {cambiandoEstado ? "Despublicando…" : "↩️ Despublicar"}
             </button>
           )}
         </div>
+        {sinResponsable && soyMayor && (
+          <div style={{ fontSize: 12, color: COLOR.orange, background: COLOR.orangeLight, borderRadius: 6, padding: "6px 10px", marginBottom: 10 }}>
+            ⚖️ No hay Responsable del contaje designado para este periodo. Hasta que se decida, cualquier R3 o R4 puede validar y publicar — decídelo en ⚙️ → Responsable.
+          </div>
+        )}
         {!estadoError && bloqueadoPorPublicado && (
           <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10 }}>
-            Este cuadrante está publicado: no se puede editar{isResponsable ? " — usa Despublicar para corregirlo." : "."}
+            Este cuadrante está publicado: no se puede editar{puedeMoverCiclo ? " — usa Despublicar para corregirlo." : "."}
           </div>
         )}
 

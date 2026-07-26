@@ -7,8 +7,7 @@ import { makeApi } from "./client/lib/api.js";
 import { getSession, clearSession } from "./client/lib/auth.js";
 import { todayISO } from "./client/lib/dates.js";
 import { EXEC_URL } from "./client/config.js";
-import { defaultTrainingPeriods, levelOn, groupOf } from "./v2/domain/residents.js";
-import { addDays, addYears } from "./v2/domain/calendar.js";
+import { levelOn, groupOf, periodsOfResident } from "./v2/domain/residents.js";
 
 const { useState, useEffect, useCallback, createContext, useContext } = React;
 
@@ -52,7 +51,7 @@ function App() {
   useEffect(() => { loadResidentes(); }, [auth?.session]);
 
   const myResidente = residentes.find((r) => r.id === auth?.residente?.id) || null;
-  const nivel = myResidente ? levelOn(defaultTrainingPeriods(myResidente.fechaInicio, myResidente.fechaFin || addDays(addYears(myResidente.fechaInicio, 4), -1)), todayISO()) : null;
+  const nivel = myResidente ? levelOn(periodsOfResident(myResidente), todayISO()) : null;
   const grupo = groupOf(nivel);
   const isResponsable = auth?.residente?.rol === "responsable";
 

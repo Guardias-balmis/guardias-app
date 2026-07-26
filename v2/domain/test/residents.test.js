@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   defaultTrainingPeriods, levelOn, groupOf, isActiveOn, validateTrainingPeriods, periodOn,
+  periodsOfResident, groupOnDate,
 } from "../residents.js";
 
 // Residente de ejemplo del brief: inicio 2024-05-07 (los desfases respecto a junio son NORMALES).
@@ -121,4 +122,36 @@ test("validateTrainingPeriods detecta solapes, desorden y periodos invertidos", 
 
   const wrongCount = periods.slice(0, 3);
   assert.ok(validateTrainingPeriods(wrongCount).some(e => /4 periodos/i.test(e)));
+});
+
+
+// --- periodsOfResident / groupOnDate --------------------------------------------------------
+// Centralizan el `fechaFin || +4 años` que estaba copiado en siete ficheros, y el atajo
+// "¿este residente es Mayor o Pequeño tal día?" que necesita el permiso del ciclo (V-16).
+
+test("periodsOfResident: respeta los periodos editados si el residente los trae", () => {
+  const propios = [{ year: 1, start: "2024-01-01", end: "2024-12-31" }];
+  assert.deepEqual(periodsOfResident({ fechaInicio: "2024-05-07", periodos: propios }), propios);
+});
+
+test("periodsOfResident: sin fechaFin, deriva 4 años desde la incorporación", () => {
+  const p = periodsOfResident({ fechaInicio: "2024-05-07" });
+  assert.equal(p.length, 4);
+  assert.equal(p[0].start, "2024-05-07");
+  assert.equal(p[3].end, "2028-05-06"); // víspera del 4.º aniversario
+});
+
+test("periodsOfResident: con fechaFin, el R4 termina exactamente ahí", () => {
+  const p = periodsOfResident({ fechaInicio: "2024-05-07", fechaFin: "2028-05-07" });
+  assert.equal(p[3].end, "2028-05-07");
+});
+
+test("groupOnDate: MAYOR en R3/R4, PEQUENO en R1/R2, null fuera de la residencia", () => {
+  const r = { fechaInicio: "2024-05-07", fechaFin: "2028-05-07" };
+  assert.equal(groupOnDate(r, "2024-06-01"), "PEQUENO"); // R1
+  assert.equal(groupOnDate(r, "2025-06-01"), "PEQUENO"); // R2
+  assert.equal(groupOnDate(r, "2026-07-27"), "MAYOR");   // R3
+  assert.equal(groupOnDate(r, "2027-06-01"), "MAYOR");   // R4
+  assert.equal(groupOnDate(r, "2024-05-06"), null);      // PENDIENTE
+  assert.equal(groupOnDate(r, "2028-05-08"), null);      // FINALIZADO
 });

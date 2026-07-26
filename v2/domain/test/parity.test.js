@@ -14,7 +14,7 @@ import { buildBundle, buildServerBundle, transformModule } from "../../../build/
 
 // Fuente ESM
 import { weekday, trimesterWindow } from "../calendar.js";
-import { levelOn } from "../residents.js";
+import { levelOn, groupOnDate } from "../residents.js";
 import { tally } from "../tally.js";
 import { validateMonth, buildMonthContext } from "../validate.js";
 import { validateThirdPost } from "../thirdpost.js";
@@ -85,6 +85,7 @@ function runAll(api) {
   return {
     weekday: api.weekday("2026-06-01"),
     level: api.levelOn(PERIODS, "2026-07-16"),
+    grupoEnFecha: ["2026-07-16", "2028-01-01"].map((f) => api.groupOnDate({ fechaInicio: "2024-05-07", fechaFin: "2028-05-07" }, f)),
     tally: api.tally(TALLY_ASGS, { start: "2026-06-01", end: "2026-06-30" }),
     month: violaciones,
     thirdpost: api.validateThirdPost(TP_CTX),
@@ -107,7 +108,7 @@ function runAll(api) {
 }
 
 const esm = {
-  weekday, levelOn, tally, validateMonth, validateThirdPost, validateResidencyYearClose,
+  weekday, levelOn, groupOnDate, tally, validateMonth, validateThirdPost, validateResidencyYearClose,
   trimesterWindow, validateQuarterClose, quarterCloseWindow, yearCloseHistoryStart, buildYearCloseContext,
   buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings,
   buildMonthSheetRows, buildResumenRows,
@@ -122,7 +123,7 @@ function loadBundle(code) {
 
 test("el bundle expone la API pública esperada", () => {
   const Domain = loadBundle(buildBundle());
-  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "buildYearCloseContext", "yearCloseHistoryStart", "validateQuarterClose", "quarterCloseWindow", "trimesterWindow", "validateThirdPost", "levelOn", "groupOf", "weekday", "canValidate", "equityWarnings", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows"]) {
+  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "buildYearCloseContext", "yearCloseHistoryStart", "validateQuarterClose", "quarterCloseWindow", "trimesterWindow", "validateThirdPost", "levelOn", "groupOf", "groupOnDate", "periodsOfResident", "weekday", "canValidate", "equityWarnings", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows"]) {
     assert.equal(typeof Domain[fn], "function", `Domain.${fn} debe ser función`);
   }
 });

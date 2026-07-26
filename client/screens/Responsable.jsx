@@ -117,6 +117,34 @@ function ResponsableScreen() {
         </Card>
       )}
 
+      {estado.siguiente && !estado.siguiente.mandato && (
+        <Card title={`🙋 Próximo mandato (${estado.siguiente.anio} → ${estado.siguiente.anio + 1})`}>
+          <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 10 }}>
+            Todavía sin decidir. Se decide ANTES de que empiece (1 de enero de {estado.siguiente.anio}), así que el
+            voluntariado está abierto desde ya.
+            {estado.siguiente.voluntarios.length > 0 && (
+              <> Se han ofrecido: <b>{estado.siguiente.voluntarios.map((id) => nombreDe(residentes, id)).join(", ")}</b>.</>
+            )}
+          </div>
+          {estado.siguiente.elegibles.includes(myResidente?.id) ? (
+            estado.siguiente.meHeOfrecido ? (
+              <Btn onClick={() => accion(() => api.retirarVoluntariadoResponsable(estado.siguiente.anio), "Voluntariado retirado")} disabled={busy} color={COLOR.gray} textColor={COLOR.red}>
+                Retirar mi voluntariado de {estado.siguiente.anio}
+              </Btn>
+            ) : (
+              <Btn onClick={() => accion(() => api.ofrecerseResponsable(estado.siguiente.anio), `Te has ofrecido voluntario para ${estado.siguiente.anio} ✓`)} disabled={busy}>
+                🙋 Ofrecerme voluntario para {estado.siguiente.anio}
+              </Btn>
+            )
+          ) : (
+            <div style={{ fontSize: 12, color: COLOR.grayDark, fontStyle: "italic" }}>
+              Tú no eres elegible para ese periodo (hay que tener nivel R3 el 1 de enero de {estado.siguiente.anio}).
+              Elegibles: {estado.siguiente.elegibles.length ? estado.siguiente.elegibles.map((id) => nombreDe(residentes, id)).join(", ") : "ninguno todavía"}.
+            </div>
+          )}
+        </Card>
+      )}
+
       <Info>
         Normativa: el contaje recae en un R3 de enero a enero (pasa a R4 durante el mandato).
         Se decide por voluntario; si se ofrecen dos o más, se sortea solo entre ellos (Fase 5); si
