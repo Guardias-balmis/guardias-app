@@ -60,6 +60,8 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
     validar: (cuadrante) => authed("validar", { cuadrante }),
     misBloqueos: (anio, mes) => authed("misBloqueos", { anio, mes }),
     listBloqueos: (anio, mes) => authed("listBloqueos", { anio, mes }),
+    /** Por rango (no por mes): los cierres de equidad descuentan bajas de todo el trimestre/año. */
+    listBloqueosRango: (desde, hasta) => authed("listBloqueosRango", { desde, hasta }),
     crearBloqueo: (desde, hasta, motivo, extra = {}) => authed("crearBloqueo", { desde, hasta, motivo, ...extra }),
     cancelarBloqueo: (id) => authed("cancelarBloqueo", { id }),
     estadoResponsable: (anio) => authed("estadoResponsable", { anio }),

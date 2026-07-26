@@ -108,17 +108,39 @@ function academicYearOf(iso) {
   return month >= 6 ? year : year - 1;
 }
 
+// Trimestre del contaje: T1 jun-ago, T2 sep-nov, T3 dic-feb, T4 mar-may. Definición ÚNICA
+// (la comparten `trimesterOf` y `trimesterWindow`): duplicarla es cómo el .xlsm acabó
+// troceando por rangos de fila y desalineándose en silencio al insertar un residente.
+const TRIMESTRES = { T1: [6, 7, 8], T2: [9, 10, 11], T3: [12, 1, 2], T4: [3, 4, 5] };
+
 /**
- * Trimestre del contaje: T1 jun-ago, T2 sep-nov, T3 dic-feb, T4 mar-may.
- * T3 cruza el año natural — pertenencia por mes, jamás por posición de fila
- * (el .xlsm troceaba por rangos de fila y se desalineaba en silencio).
+ * Trimestre del contaje al que pertenece la fecha.
+ * T3 cruza el año natural — pertenencia por mes, jamás por posición de fila.
  */
 function trimesterOf(iso) {
   const { month } = parseISO(iso);
-  if (month >= 6 && month <= 8) return "T1";
-  if (month >= 9 && month <= 11) return "T2";
-  if (month === 12 || month <= 2) return "T3";
-  return "T4";
+  return Object.keys(TRIMESTRES).find((t) => TRIMESTRES[t].includes(month));
+}
+
+/**
+ * Ventana completa del trimestre que contiene la fecha: {trimestre, start, end}, ambos
+ * extremos inclusive. En T3 el año de `start` (diciembre) es el ANTERIOR al de `end`
+ * (febrero) — por eso no basta con el año de la fecha suelta.
+ * La usa el cierre trimestral de equidad (INV-3 trimestral, decisión V-13).
+ */
+function trimesterWindow(iso) {
+  const { year, month } = parseISO(iso);
+  const trimestre = trimesterOf(iso);
+  const meses = TRIMESTRES[trimestre];
+  // T3 = dic-ene-feb: si la fecha cae en ene/feb, el diciembre que abre el trimestre es del año anterior.
+  const startYear = trimestre === "T3" && month <= 2 ? year - 1 : year;
+  const endYear = trimestre === "T3" ? startYear + 1 : year;
+  const endMonth = meses[meses.length - 1];
+  return {
+    trimestre,
+    start: toISO(startYear, meses[0], 1),
+    end: toISO(endYear, endMonth, daysInMonth(endYear, endMonth)),
+  };
 }
 
 /** Comparación cronológica (-1/0/1). Valida ambas fechas: el orden lexicográfico solo es fiable en ISO estricto. */
@@ -128,7 +150,7 @@ function compareISO(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-  return { parseISO, toISO, weekday, isWeekend, addDays, addYears, daysInMonth, datesOfMonth, academicYearOf, trimesterOf, compareISO };
+  return { parseISO, toISO, weekday, isWeekend, addDays, addYears, daysInMonth, datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, compareISO };
 })();
 
 // ── residents.js ──
@@ -334,6 +356,56 @@ function tallyByResident(asignaciones, window) {
   return { tally, tallyByResident };
 })();
 
+// ── accumulate.js ──
+var Accumulate = (function () {
+// Contaje acumulado por residente para el generador «prompt portátil» (Fase 6.1).
+// spec.md §4: "la ventana es del residente (su año de residencia, aniversario→aniversario)".
+// No reimplementa tally (§4, S-5): solo resuelve, por residente, la ventana [inicio de su
+// periodo formativo en curso .. hasta] y delega el contaje.
+
+  const { addDays, addYears } = Calendar;
+  const { defaultTrainingPeriods, periodOn } = Residents;
+  const { tally } = Tally;
+
+const ZERO = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 };
+
+/**
+ * @param {{id:string, fechaInicio:string, fechaFin?:string}[]} residentes
+ * @param {{residenteId:string, fecha:string, codigo:string, origen?:string}[]} asignaciones
+ *        de cualquier residente y cualquier rango; se filtra por residente internamente.
+ *        Debe incluir el lookahead de doblete (~2 días tras `hasta`, C-1) si se quiere que
+ *        cuente el doblete de borde.
+ * @param {string} hasta  ISO, normalmente el último día del mes anterior al que se genera
+ * @returns {Map<string, ReturnType<typeof tally>>} residenteId → contaje acumulado (todo a
+ *          cero si su año de residencia en curso, a la fecha `hasta`, aún no ha empezado)
+ */
+function accumulatedTally(residentes, asignaciones, hasta) {
+  const out = new Map();
+  for (const r of residentes) {
+    const fin = r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1);
+    const periods = defaultTrainingPeriods(r.fechaInicio, fin);
+    // El periodo se busca a `hasta+1` (el primer día del mes que se va a generar), no a
+    // `hasta`: así, si el aniversario cae exactamente ese día, ya se usa el periodo NUEVO.
+    // Caso límite intencional: cuando eso ocurre, `periodoActual.start` (el aniversario)
+    // es POSTERIOR a `hasta` (el día anterior), así que la ventana pasada a `tally` queda
+    // invertida (`start > end`) y `tally` la computa en silencio como todo-cero — que es
+    // el resultado CORRECTO (spec.md §4: el año de residencia nuevo aún no lleva ninguna
+    // guardia el día antes de empezar), no un bug de `tally`. No "arreglar" esto asumiendo
+    // que hay que arrastrar el contaje del año saliente: ver el test del caso límite.
+    const periodoActual = periodOn(periods, addDays(hasta, 1));
+    if (!periodoActual) {
+      out.set(r.id, { ...ZERO });
+      continue;
+    }
+    const propias = asignaciones.filter((a) => a.residenteId === r.id);
+    out.set(r.id, tally(propias, { start: periodoActual.start, end: hasta }));
+  }
+  return out;
+}
+
+  return { accumulatedTally };
+})();
+
 // ── thirdpost.js ──
 var Thirdpost = (function () {
 // Validación del tercer puesto (INV-8, spec.md §5). El 3P es siempre voluntario y se
@@ -467,15 +539,26 @@ var Equity = (function () {
 // desigualdad es compensable (no se reporta). Se compara entre residentes del mismo año
 // formativo (cohorte). La entrada imita el "Resumen" del Excel: acumulados por mes +
 // asignaciones del mes validado. tally excluye 3P y cedidas/compradas → INV-4 sale gratis.
+//
+// Desde P-8 (spec.md §8, decisión V-13) el mismo invariante tiene un SEGUNDO cierre, el
+// trimestral (`validateQuarterClose`): la normativa p.2 lo llama «criterio obligatorio» —
+// «una vez cerrado el cuadrante trimestral, la diferencia de número de guardias entre
+// residentes del mismo año no supere 1». Dos diferencias deliberadas con el cierre anual,
+// ambas leídas de esa misma frase: solo mide el eje `total` («número de guardias»; los demás
+// ejes los ancla la normativa al año de residencia, p.1/p.4) y su severidad es `aviso`, no
+// `error`, porque la propia frase prevé compensar el exceso «en los meses siguientes hasta
+// equilibrar el cómputo dentro del año de residencia» (criterio V-4: lo compensable avisa).
 
-  const { compareISO, addDays, addYears, datesOfMonth, toISO } = Calendar;
+  const { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow } = Calendar;
   const { tally } = Tally;
+  const { accumulatedTally } = Accumulate;
 
 const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "dobletes"];
 const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes"]); // se normalizan por disponibilidad
 const EPS = 1e-9;
 
 const err = (detalle, extra = {}) => ({ invariante: "INV-3", severidad: "error", detalle, ...extra });
+const warn = (detalle, extra = {}) => ({ invariante: "INV-3", severidad: "aviso", detalle, ...extra });
 const cohortOf = (r) => Number(r.fechaInicio.slice(0, 4));
 const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Number(fecha.slice(5, 7)) === mes;
 const inRange = (f, a, b) => compareISO(f, a) >= 0 && compareISO(f, b) <= 0;
@@ -540,6 +623,121 @@ function validateResidencyYearClose(ctx) {
   return violations;
 }
 
+/**
+ * Primer día de histórico que hace falta para evaluar el cierre ANUAL en este mes: el
+ * aniversario más antiguo entre los residentes que cierran su año de residencia ese mes, o
+ * `null` si no lo cierra ninguno (y entonces no hay nada que leer ni que comprobar).
+ * Simétrico de `rotationHistoryStart` (contrato C-2): el invocador no puede adivinar el rango
+ * que necesita el validador, así que lo pregunta al dominio en vez de reimplementarlo.
+ */
+function yearCloseHistoryStart(residentes, mes, anio) {
+  let min = null;
+  for (const r of residentes) {
+    const win = closingWindowThisMonth(r, mes, anio);
+    if (win && (min === null || compareISO(win.start, min) < 0)) min = win.start;
+  }
+  return min;
+}
+
+/**
+ * Ensambla el ctx de `validateResidencyYearClose` — mismo papel que `buildMonthContext` para
+ * `validateMonth`: el acumulado del año se calcula UNA vez aquí (vía `accumulatedTally`) en
+ * lugar de que cada pantalla y el servidor lo reimplementen con formas de objeto distintas.
+ *
+ * `historicas` y `asignacionesDelMes` se pasan JUNTAS a `accumulatedTally` a propósito: la
+ * ventana acumulada termina el último día del mes ANTERIOR, pero un viernes de ese último día
+ * empareja su domingo ya dentro del mes validado (contrato C-1, spec.md §5) — el mes entra
+ * solo como lookahead y no se suma dos veces, porque `tally` cuenta únicamente lo que cae
+ * dentro de la ventana que recibe. La contribución del mes la computa el validador aparte,
+ * desde `asignaciones`.
+ *
+ * @param {object} args
+ *   - historicas: asignaciones anteriores al mes (desde `yearCloseHistoryStart`)
+ *   - asignacionesDelMes: las del mes validado (las que se están por validar, no las del store)
+ *   - puentesDelMes: hueco conocido — no existe todavía tabla de festivos/puentes (mismo
+ *     bloqueo que INV-12), así que por defecto va vacío y el eje `puentesLibres` compara ceros:
+ *     ese eje de INV-3 NO está comprobado de verdad hasta que exista esa entrada.
+ */
+function buildYearCloseContext({ mes, anio, residentes, historicas = [], asignacionesDelMes = [], bloqueos = [], puentesDelMes = [] }) {
+  const acumulado = accumulatedTally(residentes, [...historicas, ...asignacionesDelMes], addDays(toISO(anio, mes, 1), -1));
+  const acumulados = {};
+  for (const [id, t] of acumulado) {
+    // `tally` llama `finde` a lo que INV-3 compara como `findes`: la traducción vive aquí, una vez.
+    acumulados[id] = { total: t.total, findes: t.finde, festivos: t.festivos, prefestivos: t.prefestivos, dobletes: t.dobletes, puentesLibres: 0 };
+  }
+  return { mes, anio, residentes, acumulados, asignaciones: asignacionesDelMes, bloqueos, puentesDelMes };
+}
+
+// --- Cierre de TRIMESTRE (INV-3 trimestral, P-8 / decisión V-13) ---------------------------
+
+/**
+ * Ventana del trimestre que CIERRA en este mes, o `null` si el mes no cierra ninguno (solo
+ * agosto, noviembre, febrero y mayo lo hacen). Exportada porque el invocador la necesita
+ * ANTES de llamar al validador, para saber qué rango de asignaciones leer del store.
+ */
+function quarterCloseWindow(mes, anio) {
+  const win = trimesterWindow(toISO(anio, mes, 1));
+  return inMonth(win.end, mes, anio) ? win : null;
+}
+
+/**
+ * Por debajo de esta disponibilidad el trimestre no se compara (decisión V-13). Normalizar
+ * `total/f` con una `f` diminuta amplifica: media guardia en dos semanas disponibles se
+ * convertiría en un "13" que dispararía un aviso falso cada trimestre. Quien esté de baja
+ * más de medio trimestre sigue cubierto por el cierre anual, donde la ventana promedia.
+ */
+const MIN_DISPONIBILIDAD = 0.5;
+
+/**
+ * INV-3 al cierre del trimestre (P-8). Devuelve [] si `mes` no cierra trimestre: igual que el
+ * cierre anual, en los meses intermedios la desigualdad es compensable y no se reporta.
+ *
+ * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos? }
+ *   - asignaciones: TODAS las del trimestre, de cualquier residente (se filtran por residente
+ *     aquí). No necesita el lookahead de doblete del contrato C-1: el único eje es `total`.
+ *   - bloqueos: los que solapan el trimestre; solo `motivo=BAJA` descuenta disponibilidad
+ *     (nota [a] de p.2: «se descontará de forma proporcional»).
+ * @returns violaciones de severidad `aviso`
+ */
+function validateQuarterClose(ctx) {
+  const { mes, anio, residentes, asignaciones = [], bloqueos = [] } = ctx;
+  const win = quarterCloseWindow(mes, anio);
+  if (!win) return [];
+  const quarterDays = daysInclusive(win.start, win.end);
+  const violations = [];
+
+  const byCohort = new Map();
+  for (const r of residentes) {
+    // Un residente que solo estaba parte del trimestre (alta a mitad, o R4 que termina) se
+    // compara sobre la parte que le tocaba, no sobre el trimestre entero.
+    const presente = intersect(win, { start: r.fechaInicio, end: r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1) });
+    if (!presente) continue;
+    const disponibles = availableDays(presente, bloqueos.filter((b) => b.residenteId === r.id && b.motivo === "BAJA"));
+    const f = disponibles / quarterDays;
+    if (f < MIN_DISPONIBILIDAD) continue;
+
+    const total = tally(asignaciones.filter((a) => a.residenteId === r.id), { start: win.start, end: win.end }).total;
+    const cohorte = cohortOf(r);
+    if (!byCohort.has(cohorte)) byCohort.set(cohorte, []);
+    byCohort.get(cohorte).push({ id: r.id, v: total / f, ajustado: f < 1 });
+  }
+
+  for (const [, grupo] of byCohort) {
+    if (grupo.length < 2) continue;
+    const maxEntry = grupo.reduce((a, b) => (b.v > a.v ? b : a));
+    const minEntry = grupo.reduce((a, b) => (b.v < a.v ? b : a));
+    if (maxEntry.v - minEntry.v > 1 + EPS) {
+      const ajuste = maxEntry.ajustado || minEntry.ajustado ? " — cifras ajustadas proporcionalmente por baja (nota [a])" : "";
+      violations.push(warn(
+        `Totales al cierre del trimestre ${win.trimestre} (${win.start}→${win.end}): ${maxEntry.id}=${round(maxEntry.v)} vs ${minEntry.id}=${round(minEntry.v)} (diferencia > 1)${ajuste}`,
+        { fecha: win.end, residenteId: maxEntry.id }
+      ));
+    }
+  }
+
+  return violations;
+}
+
 function closingWindowThisMonth(r, mes, anio) {
   for (let k = 1; k <= 4; k++) {
     const cierre = addDays(addYears(r.fechaInicio, k), -1);
@@ -551,14 +749,29 @@ function closingWindowThisMonth(r, mes, anio) {
 /** Fracción de disponibilidad = (días de la ventana − días de baja) / días de la ventana. */
 function availabilityFraction(win, bajas) {
   const windowDays = daysInclusive(win.start, win.end);
+  const avail = availableDays(win, bajas);
+  return avail <= 0 ? 1 : avail / windowDays;
+}
+
+/**
+ * Días de la ventana no cubiertos por ninguna baja. Separado de `availabilityFraction` porque
+ * el cierre trimestral divide por los días del TRIMESTRE COMPLETO, no por los de la ventana
+ * que se le pasa (que ahí es solo la parte del trimestre en la que el residente estaba).
+ */
+function availableDays(win, bajas) {
   let bajaDays = 0;
   for (const b of bajas) {
-    const start = compareISO(b.desde, win.start) >= 0 ? b.desde : win.start;
-    const end = compareISO(b.hasta, win.end) <= 0 ? b.hasta : win.end;
-    if (compareISO(start, end) <= 0) bajaDays += daysInclusive(start, end);
+    const solape = intersect(win, { start: b.desde, end: b.hasta });
+    if (solape) bajaDays += daysInclusive(solape.start, solape.end);
   }
-  const avail = windowDays - bajaDays;
-  return avail <= 0 ? 1 : avail / windowDays;
+  return daysInclusive(win.start, win.end) - bajaDays;
+}
+
+/** Intersección de dos rangos inclusivos, o null si no se solapan. */
+function intersect(a, b) {
+  const start = compareISO(a.start, b.start) >= 0 ? a.start : b.start;
+  const end = compareISO(a.end, b.end) <= 0 ? a.end : b.end;
+  return compareISO(start, end) <= 0 ? { start, end } : null;
 }
 
 function residentIsFreeOnBridge(id, asignaciones, puente, win) {
@@ -583,7 +796,7 @@ function labelDim(dim) {
   return { total: "Totales", findes: "Fines de semana", festivos: "Festivos", prefestivos: "Prefestivos", puentesLibres: "Puentes libres", dobletes: "Dobletes V-D" }[dim];
 }
 
-  return { validateResidencyYearClose };
+  return { validateResidencyYearClose, yearCloseHistoryStart, buildYearCloseContext, quarterCloseWindow, validateQuarterClose };
 })();
 
 // ── validate.js ──
@@ -1298,4 +1511,4 @@ function buildResumenRows({ residentes, publishedMonths }) {
 })();
 
 // ── API pública ──
-var Domain = Object.assign({}, Calendar, Residents, Tally, Thirdpost, Equity, Validate, Responsible, Cuadrante, Projection);
+var Domain = Object.assign({}, Calendar, Residents, Tally, Accumulate, Thirdpost, Equity, Validate, Responsible, Cuadrante, Projection);

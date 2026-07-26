@@ -9,6 +9,7 @@ import { tally } from "./v2/domain/tally.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/domain/validate.js";
 import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit } from "./v2/domain/cuadrante.js";
 import { todayISO } from "./client/lib/dates.js";
+import { closeViolations } from "./client/lib/closes.js";
 
 const { useState, useEffect } = React;
 const { Card, Btn, Aviso } = window.UI;
@@ -148,12 +149,17 @@ function CalendarScreen() {
       historicas = rHist.asignaciones;
     }
 
-    const ctx = buildMonthContext({
-      mes, anio, residentes, historicas,
-      asignacionesDelMes: residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo }))),
-      bloqueos,
-    });
-    const v = validateMonth(ctx);
+    const asignacionesDelMes = residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo })));
+    const ctx = buildMonthContext({ mes, anio, residentes, historicas, asignacionesDelMes, bloqueos });
+
+    // Cierres de equidad de INV-3 (P-8, decisión V-13): el trimestral en ago/nov/feb/may y el
+    // anual en el mes del aniversario de alguien. Es la MISMA comprobación que hará el
+    // servidor en marcarValidado; si falla la carga no se sigue, porque un cierre no
+    // comprobado en silencio es peor que no validar (el anual es error y bloquea).
+    const rCierres = await closeViolations({ api: app.api, mes, anio, residentes, asignacionesDelMes });
+    if (!rCierres.ok) { setValidando(false); setViolaciones(null); showToast("Error comprobando los cierres de equidad: " + rCierres.error, "err"); return; }
+
+    const v = [...validateMonth(ctx), ...rCierres.violaciones];
     setViolaciones(v);
 
     // Decisión de Fase 6.2 (V-9/V-10): BORRADOR->VALIDADO es automático en cuanto el
@@ -165,8 +171,10 @@ function CalendarScreen() {
     if (canValidate(v) && isResponsable && estado !== "PUBLICADO" && cambios.length === 0) {
       const rVal = await app.api.marcarValidado(anio, mes);
       if (rVal.ok) { setEstado(rVal.estado); showToast("Cuadrante VALIDADO ✓"); }
-      // Si el servidor lo rechaza (p.ej. discrepancia con lo que ve el cliente) no interrumpe
-      // la vista de violaciones, que ya se mostró arriba con el resultado local.
+      // Si el servidor lo rechaza (discrepancia con lo que ve el cliente) no se pisa la vista
+      // de violaciones, que ya se mostró arriba con el resultado local — pero SÍ se dice: sin
+      // el aviso, el cuadrante se quedaba en BORRADOR sin que nadie supiera por qué.
+      else showToast("El servidor no validó el cuadrante: " + rVal.error, "err");
     }
     setValidando(false);
   };

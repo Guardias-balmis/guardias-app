@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   parseISO, toISO, weekday, isWeekend, addDays, addYears, daysInMonth,
-  datesOfMonth, academicYearOf, trimesterOf, compareISO,
+  datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, compareISO,
 } from "../calendar.js";
 
 test("parseISO acepta fechas válidas y devuelve componentes", () => {
@@ -92,6 +92,24 @@ test("trimesterOf: T1 jun-ago, T2 sep-nov, T3 dic-feb (cruza año), T4 mar-may",
   assert.equal(trimesterOf("2027-02-28"), "T3");
   assert.equal(trimesterOf("2027-03-01"), "T4");
   assert.equal(trimesterOf("2027-05-31"), "T4");
+});
+
+test("trimesterWindow: ventana completa del trimestre de la fecha", () => {
+  assert.deepEqual(trimesterWindow("2026-07-15"), { trimestre: "T1", start: "2026-06-01", end: "2026-08-31" });
+  assert.deepEqual(trimesterWindow("2026-09-01"), { trimestre: "T2", start: "2026-09-01", end: "2026-11-30" });
+  assert.deepEqual(trimesterWindow("2027-04-30"), { trimestre: "T4", start: "2027-03-01", end: "2027-05-31" });
+});
+
+test("trimesterWindow: T3 cruza el año natural en los dos sentidos", () => {
+  // Desde diciembre: el trimestre TERMINA en el febrero del año siguiente.
+  assert.deepEqual(trimesterWindow("2026-12-25"), { trimestre: "T3", start: "2026-12-01", end: "2027-02-28" });
+  // Desde enero/febrero: el diciembre que lo ABRE es del año anterior (el bug fácil).
+  assert.deepEqual(trimesterWindow("2027-01-15"), { trimestre: "T3", start: "2026-12-01", end: "2027-02-28" });
+  assert.deepEqual(trimesterWindow("2027-02-28"), { trimestre: "T3", start: "2026-12-01", end: "2027-02-28" });
+});
+
+test("trimesterWindow: febrero de año bisiesto cierra el 29", () => {
+  assert.equal(trimesterWindow("2028-01-10").end, "2028-02-29");
 });
 
 test("compareISO ordena cronológicamente y valida entradas", () => {

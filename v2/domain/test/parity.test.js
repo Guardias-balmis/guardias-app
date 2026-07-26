@@ -13,12 +13,15 @@ import nodeCrypto from "node:crypto";
 import { buildBundle, buildServerBundle, transformModule } from "../../../build/build-gas.mjs";
 
 // Fuente ESM
-import { weekday } from "../calendar.js";
+import { weekday, trimesterWindow } from "../calendar.js";
 import { levelOn } from "../residents.js";
 import { tally } from "../tally.js";
 import { validateMonth, buildMonthContext } from "../validate.js";
 import { validateThirdPost } from "../thirdpost.js";
-import { validateResidencyYearClose } from "../equity.js";
+import {
+  validateResidencyYearClose, validateQuarterClose, quarterCloseWindow,
+  yearCloseHistoryStart, buildYearCloseContext,
+} from "../equity.js";
 import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../cuadrante.js";
 import { buildMonthSheetRows, buildResumenRows } from "../projection.js";
 import { handleRequest as esmHandleRequest } from "../../../server/src/router.js";
@@ -64,6 +67,16 @@ const EQ_CTX = {
   },
   asignaciones: [],
 };
+// Cierre de T2 (nov-2026) con diferencia 2 en totales → un aviso (P-8, decisión V-13).
+const QC_CTX = {
+  mes: 11, anio: 2026,
+  residentes: EQ_CTX.residentes,
+  asignaciones: [
+    { residenteId: "r3a", fecha: "2026-09-02", codigo: "G" },
+    { residenteId: "r3a", fecha: "2026-10-07", codigo: "G" },
+    { residenteId: "r3a", fecha: "2026-11-04", codigo: "G" },
+  ],
+};
 
 // Ejecuta toda la API pública sobre una implementación (ESM namespace o el Domain del bundle).
 function runAll(api) {
@@ -76,6 +89,11 @@ function runAll(api) {
     month: violaciones,
     thirdpost: api.validateThirdPost(TP_CTX),
     equity: api.validateResidencyYearClose(EQ_CTX),
+    trimesterWindow: api.trimesterWindow("2027-01-15"),
+    quarterCloseWindow: [api.quarterCloseWindow(11, 2026), api.quarterCloseWindow(10, 2026)],
+    quarterClose: api.validateQuarterClose(QC_CTX),
+    yearCloseStart: [api.yearCloseHistoryStart(EQ_CTX.residentes, 5, 2027), api.yearCloseHistoryStart(EQ_CTX.residentes, 10, 2026)],
+    yearCloseCtx: api.buildYearCloseContext({ mes: 5, anio: 2027, residentes: EQ_CTX.residentes, historicas: QC_CTX.asignaciones, asignacionesDelMes: [] }),
     monthContext: ctx,
     canValidate: [api.canValidate([]), api.canValidate(violaciones)],
     canPublish: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canPublish),
@@ -89,6 +107,7 @@ function runAll(api) {
 
 const esm = {
   weekday, levelOn, tally, validateMonth, validateThirdPost, validateResidencyYearClose,
+  trimesterWindow, validateQuarterClose, quarterCloseWindow, yearCloseHistoryStart, buildYearCloseContext,
   buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit,
   buildMonthSheetRows, buildResumenRows,
 };
@@ -102,7 +121,7 @@ function loadBundle(code) {
 
 test("el bundle expone la API pública esperada", () => {
   const Domain = loadBundle(buildBundle());
-  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "validateThirdPost", "levelOn", "groupOf", "weekday", "canValidate", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows"]) {
+  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "buildYearCloseContext", "yearCloseHistoryStart", "validateQuarterClose", "quarterCloseWindow", "trimesterWindow", "validateThirdPost", "levelOn", "groupOf", "weekday", "canValidate", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows"]) {
     assert.equal(typeof Domain[fn], "function", `Domain.${fn} debe ser función`);
   }
 });

@@ -132,6 +132,15 @@ export function handleRequest(rawBody, deps) {
       case "listBloqueos":
         return authed(req, deps, () => ({ ok: true, bloqueos: activeBloqueosInMonth(deps, req.anio, req.mes) }));
 
+      // Mismo papel que listAsignacionesRango, para bloqueos: los cierres de equidad de
+      // INV-3 descuentan las BAJAS de TODO el trimestre (o del año de residencia), no solo
+      // las que solapan el mes que se está validando.
+      case "listBloqueosRango":
+        return authed(req, deps, () => {
+          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+          return { ok: true, bloqueos: bloqueosInRange(allBloqueos(deps), req.desde, req.hasta) };
+        });
+
       case "cancelarBloqueo":
         return authed(req, deps, (session) => {
           const actuales = deps.store.readLatest("bloqueos", (r) => r.id);
@@ -223,7 +232,12 @@ export function handleRequest(rawBody, deps) {
           if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
           if (estadoActual === "PUBLICADO") return { ok: false, error: "el cuadrante ya está publicado" };
 
-          const violaciones = deps.domain.validateMonth(buildCuadranteCtx(deps, req.mes, req.anio));
+          // Una sola lectura del store para las dos comprobaciones (mes + cierres de equidad).
+          const snap = monthSnapshot(deps);
+          const violaciones = [
+            ...deps.domain.validateMonth(buildCuadranteCtx(deps, req.mes, req.anio, snap)),
+            ...closeViolations(deps, req.mes, req.anio, snap),
+          ];
           if (!deps.domain.canValidate(violaciones)) {
             return { ok: false, error: "el cuadrante tiene errores, no se puede validar", violaciones };
           }
@@ -327,13 +341,75 @@ function monthPrefix(anio, mes) {
   return `${anio}-${String(mes).padStart(2, "0")}`;
 }
 
+/** Estado actual de la tabla de bloqueos (última reinserción gana, como cancelarBloqueo). */
+function allBloqueos(deps) {
+  return deps.store.readLatest("bloqueos", (r) => r.id);
+}
+
+/** Bloqueos activos que solapan [desde,hasta]. Puro: filtra una lista ya leída. */
+function bloqueosInRange(bloqueos, desde, hasta) {
+  return bloqueos.filter((b) => b.activo === true && b.desde <= hasta && b.hasta >= desde);
+}
+
 /** Bloqueos activos (de cualquier residente) que solapan el mes dado. */
 function activeBloqueosInMonth(deps, anio, mes) {
   const prefix = monthPrefix(anio, mes);
+  // Tope superior lexicográfico holgado: "-31" existe en ISO aunque el mes tenga 28/30 días.
+  return bloqueosInRange(allBloqueos(deps), `${prefix}-01`, `${prefix}-31`);
+}
+
+/**
+ * Las tres tablas que necesitan las comprobaciones de un mes, leídas UNA vez. Existe porque
+ * validar un mes ahora comprueba el mes (INV-1..14) y además los cierres de equidad de INV-3
+ * (trimestral y anual): sin esto, la misma acción releería residentes/asignaciones/bloqueos
+ * dos veces, y en Apps Script cada lectura es una llamada real a Sheets.
+ */
+function monthSnapshot(deps) {
+  return {
+    residentes: deps.store.readRecords("residentes"),
+    asignaciones: deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }),
+    bloqueos: allBloqueos(deps),
+  };
+}
+
+/**
+ * Violaciones de los cierres de equidad de INV-3 que caen en el mes validado, cada uno con la
+ * severidad que le da spec.md §5: el TRIMESTRAL (agosto/noviembre/febrero/mayo; solo el eje
+ * `total`, severidad aviso — P-8, decisión V-13) y el ANUAL (solo si algún residente cierra su
+ * año de residencia ese mes; los seis ejes, severidad error). Devuelve [] cuando el mes no
+ * cierra ninguno de los dos, que es lo normal en 8 de cada 12 meses.
+ *
+ * Los rangos que hay que leer los decide el dominio (`quarterCloseWindow`,
+ * `yearCloseHistoryStart`), no este fichero: el cierre anual arranca en el aniversario del
+ * residente, que puede caer 11 meses atrás, y adivinarlo aquí es el error que ya costó una
+ * regresión con el contrato C-2.
+ */
+function closeViolations(deps, mes, anio, snap) {
+  const prefix = monthPrefix(anio, mes);
   const monthStart = `${prefix}-01`;
-  const monthEnd = `${prefix}-31`; // comparación lexicográfica ISO: basta un tope holgado
-  return deps.store.readLatest("bloqueos", (r) => r.id)
-    .filter((b) => b.activo === true && b.desde <= monthEnd && b.hasta >= monthStart);
+  const monthEnd = `${prefix}-31`;
+  const violaciones = [];
+
+  const trimestre = deps.domain.quarterCloseWindow(mes, anio);
+  if (trimestre) {
+    violaciones.push(...deps.domain.validateQuarterClose({
+      mes, anio, residentes: snap.residentes,
+      asignaciones: snap.asignaciones.filter((a) => a.fecha >= trimestre.start && a.fecha <= trimestre.end),
+      bloqueos: bloqueosInRange(snap.bloqueos, trimestre.start, trimestre.end),
+    }));
+  }
+
+  const desdeAnual = deps.domain.yearCloseHistoryStart(snap.residentes, mes, anio);
+  if (desdeAnual) {
+    violaciones.push(...deps.domain.validateResidencyYearClose(deps.domain.buildYearCloseContext({
+      mes, anio, residentes: snap.residentes,
+      historicas: snap.asignaciones.filter((a) => a.fecha >= desdeAnual && a.fecha < monthStart),
+      asignacionesDelMes: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
+      bloqueos: bloqueosInRange(snap.bloqueos, desdeAnual, monthEnd),
+    })));
+  }
+
+  return violaciones;
 }
 
 function isYear(v) {
@@ -373,16 +449,14 @@ function requireResponsable(session, accion) {
  * histórico de rotación cross-mes (contrato C-2, spec.md §5), igual que Calendar.jsx/Generator.jsx
  * — mismo ensamblado que ambos, vía `deps.domain.buildMonthContext`.
  */
-function buildCuadranteCtx(deps, mes, anio) {
-  const residentes = deps.store.readRecords("residentes");
-  const bloqueos = activeBloqueosInMonth(deps, anio, mes);
+function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps)) {
   const prefix = monthPrefix(anio, mes);
   const monthStart = `${prefix}-01`;
-  const todasAsig = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
-  const asignacionesDelMes = todasAsig.filter((a) => a.fecha.startsWith(prefix));
+  const bloqueos = bloqueosInRange(snap.bloqueos, monthStart, `${prefix}-31`);
+  const asignacionesDelMes = snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
   const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
-  const historicas = desdeRotacion ? todasAsig.filter((a) => a.fecha >= desdeRotacion && a.fecha < monthStart) : [];
-  return deps.domain.buildMonthContext({ mes, anio, residentes, historicas, asignacionesDelMes, bloqueos });
+  const historicas = desdeRotacion ? snap.asignaciones.filter((a) => a.fecha >= desdeRotacion && a.fecha < monthStart) : [];
+  return deps.domain.buildMonthContext({ mes, anio, residentes: snap.residentes, historicas, asignacionesDelMes, bloqueos });
 }
 
 /**

@@ -99,17 +99,39 @@ export function academicYearOf(iso) {
   return month >= 6 ? year : year - 1;
 }
 
+// Trimestre del contaje: T1 jun-ago, T2 sep-nov, T3 dic-feb, T4 mar-may. Definición ÚNICA
+// (la comparten `trimesterOf` y `trimesterWindow`): duplicarla es cómo el .xlsm acabó
+// troceando por rangos de fila y desalineándose en silencio al insertar un residente.
+const TRIMESTRES = { T1: [6, 7, 8], T2: [9, 10, 11], T3: [12, 1, 2], T4: [3, 4, 5] };
+
 /**
- * Trimestre del contaje: T1 jun-ago, T2 sep-nov, T3 dic-feb, T4 mar-may.
- * T3 cruza el año natural — pertenencia por mes, jamás por posición de fila
- * (el .xlsm troceaba por rangos de fila y se desalineaba en silencio).
+ * Trimestre del contaje al que pertenece la fecha.
+ * T3 cruza el año natural — pertenencia por mes, jamás por posición de fila.
  */
 export function trimesterOf(iso) {
   const { month } = parseISO(iso);
-  if (month >= 6 && month <= 8) return "T1";
-  if (month >= 9 && month <= 11) return "T2";
-  if (month === 12 || month <= 2) return "T3";
-  return "T4";
+  return Object.keys(TRIMESTRES).find((t) => TRIMESTRES[t].includes(month));
+}
+
+/**
+ * Ventana completa del trimestre que contiene la fecha: {trimestre, start, end}, ambos
+ * extremos inclusive. En T3 el año de `start` (diciembre) es el ANTERIOR al de `end`
+ * (febrero) — por eso no basta con el año de la fecha suelta.
+ * La usa el cierre trimestral de equidad (INV-3 trimestral, decisión V-13).
+ */
+export function trimesterWindow(iso) {
+  const { year, month } = parseISO(iso);
+  const trimestre = trimesterOf(iso);
+  const meses = TRIMESTRES[trimestre];
+  // T3 = dic-ene-feb: si la fecha cae en ene/feb, el diciembre que abre el trimestre es del año anterior.
+  const startYear = trimestre === "T3" && month <= 2 ? year - 1 : year;
+  const endYear = trimestre === "T3" ? startYear + 1 : year;
+  const endMonth = meses[meses.length - 1];
+  return {
+    trimestre,
+    start: toISO(startYear, meses[0], 1),
+    end: toISO(endYear, endMonth, daysInMonth(endYear, endMonth)),
+  };
 }
 
 /** Comparación cronológica (-1/0/1). Valida ambas fechas: el orden lexicográfico solo es fiable en ISO estricto. */

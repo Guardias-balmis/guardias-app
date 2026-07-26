@@ -22,6 +22,10 @@ import { validateMonth, rotationHistoryStart, buildMonthContext } from "../v2/do
 import { parseISO } from "../v2/domain/calendar.js";
 import { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible } from "../v2/domain/responsible.js";
 import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../v2/domain/cuadrante.js";
+import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, validateQuarterClose, quarterCloseWindow } from "../v2/domain/equity.js";
+// Proyección: sin esto, Publicar fallaba en el dev-server desde la Fase 7.1 (nadie lo notó
+// porque el fake store escribe pestañas en memoria y solo se probó contra el Sheet real).
+import { buildMonthSheetRows, buildResumenRows } from "../v2/domain/projection.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = Number(process.argv[2] || 8787);
@@ -47,6 +51,9 @@ function memorySS(seed = {}) {
 // probar el flujo de alta autoservicio (DoD-1).
 const SEED_RESIDENTES = [
   { id: "res-ana", nombre: "Ana Gómez", email: "ana@gmail.com", fechaInicio: "2023-05-22", fechaFin: "2027-05-21" },
+  // Misma promoción que Ana a propósito: la equidad de INV-3 se compara por cohorte, así que
+  // con un residente por año (como estaba la semilla) ningún cierre era observable en local.
+  { id: "res-bea", nombre: "Bea Server", email: "bea@gmail.com", fechaInicio: "2023-05-22", fechaFin: "2027-05-21" },
   { id: "res-carlos", nombre: "Carlos Ruiz", email: "carlos@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" },
   { id: "res-elena", nombre: "Elena Sansano", email: "elena@gmail.com", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" },
   { id: "res-ivan", nombre: "Iván Cortés", email: "ivan@gmail.com", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" },
@@ -72,7 +79,13 @@ function deps() {
     now, today: new Date().toISOString().slice(0, 10),
     clientId: DEV_CLIENT_ID, sessionSecret: "dev-secret-no-usar-en-produccion", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => nodeCrypto.randomUUID() }),
-    domain: { validateMonth, buildMonthContext, rotationHistoryStart, parseISO, eligibleCandidates, resolveMethod, drawResponsible, validateResponsible, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit },
+    domain: {
+      validateMonth, buildMonthContext, rotationHistoryStart, parseISO,
+      validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, validateQuarterClose, quarterCloseWindow,
+      eligibleCandidates, resolveMethod, drawResponsible, validateResponsible,
+      canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit,
+      buildMonthSheetRows, buildResumenRows,
+    },
     newSeed: () => nodeCrypto.randomUUID(),
     issueNonce: () => { const n = nodeCrypto.randomUUID(); nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),

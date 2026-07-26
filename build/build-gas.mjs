@@ -16,7 +16,11 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // Orden topológico: cada módulo se define después de sus dependencias.
-const DOMAIN_MODULES = ["calendar", "residents", "tally", "thirdpost", "equity", "validate", "responsible", "cuadrante", "projection"];
+// Orden topológico: un módulo solo puede importar de los anteriores (cada uno se envuelve en
+// su propia IIFE y las lee del global ya creado). `accumulate` entra en el bundle desde P-8:
+// el cierre anual de equidad (INV-3) se comprueba también en el servidor, y su ensamblado
+// (`equity.buildYearCloseContext`) necesita el contaje acumulado.
+const DOMAIN_MODULES = ["calendar", "residents", "tally", "accumulate", "thirdpost", "equity", "validate", "responsible", "cuadrante", "projection"];
 const SERVER_MODULES = ["sheets-schema", "sheets-store", "session", "verify-token", "router"];
 
 const DOMAIN_DIR = fileURLToPath(new URL("../v2/domain/", import.meta.url));

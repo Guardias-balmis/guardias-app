@@ -74,3 +74,33 @@ test("listBloqueos requiere sesión", () => {
   const r = call({ action: "listBloqueos", anio: 2026, mes: 8 }, makeDeps());
   assert.equal(r.ok, false);
 });
+
+// listBloqueosRango: mismo alcance (todo el equipo) pero por rango de fechas, porque los
+// cierres de equidad de INV-3 descuentan las BAJAS de todo el trimestre o del año de
+// residencia, no solo las que solapan el mes validado (P-8, decisión V-13).
+
+test("listBloqueosRango devuelve los que solapan el rango, cruzando meses", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  deps.store.appendRecord("bloqueos", { residenteId: "uuid-ana", desde: "2026-09-20", hasta: "2026-10-15", motivo: "BAJA", activo: true });
+  deps.store.appendRecord("bloqueos", { residenteId: "otro-residente", desde: "2026-12-01", hasta: "2026-12-10", motivo: "VACACIONES", activo: true });
+  const r = call({ action: "listBloqueosRango", session, desde: "2026-09-01", hasta: "2026-11-30" }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(r.bloqueos.length, 1); // el de diciembre queda fuera del trimestre
+  assert.equal(r.bloqueos[0].motivo, "BAJA");
+});
+
+test("listBloqueosRango excluye los cancelados y valida el rango", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  const id = deps.store.appendRecord("bloqueos", { residenteId: "uuid-ana", desde: "2026-09-20", hasta: "2026-10-15", motivo: "BAJA", activo: true });
+  deps.store.appendRecord("bloqueos", { id, residenteId: "uuid-ana", desde: "2026-09-20", hasta: "2026-10-15", motivo: "BAJA", activo: false });
+  assert.equal(call({ action: "listBloqueosRango", session, desde: "2026-09-01", hasta: "2026-11-30" }, deps).bloqueos.length, 0);
+  assert.equal(call({ action: "listBloqueosRango", session, desde: "2026-11-30", hasta: "2026-09-01" }, deps).ok, false);
+  assert.equal(call({ action: "listBloqueosRango", session, desde: "2026-09-01" }, deps).ok, false);
+});
+
+test("listBloqueosRango requiere sesión", () => {
+  const r = call({ action: "listBloqueosRango", desde: "2026-09-01", hasta: "2026-11-30" }, makeDeps());
+  assert.equal(r.ok, false);
+});

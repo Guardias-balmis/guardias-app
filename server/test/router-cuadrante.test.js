@@ -9,6 +9,7 @@ import { handleRequest } from "../src/router.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "../../v2/domain/validate.js";
+import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, validateQuarterClose, quarterCloseWindow } from "../../v2/domain/equity.js";
 import { parseISO } from "../../v2/domain/calendar.js";
 import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
 import { buildMonthSheetRows, buildResumenRows } from "../../v2/domain/projection.js";
@@ -48,7 +49,14 @@ function makeDeps(overrides = {}) {
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     ss, // expuesto para que los tests inspeccionen pestañas proyectadas (no lo usa el router)
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${nodeCrypto.randomUUID()}` }),
-    domain: { validateMonth, buildMonthContext, rotationHistoryStart, parseISO, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, buildMonthSheetRows, buildResumenRows },
+    // Mismo conjunto que deps.domain de Code.gs: marcarValidado comprueba el mes Y los dos
+    // cierres de equidad de INV-3 (trimestral y anual), así que las cinco funciones nuevas
+    // tienen que estar aquí o la acción falla por TypeError.
+    domain: {
+      validateMonth, buildMonthContext, rotationHistoryStart, parseISO,
+      validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, validateQuarterClose, quarterCloseWindow,
+      canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, buildMonthSheetRows, buildResumenRows,
+    },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
     fetchTokeninfo: (idToken) => {
@@ -343,4 +351,59 @@ test("mes/anio inválidos se rechazan en las acciones del cuadrante", () => {
   assert.equal(call({ action: "estadoCuadrante", session, mes: 13, anio: 2027 }, deps).ok, false);
   assert.equal(call({ action: "marcarValidado", session, mes: 0, anio: 2027 }, deps).ok, false);
   assert.equal(call({ action: "publicarCuadrante", session, mes: 7, anio: 99 }, deps).ok, false);
+});
+
+// --- Cierres de equidad de INV-3 al validar (P-8, decisión V-13) ----------------------------
+// marcarValidado comprueba el mes Y los cierres que caen en él. Antes de P-8 el cierre anual
+// estaba implementado en el dominio pero no lo invocaba nadie: la equidad de cierre no se
+// comprobaba nunca en producción.
+const guardar = (deps, session, cambios) => call({ action: "guardarAsignaciones", session, cambios }, deps);
+
+test("marcarValidado: el cierre TRIMESTRAL incumplido avisa pero no impide validar", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  // T2-2027 (sep-nov): Rita 3 guardias computables, Óscar 1 → diferencia 2 en totales.
+  guardar(deps, session, [
+    { fecha: "2027-09-06", residenteId: "resp-1", codigo: "G" },
+    { fecha: "2027-09-13", residenteId: "resp-1", codigo: "G" },
+    { fecha: "2027-10-04", residenteId: "resp-1", codigo: "G" },
+    { fecha: "2027-10-11", residenteId: "otro-1", codigo: "G" },
+  ]);
+  const r = call({ action: "marcarValidado", session, mes: 11, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(r.estado, "VALIDADO");
+  const aviso = r.violaciones.find((v) => v.invariante === "INV-3" && v.severidad === "aviso");
+  assert.ok(aviso, "el cierre de T2 debe aparecer como aviso");
+  assert.match(aviso.detalle, /trimestre T2/);
+  assert.equal(call({ action: "estadoCuadrante", session, mes: 11, anio: 2027 }, deps).estado, "VALIDADO");
+});
+
+test("marcarValidado: el cierre ANUAL incumplido es error y deja el cuadrante en BORRADOR", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  // Año de residencia 2027-05-27→2028-05-26 (el 4.º de ambos): Rita 3 guardias, Óscar ninguna.
+  guardar(deps, session, [
+    { fecha: "2027-06-07", residenteId: "resp-1", codigo: "G" },
+    { fecha: "2027-06-14", residenteId: "resp-1", codigo: "G" },
+    { fecha: "2027-06-21", residenteId: "resp-1", codigo: "G" },
+  ]);
+  const r = call({ action: "marcarValidado", session, mes: 5, anio: 2028 }, deps);
+  assert.equal(r.ok, false);
+  const error = r.violaciones.find((v) => v.invariante === "INV-3" && v.severidad === "error");
+  assert.ok(error, "el cierre anual debe aparecer como error");
+  assert.match(error.detalle, /año de residencia/);
+  assert.equal(call({ action: "estadoCuadrante", session, mes: 5, anio: 2028 }, deps).estado, "BORRADOR");
+});
+
+test("marcarValidado: un mes que no cierra trimestre ni año no comprueba ningún cierre", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  guardar(deps, session, [
+    { fecha: "2027-09-06", residenteId: "resp-1", codigo: "G" },
+    { fecha: "2027-09-13", residenteId: "resp-1", codigo: "G" },
+    { fecha: "2027-10-04", residenteId: "resp-1", codigo: "G" },
+  ]);
+  const r = call({ action: "marcarValidado", session, mes: 10, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(r.violaciones.filter((v) => v.invariante === "INV-3").length, 0);
 });

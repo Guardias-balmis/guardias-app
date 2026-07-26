@@ -4,7 +4,10 @@
 // hasta el mes anterior + asignaciones del mes (tally excluye 3P y cedidas/compradas → INV-4).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateResidencyYearClose } from "../equity.js";
+import {
+  validateResidencyYearClose, validateQuarterClose, quarterCloseWindow,
+  yearCloseHistoryStart, buildYearCloseContext,
+} from "../equity.js";
 
 const R = (id, fechaInicio, fechaFin) => ({ id, fechaInicio, fechaFin });
 const acc = (total, findes = 0, festivos = 0, puentesLibres = 0, dobletes = 0, prefestivos = 0) => ({ total, findes, festivos, puentesLibres, dobletes, prefestivos });
@@ -178,4 +181,201 @@ test("INV-3: baja médica se descuenta proporcionalmente (nota [a])", () => {
   });
   // ventana 2026-05-26..2027-05-25 (365 d); baja 28 d → f≈0.923; 50/0.923≈54.2 vs 54 → diff <1
   assert.equal(only3(v).length, 0);
+});
+
+// --- Cierre de TRIMESTRE (INV-3 trimestral, P-8 / decisión V-13) ---------------------------
+// Solo el eje `total` («diferencia de número de guardias», p.2) y severidad `aviso` (la misma
+// frase prevé compensar el exceso en los meses siguientes). T2 = sep-nov: ventana de 91 días.
+const avisos3 = (v) => v.filter((x) => x.invariante === "INV-3" && x.severidad === "aviso");
+const nGuardias = (id, mesPrefix, dias, extra = {}) => dias.map((d) => g(id, `${mesPrefix}-${String(d).padStart(2, "0")}`, "G", extra));
+
+test("quarterCloseWindow: solo agosto, noviembre, febrero y mayo cierran trimestre", () => {
+  assert.deepEqual(quarterCloseWindow(11, 2026), { trimestre: "T2", start: "2026-09-01", end: "2026-11-30" });
+  assert.deepEqual(quarterCloseWindow(2, 2027), { trimestre: "T3", start: "2026-12-01", end: "2027-02-28" });
+  assert.equal(quarterCloseWindow(10, 2026), null);
+  assert.equal(quarterCloseWindow(12, 2026), null); // abre T3, no lo cierra
+});
+
+test("INV-3 trimestral: mes que no cierra trimestre no reporta nada aunque la diferencia sea enorme", () => {
+  const v = validateQuarterClose({
+    mes: 10, anio: 2026, residentes: [A, B],
+    asignaciones: nGuardias("r3a", "2026-10", [2, 6, 10, 15, 20, 24]),
+  });
+  assert.equal(v.length, 0);
+});
+
+test("INV-3 trimestral: diferencia 2 al cierre de T2 es AVISO, no error", () => {
+  const v = validateQuarterClose({
+    mes: 11, anio: 2026, residentes: [A, B],
+    asignaciones: [
+      ...nGuardias("r3a", "2026-09", [3, 12, 21]),
+      ...nGuardias("r3a", "2026-11", [4, 18]),
+      ...nGuardias("r3b", "2026-10", [5, 14, 27]),
+    ],
+  });
+  assert.equal(v.length, 1);
+  assert.equal(v[0].severidad, "aviso");
+  assert.equal(v[0].invariante, "INV-3");
+  assert.equal(v[0].fecha, "2026-11-30");
+  assert.equal(v[0].residenteId, "r3a");
+  assert.match(v[0].detalle, /trimestre T2/);
+  assert.match(v[0].detalle, /r3a=5.*r3b=3/);
+});
+
+test("INV-3 trimestral: diferencia exactamente 1 no avisa", () => {
+  const v = validateQuarterClose({
+    mes: 11, anio: 2026, residentes: [A, B],
+    asignaciones: [...nGuardias("r3a", "2026-09", [3, 12, 21, 28]), ...nGuardias("r3b", "2026-10", [5, 14, 27])],
+  });
+  assert.equal(avisos3(v).length, 0);
+});
+
+test("INV-3 trimestral: solo mide totales — findes/festivos dispares con igual total no avisan", () => {
+  const v = validateQuarterClose({
+    mes: 11, anio: 2026, residentes: [A, B],
+    asignaciones: [
+      // r3a: 4 festivas en fin de semana; r3b: 4 ordinarias en días de semana. Mismo total.
+      ...[5, 6, 12, 13].map((d) => g("r3a", `2026-09-${String(d).padStart(2, "0")}`, "GF")),
+      ...nGuardias("r3b", "2026-09", [7, 8, 14, 15]),
+    ],
+  });
+  assert.equal(avisos3(v).length, 0);
+});
+
+test("INV-3 trimestral: no compara entre cohortes distintas", () => {
+  const v = validateQuarterClose({
+    mes: 11, anio: 2026, residentes: [A, R2A], // cohortes 2024 y 2025
+    asignaciones: nGuardias("r3a", "2026-09", [3, 12, 21, 25, 28]),
+  });
+  assert.equal(avisos3(v).length, 0);
+});
+
+test("INV-3 trimestral: 3P y cedidas/compradas fuera del cómputo (INV-4 vía tally)", () => {
+  const v = validateQuarterClose({
+    mes: 11, anio: 2026, residentes: [A, B],
+    asignaciones: [
+      ...nGuardias("r3a", "2026-09", [3, 12, 21]),
+      ...[4, 11].map((d) => g("r3a", `2026-10-${String(d).padStart(2, "0")}`, "3P")),
+      ...nGuardias("r3b", "2026-10", [5, 14, 27]),
+      ...nGuardias("r3b", "2026-11", [6, 13], { origen: "CEDIDA" }),
+    ],
+  });
+  assert.equal(avisos3(v).length, 0); // 3 vs 3 computables
+});
+
+test("INV-3 trimestral: las asignaciones de fuera de la ventana no cuentan", () => {
+  const v = validateQuarterClose({
+    mes: 11, anio: 2026, residentes: [A, B],
+    asignaciones: [
+      ...nGuardias("r3a", "2026-09", [3, 12, 21]),
+      ...nGuardias("r3a", "2026-08", [4, 11, 18]), // trimestre anterior
+      ...nGuardias("r3a", "2026-12", [2, 9, 16]), // trimestre siguiente
+      ...nGuardias("r3b", "2026-10", [5, 14, 27]),
+    ],
+  });
+  assert.equal(avisos3(v).length, 0);
+});
+
+test("INV-3 trimestral: T3 cruza el año natural — febrero cuenta las guardias de diciembre", () => {
+  const v = validateQuarterClose({
+    mes: 2, anio: 2027, residentes: [A, B],
+    asignaciones: [
+      ...nGuardias("r3a", "2026-12", [3, 12, 21]),
+      ...nGuardias("r3a", "2027-02", [4, 18, 25]),
+      ...nGuardias("r3b", "2027-01", [5, 14, 27, 30]),
+    ],
+  });
+  const a = avisos3(v);
+  assert.equal(a.length, 1);
+  assert.equal(a[0].fecha, "2027-02-28");
+  assert.match(a[0].detalle, /2026-12-01→2027-02-28/);
+});
+
+test("INV-3 trimestral: la baja se descuenta proporcionalmente (nota [a]) y evita el aviso falso", () => {
+  const v = validateQuarterClose({
+    mes: 11, anio: 2026, residentes: [A, B],
+    asignaciones: [
+      ...nGuardias("r3a", "2026-09", [3, 12, 21, 25, 28, 30]), // 6
+      ...nGuardias("r3b", "2026-09", [5, 14, 27]), // 4 (una más en noviembre)
+      ...nGuardias("r3b", "2026-11", [6]),
+    ],
+    bloqueos: [{ residenteId: "r3b", desde: "2026-10-01", hasta: "2026-10-31", motivo: "BAJA" }],
+  });
+  // 91 días de trimestre, 31 de baja → f≈0.66; 4/0.66≈6.07 vs 6 → diferencia < 1
+  assert.equal(avisos3(v).length, 0);
+  assert.equal(avisos3(validateQuarterClose({
+    mes: 11, anio: 2026, residentes: [A, B],
+    asignaciones: [
+      ...nGuardias("r3a", "2026-09", [3, 12, 21, 25, 28, 30]),
+      ...nGuardias("r3b", "2026-09", [5, 14, 27]),
+      ...nGuardias("r3b", "2026-11", [6]),
+    ],
+  })).length, 1); // sin la baja, la misma diferencia sí avisa
+});
+
+test("INV-3 trimestral: con menos de medio trimestre disponible no se compara (evita el aviso falso por normalizar)", () => {
+  const C = R("r3c", "2024-05-27", "2028-05-26");
+  const v = validateQuarterClose({
+    mes: 11, anio: 2026, residentes: [A, B, C],
+    asignaciones: [...nGuardias("r3a", "2026-09", [3, 12, 21, 25, 28, 30]), ...nGuardias("r3c", "2026-10", [4, 11, 18, 22, 26, 29])],
+    // r3b de baja 77 de los 91 días del trimestre y 0 guardias: 0 vs 6 dispararía un aviso
+    bloqueos: [{ residenteId: "r3b", desde: "2026-09-15", hasta: "2026-11-30", motivo: "BAJA" }],
+  });
+  assert.equal(avisos3(v).length, 0);
+});
+
+test("INV-3 trimestral: un residente que no estaba en el trimestre no se compara", () => {
+  const SALIENTE = R("r3c", "2024-05-27", "2026-08-31"); // misma cohorte, termina antes de T2
+  const v = validateQuarterClose({
+    mes: 11, anio: 2026, residentes: [A, SALIENTE],
+    asignaciones: nGuardias("r3a", "2026-09", [3, 12, 21, 25, 28, 30]),
+  });
+  assert.equal(avisos3(v).length, 0); // queda 1 solo residente comparable en la cohorte
+});
+
+// --- Ensamblado del cierre anual (buildYearCloseContext / yearCloseHistoryStart) ------------
+
+test("yearCloseHistoryStart: null si nadie cierra su año de residencia ese mes", () => {
+  assert.equal(yearCloseHistoryStart([A, B], 10, 2026), null);
+});
+
+test("yearCloseHistoryStart: el aniversario MÁS ANTIGUO entre los que cierran ese mes", () => {
+  // A cierra el 2027-05-26 (año en curso desde 2026-05-27); R2A el 2027-05-25 (desde 2026-05-26).
+  assert.equal(yearCloseHistoryStart([A, R2A], 5, 2027), "2026-05-26");
+});
+
+test("buildYearCloseContext: acumula el año en curso y traduce finde→findes", () => {
+  const ctx = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A],
+    historicas: [g("r3a", "2026-06-05"), g("r3a", "2026-09-12"), g("r3a", "2027-03-06")], // 12-sep y 6-mar son sábados
+    asignacionesDelMes: [g("r3a", "2027-05-04"), g("r3a", "2027-05-11")],
+  });
+  assert.equal(ctx.acumulados.r3a.total, 3); // las 2 del mes NO entran en el acumulado
+  assert.equal(ctx.acumulados.r3a.findes, 2);
+  assert.equal(ctx.acumulados.r3a.puentesLibres, 0);
+  assert.deepEqual(ctx.asignaciones, [g("r3a", "2027-05-04"), g("r3a", "2027-05-11")]);
+  assert.deepEqual(ctx.puentesDelMes, []);
+});
+
+test("buildYearCloseContext: cuenta el doblete de borde de mes (contrato C-1)", () => {
+  const ctx = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A],
+    historicas: [g("r3a", "2027-04-30")], // viernes, último día de la ventana acumulada
+    asignacionesDelMes: [g("r3a", "2027-05-02")], // su domingo, ya dentro del mes validado
+  });
+  assert.equal(ctx.acumulados.r3a.dobletes, 1);
+  assert.equal(ctx.acumulados.r3a.total, 1); // el domingo pertenece al mes, no al acumulado
+});
+
+test("buildYearCloseContext: el ctx que produce es el que consume validateResidencyYearClose", () => {
+  const asignacionesDelMes = [g("r3a", "2027-05-04"), g("r3a", "2027-05-11"), g("r3a", "2027-05-18")];
+  const v = validateResidencyYearClose(buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, B],
+    // Todo en días de semana a propósito: así el único eje desequilibrado es `total`.
+    historicas: [...nGuardias("r3a", "2026-06", [2, 9, 16]), ...nGuardias("r3b", "2026-06", [1, 8, 15])],
+    asignacionesDelMes,
+  }));
+  const e = only3(v);
+  assert.equal(e.length, 1); // 6 vs 3 en totales
+  assert.match(e[0].detalle, /r3a=6.*r3b=3/);
 });
