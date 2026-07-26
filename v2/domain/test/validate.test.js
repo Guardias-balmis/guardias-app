@@ -612,13 +612,23 @@ test("INV-2: un Pequeño con exactamente 3 guardias es AVISO, no error (infra-of
   assert.equal(i2[0].severidad, "aviso"); // "R pequeños... alguno podría tocar a solo 3"
 });
 
-test("INV-2: un Mayor con solo 3 guardias sí es error DURA", () => {
+test("INV-2: nada bloquea, ni por debajo ni por encima (decisión V-14: «estas cifras son orientativas»)", () => {
   const CARLOS = R("CARLOS", "2024-05-27", "2028-05-26"); // R3 = MAYOR
-  const asgs = ["2026-10-06", "2026-10-14", "2026-10-22"].map((f) => asg("CARLOS", f, "G"));
-  const v = validateMonth({ mes: 10, anio: 2026, residentes: [CARLOS], asignaciones: asgs });
-  const i2 = v.filter((x) => x.invariante === "INV-2" && x.residenteId === "CARLOS");
-  assert.equal(i2.length, 1);
-  assert.equal(i2[0].severidad, "error");
+  const pocas = validateMonth({
+    mes: 10, anio: 2026, residentes: [CARLOS],
+    asignaciones: ["2026-10-06", "2026-10-14", "2026-10-22"].map((f) => asg("CARLOS", f, "G")), // 3
+  }).filter((x) => x.invariante === "INV-2" && x.residenteId === "CARLOS");
+  assert.equal(pocas.length, 1);
+  assert.equal(pocas[0].severidad, "aviso");
+  assert.match(pocas[0].detalle, /mínimo 4/);
+
+  const muchas = validateMonth({
+    mes: 10, anio: 2026, residentes: [CARLOS],
+    asignaciones: ["2026-10-01", "2026-10-05", "2026-10-09", "2026-10-13", "2026-10-17", "2026-10-21", "2026-10-29"].map((f) => asg("CARLOS", f, "G")), // 7
+  }).filter((x) => x.invariante === "INV-2" && x.residenteId === "CARLOS");
+  assert.equal(muchas.length, 1);
+  assert.equal(muchas[0].severidad, "aviso");
+  assert.match(muchas[0].detalle, /máximo 6/);
 });
 
 test("INV-11: recuento excluye 3P — diferencia computable 1 es válida", () => {

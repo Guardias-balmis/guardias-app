@@ -154,21 +154,25 @@ export function validateMonth(ctx) {
     const propias = asignaciones.filter((a) => a.residenteId === r.id);
     if (propias.length === 0) continue; // residente sin actividad el mes: no se le exige mínimo
     const total = tally(propias, monthWindow).total;
+    // Severidad AVISO en las dos direcciones (decisión V-14, ampliada a INV-2): la normativa
+    // llama a estas cifras «orientativas» con todas las letras (p.2), y el reparto real depende
+    // de cuánta gente haya disponible ese mes — bloquear por ellas dejaría al servicio sin
+    // cuadrante por un motivo que la propia fuente no considera obligatorio.
     if (total > 6) {
-      violations.push(err("INV-2", `${r.id}: ${total} guardias computables > máximo 6`, { residenteId: r.id }));
+      violations.push(aviso("INV-2", `${r.id}: ${total} guardias computables > máximo 6`, { residenteId: r.id }));
     } else if (total < 4) {
       const esFebrero = mes === 2;
       const tieneVoB = bloqueos.some((b) => b.residenteId === r.id && (b.motivo === "VACACIONES" || b.motivo === "BAJA") && rangeIntersectsMonth(b, days));
       const nivelMedio = levelOnDay(r.id, days[Math.floor(days.length / 2)]);
       const r1Verano = nivelMedio === "R1" && (mes === 6 || mes === 7 || mes === 8);
       if (!esFebrero && !tieneVoB && !r1Verano) {
-        // La normativa admite que un Pequeño toque a solo 3 por infra-oferta estructural
-        // ("R pequeños: 4 guardias, e incluso alguno podría tocar a solo 3"): AVISO, no DURA.
-        if (total === 3 && groupOf(nivelMedio) === "PEQUENO") {
-          violations.push(aviso("INV-2", `${r.id}: ${total} guardias computables (por debajo de 4; admisible en un Pequeño por infra-oferta estructural)`, { residenteId: r.id }));
-        } else {
-          violations.push(err("INV-2", `${r.id}: ${total} guardias computables < mínimo 4`, { residenteId: r.id }));
-        }
+        // El mensaje sí distingue el caso que la normativa contempla expresamente ("R pequeños:
+        // 4 guardias, e incluso alguno podría tocar a solo 3"): la severidad ya no los separa,
+        // pero quien lee el aviso necesita saber si es un desajuste o lo esperable.
+        const detalle = total === 3 && groupOf(nivelMedio) === "PEQUENO"
+          ? `${r.id}: 3 guardias computables (por debajo de 4; admisible en un Pequeño por infra-oferta estructural)`
+          : `${r.id}: ${total} guardias computables < mínimo 4`;
+        violations.push(aviso("INV-2", detalle, { residenteId: r.id }));
       }
     }
   }
