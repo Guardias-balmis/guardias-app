@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   parseISO, toISO, weekday, isWeekend, addDays, addYears, daysInMonth,
-  datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, compareISO,
+  datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, compareISO, isHoliday, bridgesOfMonth,
 } from "../calendar.js";
 
 test("parseISO acepta fechas válidas y devuelve componentes", () => {
@@ -117,4 +117,34 @@ test("compareISO ordena cronológicamente y valida entradas", () => {
   assert.ok(compareISO("2027-01-01", "2026-12-31") > 0);
   assert.equal(compareISO("2026-06-01", "2026-06-01"), 0);
   assert.throws(() => compareISO("2026-6-1", "2026-06-01"), /fecha/i);
+});
+
+
+// --- Festivos y puentes (S-4: son datos de entrada, aquí no se calcula ninguno) --------------
+
+test("isHoliday consulta la lista, acepta fechas o registros {fecha}, y no inventa nada", () => {
+  assert.equal(isHoliday("2026-12-25", ["2026-12-25"]), true);
+  assert.equal(isHoliday("2026-12-25", [{ fecha: "2026-12-25", nombre: "Navidad" }]), true);
+  assert.equal(isHoliday("2026-12-25", []), false, "sin lista no hay festivos: no se deriva ninguno");
+  assert.equal(isHoliday("2026-12-24", ["2026-12-25"]), false);
+  assert.throws(() => isHoliday("25/12/2026", []), /fecha/i);
+});
+
+test("bridgesOfMonth: lunes ante martes festivo y viernes tras jueves festivo (§3.4)", () => {
+  // dic-2026: el 8 es martes y el 25 viernes. El lunes 7 queda entre domingo y festivo → puente.
+  assert.deepEqual(bridgesOfMonth(2026, 12, ["2026-12-08", "2026-12-25"]), ["2026-12-07"]);
+  // ene-2027: el 1 es viernes. Si el jueves 7 fuera festivo, el viernes 8 sería puente.
+  assert.deepEqual(bridgesOfMonth(2027, 1, ["2027-01-07"]), ["2027-01-08"]);
+});
+
+test("bridgesOfMonth: un festivo o un fin de semana NO son puente (el puente es laborable)", () => {
+  assert.deepEqual(bridgesOfMonth(2026, 12, ["2026-12-24", "2026-12-25"]), []);
+  assert.deepEqual(bridgesOfMonth(2026, 12, []), [], "sin festivos no hay puentes");
+});
+
+test("bridgesOfMonth: los vecinos del día 1 y del último día caen FUERA del mes y sí cuentan", () => {
+  // El 1-jun-2026 es lunes: con el domingo 31-may y el martes 2-jun festivo, es puente.
+  assert.deepEqual(bridgesOfMonth(2026, 6, ["2026-06-02"]), ["2026-06-01"]);
+  // El 31-jul-2026 es viernes: con el jueves 30 festivo y el sábado 1-ago, es puente.
+  assert.deepEqual(bridgesOfMonth(2026, 7, ["2026-07-30"]), ["2026-07-31"]);
 });

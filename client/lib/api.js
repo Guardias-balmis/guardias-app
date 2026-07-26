@@ -63,6 +63,10 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
     /** Por rango (no por mes): los cierres de equidad descuentan bajas de todo el trimestre/año. */
     listBloqueosRango: (desde, hasta) => authed("listBloqueosRango", { desde, hasta }),
     crearBloqueo: (desde, hasta, motivo, extra = {}) => authed("crearBloqueo", { desde, hasta, motivo, ...extra }),
+    /** Festivos: dato de entrada (S-4). Por rango, porque los puentes miran el día anterior y el siguiente. */
+    listFestivosRango: (desde, hasta) => authed("listFestivosRango", { desde, hasta }),
+    crearFestivos: (festivos) => authed("crearFestivos", { festivos }),
+    anularFestivo: (id) => authed("anularFestivo", { id }),
     cancelarBloqueo: (id) => authed("cancelarBloqueo", { id }),
     estadoResponsable: (anio) => authed("estadoResponsable", { anio }),
     ofrecerseResponsable: (anio) => authed("ofrecerseResponsable", { anio }),

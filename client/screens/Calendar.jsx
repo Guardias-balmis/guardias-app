@@ -173,8 +173,16 @@ function CalendarScreen() {
       historicas = rHist.asignaciones;
     }
 
+    // Festivos para INV-12 (y para los puentes): con un día de margen a cada lado, porque los
+    // vecinos del día 1 y del último día del mes deciden si son puente y caen fuera del mes.
+    // Un fallo de red NO se degrada a "no hay festivos" en silencio: se dice, y se sigue —
+    // INV-12 es aviso, así que no poder comprobarlo no puede impedir validar (V-14).
+    const rFestivos = await app.api.listFestivosRango(addDays(monthWindow.start, -1), addDays(monthWindow.end, 1));
+    if (!rFestivos.ok) showToast("No se pudieron cargar los festivos: " + rFestivos.error + " — INV-12 no se ha comprobado", "err");
+    const festivos = rFestivos.ok ? rFestivos.festivos : [];
+
     const asignacionesDelMes = residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo })));
-    const ctx = buildMonthContext({ mes, anio, residentes, historicas, asignacionesDelMes, bloqueos });
+    const ctx = buildMonthContext({ mes, anio, residentes, historicas, asignacionesDelMes, bloqueos, festivos });
 
     // Cierres de equidad de INV-3 (P-8, decisión V-13): el trimestral en ago/nov/feb/may y el
     // anual en el mes del aniversario de alguien. Es la MISMA comprobación que hará el

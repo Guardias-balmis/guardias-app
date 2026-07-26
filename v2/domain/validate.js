@@ -20,7 +20,7 @@
 // bloquea por algo que no se puede corregir DENTRO de la herramienta deja al servicio sin
 // cuadrante. No subir nada a `error` sin revisar V-14 en spec.md §6.
 
-import { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays } from "./calendar.js";
+import { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays, isHoliday } from "./calendar.js";
 import { defaultTrainingPeriods, levelOn, groupOf } from "./residents.js";
 import { tally } from "./tally.js";
 
@@ -76,12 +76,15 @@ export function rotationHistoryStart(bloqueos, monthStart) {
  * la misma forma de objeto de forma independiente en Calendar.jsx, Generator.jsx y el router.
  * @param {object} p { mes, anio, residentes, historicas?, asignacionesDelMes, bloqueos }
  */
-export function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos }) {
+export function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [] }) {
   return {
     mes, anio,
     residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
     asignaciones: [...historicas, ...asignacionesDelMes],
     bloqueos,
+    // Datos de entrada, jamás derivados (S-4). Se piden con un día de margen a cada lado del mes:
+    // los vecinos del día 1 y del último día caen fuera y deciden si son puente (§3.4).
+    festivos,
   };
 }
 
@@ -91,7 +94,7 @@ export function buildMonthContext({ mes, anio, residentes, historicas = [], asig
  * @returns {{invariante:string, severidad:'error'|'aviso', fecha?:string, residenteId?:string, detalle:string}[]}
  */
 export function validateMonth(ctx) {
-  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, designadosNavidad = [] } = ctx;
+  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, designadosNavidad = [], festivos = [] } = ctx;
   const byId = new Map(residentes.map((r) => [r.id, r]));
   const periods = new Map(residentes.map((r) => [r.id, periodsOf(r)]));
   const levelOnDay = (id, fecha) => (periods.has(id) ? levelOn(periods.get(id), fecha) : null);
@@ -217,6 +220,29 @@ export function validateMonth(ctx) {
 
   // ── INV-9 adicional / INV-10: eventos del servicio ──
   validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, violations);
+
+  // ── INV-12: coherencia código↔festivo (aviso siempre, V-4/V-14) ──
+  // GF solo en día festivo; G y GP nunca EN festivo (un prefestivo es la víspera, no el día).
+  // Sin lista de festivos no se deriva ninguno (S-4: el v1 se los pedía a la IA, prohibido). Y
+  // no se avisa "falta el calendario" en todo mes vacío de festivos: febrero no tiene ninguno en
+  // España, así que sería un aviso falso cada febrero. Se avisa solo cuando la falta IMPIDE
+  // comprobar algo que sí se ha escrito: hay GF en el mes y no hay festivos cargados.
+  const gfDelMes = asignaciones.filter((a) => a.codigo === "GF" && dayset.has(a.fecha));
+  if (festivos.length === 0) {
+    if (gfDelMes.length) {
+      violations.push(aviso("INV-12", `Hay ${gfDelMes.length} guardia(s) marcadas GF pero no hay festivos cargados para ${anio}-${String(mes).padStart(2, "0")}: no se puede comprobar que caigan en festivo`, { fecha: gfDelMes[0].fecha }));
+    }
+  } else {
+    for (const a of asignaciones) {
+      if (!dayset.has(a.fecha)) continue;
+      const esFestivo = isHoliday(a.fecha, festivos);
+      if (a.codigo === "GF" && !esFestivo) {
+        violations.push(aviso("INV-12", `GF el ${a.fecha}, que no consta como festivo`, { fecha: a.fecha, residenteId: a.residenteId }));
+      } else if ((a.codigo === "G" || a.codigo === "GP") && esFestivo) {
+        violations.push(aviso("INV-12", `${a.codigo} el ${a.fecha}, que consta como festivo (debería ser GF)`, { fecha: a.fecha, residenteId: a.residenteId }));
+      }
+    }
+  }
 
   // ── INV-11: verano sin R1 + recuento entre R2 del mismo año ──
   if (mes === 6 || mes === 7 || mes === 8) {

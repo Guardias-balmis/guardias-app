@@ -134,6 +134,40 @@ export function trimesterWindow(iso) {
   };
 }
 
+/**
+ * ¿Es festivo esa fecha? Los festivos son DATOS DE ENTRADA (S-4, §3.4): esta función no calcula
+ * nada, solo consulta la lista que le pasan. Acepta la lista como fechas ISO o como registros
+ * `{fecha}` (que es lo que devuelve la tabla `festivos`) para que el invocador no tenga que
+ * mapear antes.
+ * @param {string} iso
+ * @param {(string|{fecha:string})[]} festivos
+ */
+export function isHoliday(iso, festivos = []) {
+  parseISO(iso);
+  for (const f of festivos) {
+    if ((typeof f === "string" ? f : f && f.fecha) === iso) return true;
+  }
+  return false;
+}
+
+/**
+ * Puentes del mes (§3.4, literal): día laborable L-V no festivo cuyos DOS vecinos son cada uno
+ * festivo o fin de semana. Cubre el viernes tras un jueves festivo y el lunes ante un martes
+ * festivo.
+ *
+ * Ojo al borde: los vecinos del día 1 y del último día del mes caen FUERA del mes, así que la
+ * lista de festivos tiene que cubrir también esos dos días — por eso el invocador pide el rango
+ * con un día de margen a cada lado y no solo el mes.
+ * @returns {string[]} fechas ISO de los puentes, en orden
+ */
+export function bridgesOfMonth(year, month, festivos = []) {
+  const esNoLaborable = (iso) => isWeekend(iso) || isHoliday(iso, festivos);
+  return datesOfMonth(year, month).filter((d) => {
+    if (isWeekend(d) || isHoliday(d, festivos)) return false; // el puente es un día laborable
+    return esNoLaborable(addDays(d, -1)) && esNoLaborable(addDays(d, 1));
+  });
+}
+
 /** Comparación cronológica (-1/0/1). Valida ambas fechas: el orden lexicográfico solo es fiable en ISO estricto. */
 export function compareISO(a, b) {
   parseISO(a);

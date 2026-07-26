@@ -751,3 +751,77 @@ test("V-14: lo imposible y lo ilegal SÍ bloquean (INV-1 sin cubrir, INV-5 sobre
     .filter((x) => x.invariante === "INV-11" && x.severidad === "error");
   assert.equal(r1Verano.length, 1);
 });
+
+
+// ─────────────── INV-12 (coherencia código↔festivo, aviso) ───────────────
+// Los festivos son datos de entrada (S-4): el validador no deriva ninguno. Severidad aviso
+// siempre (V-4/V-14): un código mal puesto se corrige, no bloquea el cuadrante del servicio.
+
+test("INV-12: GF en un día que no consta como festivo avisa", () => {
+  const v = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    festivos: ["2026-12-25"],
+    asignaciones: [asg("ANA", "2026-12-10", "GF")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(v.length, 1);
+  assert.equal(v[0].severidad, "aviso");
+  assert.equal(v[0].fecha, "2026-12-10");
+  assert.equal(v[0].residenteId, "ANA");
+  assert.match(v[0].detalle, /no consta como festivo/);
+});
+
+test("INV-12: G o GP EN un día festivo avisa (debería ser GF)", () => {
+  const v = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    festivos: [{ fecha: "2026-12-25", nombre: "Navidad" }],
+    asignaciones: [asg("ANA", "2026-12-25", "G")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(v.length, 1);
+  assert.equal(v[0].severidad, "aviso");
+  assert.match(v[0].detalle, /debería ser GF/);
+});
+
+test("INV-12: GF en festivo y G en día normal no dicen nada", () => {
+  const v = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    festivos: ["2026-12-25"],
+    asignaciones: [asg("ANA", "2026-12-25", "GF"), asg("ANA", "2026-12-10", "G")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(v.length, 0);
+});
+
+test("INV-12: sin festivos cargados avisa UNA vez si hay GF, y calla si no hay ninguna", () => {
+  const conGF = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    asignaciones: [asg("ANA", "2026-12-10", "GF"), asg("ANA", "2026-12-25", "GF")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(conGF.length, 1, "un aviso por mes, no uno por GF");
+  assert.match(conGF[0].detalle, /no hay festivos cargados/);
+
+  // Febrero no tiene festivos en España: avisar en todo mes sin festivos sería un aviso falso
+  // cada febrero, así que sin GF escritas no se dice nada.
+  const sinGF = validateMonth({
+    mes: 2, anio: 2027, residentes: [ANA],
+    asignaciones: [asg("ANA", "2027-02-10", "G")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(sinGF.length, 0);
+});
+
+test("INV-12: una asignación fuera del mes no se juzga (el histórico de rotación entra en asignaciones)", () => {
+  const v = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    festivos: ["2026-12-25"],
+    asignaciones: [asg("ANA", "2026-11-20", "GF")], // mes anterior: lo trae el contrato C-2
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(v.length, 0);
+});
+
+test("INV-12 nunca bloquea: un mes lleno de incoherencias sigue siendo validable (V-14)", () => {
+  const v = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    festivos: ["2026-12-25"],
+    asignaciones: [asg("ANA", "2026-12-25", "G"), asg("ANA", "2026-12-10", "GF"), asg("ANA", "2026-12-11", "GF")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(v.length, 3);
+  assert.deepEqual([...new Set(v.map((x) => x.severidad))], ["aviso"]);
+});

@@ -12,6 +12,13 @@ export const TABLES = {
   periodos: { name: "periodos", columns: [col("id"), col("residenteId"), col("anio", "number"), col("fechaInicio", "date"), col("fechaFin", "date")] },
   bloqueos: { name: "bloqueos", columns: [col("id"), col("residenteId"), col("desde", "date"), col("hasta", "date"), col("motivo"), col("provincia"), col("guardiasEnCentroExterno", "bool"), col("activo", "bool")] },
   asignaciones: { name: "asignaciones", columns: [col("id"), col("fecha", "date"), col("residenteId"), col("codigo"), col("puesto"), col("origen")] },
+  // Festivos: DATO DE ENTRADA, nunca derivado ni delegado a la IA (S-4; el cliente v1 le pedía
+  // al modelo "identifícalos tú"). `anio` NO se almacena, se deriva de `fecha` (§1). `activo`
+  // permite corregir una fecha mal cargada reinsertando la fila con activo=false, igual que
+  // `bloqueos` — la tabla no se reescribe nunca. `ambito` (NACIONAL/AUTONOMICO/LOCAL) es
+  // informativo: los locales de Alicante son festivos reales y cambian de fecha cada año, así
+  // que sin ellos INV-12 avisaría en falso sobre GF correctas.
+  festivos: { name: "festivos", columns: [col("id"), col("fecha", "date"), col("nombre"), col("ambito"), col("activo", "bool")] },
   responsables: { name: "responsables", columns: [col("id"), col("periodoInicio", "date"), col("periodoFin", "date"), col("residenteId"), col("metodo"), col("voluntarios", "json"), col("semilla"), col("candidatos", "json"), col("fechaSorteo", "date")] },
   voluntariosResponsable: { name: "voluntariosResponsable", columns: [col("id"), col("residenteId"), col("periodoInicio", "date"), col("activo", "bool")] },
   sorteos: { name: "sorteos", columns: [col("id"), col("fecha", "date"), col("motivo"), col("semilla"), col("candidatos", "json"), col("resultado", "json")] },

@@ -153,6 +153,48 @@ export function handleRequest(rawBody, deps) {
           return { ok: true, bloqueos: bloqueosInRange(allBloqueos(deps), req.desde, req.hasta) };
         });
 
+      // FESTIVOS (S-4: datos de entrada, nunca derivados). Lectura por RANGO y abierta a cualquier
+      // sesión: la necesitan el validador (INV-12), los puentes y el prompt del generador. El
+      // rango se pide con margen porque los vecinos del día 1 y del último día del mes deciden si
+      // son puente.
+      case "listFestivosRango":
+        return authed(req, deps, () => {
+          const rango = validRango(req, deps);
+          if (rango.error) return rango;
+          return { ok: true, festivos: festivosInRange(deps, rango.desde, rango.hasta) };
+        });
+
+      // Carga en LOTE (una escritura, un lock): un año de festivos se pega de golpe. Mismo permiso
+      // que el ciclo del cuadrante (V-16), porque es dato compartido de todo el servicio.
+      case "crearFestivos":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "cargar festivos");
+          if (denegado) return denegado;
+          if (!Array.isArray(req.festivos) || req.festivos.length === 0) return { ok: false, error: "festivos vacío" };
+          let filas;
+          try {
+            filas = req.festivos.map((f) => {
+              deps.domain.parseISO(f.fecha);
+              return { fecha: f.fecha, nombre: f.nombre || "", ambito: f.ambito || "", activo: true };
+            });
+          } catch (e) {
+            return { ok: false, error: "festivo con fecha inválida: " + e.message };
+          }
+          const ids = deps.store.appendRecords("festivos", filas);
+          return { ok: true, ids, cargados: ids.length };
+        });
+
+      // Anular una fecha mal cargada: reinserción con activo=false, jamás borrado (append-only).
+      case "anularFestivo":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "anular un festivo");
+          if (denegado) return denegado;
+          const actual = allFestivos(deps).find((f) => f.id === req.id);
+          if (!actual) return { ok: false, error: "festivo no encontrado" };
+          deps.store.appendRecord("festivos", { ...actual, activo: false });
+          return { ok: true };
+        });
+
       case "cancelarBloqueo":
         return authed(req, deps, (session) => {
           const actuales = deps.store.readLatest("bloqueos", (r) => r.id);
@@ -366,6 +408,29 @@ function monthPrefix(anio, mes) {
   return `${anio}-${String(mes).padStart(2, "0")}`;
 }
 
+/** Rango [desde,hasta] validado como ISO de verdad, no por orden lexicográfico. */
+function validRango(req, deps) {
+  if (!req.desde || !req.hasta) return { ok: false, error: "rango de fechas inválido" };
+  try {
+    deps.domain.parseISO(req.desde);
+    deps.domain.parseISO(req.hasta);
+  } catch (e) {
+    return { ok: false, error: "rango con fecha inválida: " + e.message };
+  }
+  if (req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+  return { desde: req.desde, hasta: req.hasta };
+}
+
+/** Estado actual de la tabla de festivos (última reinserción gana). */
+function allFestivos(deps) {
+  return deps.store.readLatest("festivos", (r) => r.id);
+}
+
+/** Festivos ACTIVOS dentro de [desde,hasta]. */
+function festivosInRange(deps, desde, hasta) {
+  return allFestivos(deps).filter((f) => f.activo === true && f.fecha >= desde && f.fecha <= hasta);
+}
+
 /** Estado actual de la tabla de bloqueos (última reinserción gana, como cancelarBloqueo). */
 function allBloqueos(deps) {
   return deps.store.readLatest("bloqueos", (r) => r.id);
@@ -394,6 +459,7 @@ function monthSnapshot(deps) {
     residentes: deps.store.readRecords("residentes"),
     asignaciones: deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }),
     bloqueos: allBloqueos(deps),
+    festivos: allFestivos(deps).filter((f) => f.activo === true),
   };
 }
 
@@ -511,7 +577,15 @@ function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps)) {
   const asignacionesDelMes = snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
   const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
   const historicas = desdeRotacion ? snap.asignaciones.filter((a) => a.fecha >= desdeRotacion && a.fecha < monthStart) : [];
-  return deps.domain.buildMonthContext({ mes, anio, residentes: snap.residentes, historicas, asignacionesDelMes, bloqueos });
+  // Con margen hacia atrás: el vecino del día 1 cae en el mes anterior y decide si es puente
+  // (§3.4). Se cogen los festivos desde el 1 del mes anterior —de más, y son inertes: isHoliday
+  // compara fechas exactas y bridgesOfMonth solo mira día±1— en vez de restar un día, para no
+  // necesitar aritmética de fechas aquí. El filtro por mes SÍ importa: si la lista llegara
+  // completa, un año sin cargar dejaría de disparar el aviso de "no hay festivos cargados".
+  const mesAnterior = mes === 1 ? `${anio - 1}-12` : `${anio}-${String(mes - 1).padStart(2, "0")}`;
+  const mesSiguiente = mes === 12 ? `${anio + 1}-01` : `${anio}-${String(mes + 1).padStart(2, "0")}`;
+  const festivos = (snap.festivos || []).filter((f) => f.fecha >= `${mesAnterior}-01` && f.fecha <= `${mesSiguiente}-01`);
+  return deps.domain.buildMonthContext({ mes, anio, residentes: snap.residentes, historicas, asignacionesDelMes, bloqueos, festivos });
 }
 
 /**

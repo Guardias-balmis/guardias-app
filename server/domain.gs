@@ -143,6 +143,40 @@ function trimesterWindow(iso) {
   };
 }
 
+/**
+ * ¿Es festivo esa fecha? Los festivos son DATOS DE ENTRADA (S-4, §3.4): esta función no calcula
+ * nada, solo consulta la lista que le pasan. Acepta la lista como fechas ISO o como registros
+ * `{fecha}` (que es lo que devuelve la tabla `festivos`) para que el invocador no tenga que
+ * mapear antes.
+ * @param {string} iso
+ * @param {(string|{fecha:string})[]} festivos
+ */
+function isHoliday(iso, festivos = []) {
+  parseISO(iso);
+  for (const f of festivos) {
+    if ((typeof f === "string" ? f : f && f.fecha) === iso) return true;
+  }
+  return false;
+}
+
+/**
+ * Puentes del mes (§3.4, literal): día laborable L-V no festivo cuyos DOS vecinos son cada uno
+ * festivo o fin de semana. Cubre el viernes tras un jueves festivo y el lunes ante un martes
+ * festivo.
+ *
+ * Ojo al borde: los vecinos del día 1 y del último día del mes caen FUERA del mes, así que la
+ * lista de festivos tiene que cubrir también esos dos días — por eso el invocador pide el rango
+ * con un día de margen a cada lado y no solo el mes.
+ * @returns {string[]} fechas ISO de los puentes, en orden
+ */
+function bridgesOfMonth(year, month, festivos = []) {
+  const esNoLaborable = (iso) => isWeekend(iso) || isHoliday(iso, festivos);
+  return datesOfMonth(year, month).filter((d) => {
+    if (isWeekend(d) || isHoliday(d, festivos)) return false; // el puente es un día laborable
+    return esNoLaborable(addDays(d, -1)) && esNoLaborable(addDays(d, 1));
+  });
+}
+
 /** Comparación cronológica (-1/0/1). Valida ambas fechas: el orden lexicográfico solo es fiable en ISO estricto. */
 function compareISO(a, b) {
   parseISO(a);
@@ -150,7 +184,7 @@ function compareISO(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-  return { parseISO, toISO, weekday, isWeekend, addDays, addYears, daysInMonth, datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, compareISO };
+  return { parseISO, toISO, weekday, isWeekend, addDays, addYears, daysInMonth, datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, isHoliday, bridgesOfMonth, compareISO };
 })();
 
 // ── residents.js ──
@@ -849,7 +883,7 @@ var Validate = (function () {
 // bloquea por algo que no se puede corregir DENTRO de la herramienta deja al servicio sin
 // cuadrante. No subir nada a `error` sin revisar V-14 en spec.md §6.
 
-  const { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays } = Calendar;
+  const { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays, isHoliday } = Calendar;
   const { defaultTrainingPeriods, levelOn, groupOf } = Residents;
   const { tally } = Tally;
 
@@ -905,12 +939,15 @@ function rotationHistoryStart(bloqueos, monthStart) {
  * la misma forma de objeto de forma independiente en Calendar.jsx, Generator.jsx y el router.
  * @param {object} p { mes, anio, residentes, historicas?, asignacionesDelMes, bloqueos }
  */
-function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos }) {
+function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [] }) {
   return {
     mes, anio,
     residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
     asignaciones: [...historicas, ...asignacionesDelMes],
     bloqueos,
+    // Datos de entrada, jamás derivados (S-4). Se piden con un día de margen a cada lado del mes:
+    // los vecinos del día 1 y del último día caen fuera y deciden si son puente (§3.4).
+    festivos,
   };
 }
 
@@ -920,7 +957,7 @@ function buildMonthContext({ mes, anio, residentes, historicas = [], asignacione
  * @returns {{invariante:string, severidad:'error'|'aviso', fecha?:string, residenteId?:string, detalle:string}[]}
  */
 function validateMonth(ctx) {
-  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, designadosNavidad = [] } = ctx;
+  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, designadosNavidad = [], festivos = [] } = ctx;
   const byId = new Map(residentes.map((r) => [r.id, r]));
   const periods = new Map(residentes.map((r) => [r.id, periodsOf(r)]));
   const levelOnDay = (id, fecha) => (periods.has(id) ? levelOn(periods.get(id), fecha) : null);
@@ -1046,6 +1083,29 @@ function validateMonth(ctx) {
 
   // ── INV-9 adicional / INV-10: eventos del servicio ──
   validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, violations);
+
+  // ── INV-12: coherencia código↔festivo (aviso siempre, V-4/V-14) ──
+  // GF solo en día festivo; G y GP nunca EN festivo (un prefestivo es la víspera, no el día).
+  // Sin lista de festivos no se deriva ninguno (S-4: el v1 se los pedía a la IA, prohibido). Y
+  // no se avisa "falta el calendario" en todo mes vacío de festivos: febrero no tiene ninguno en
+  // España, así que sería un aviso falso cada febrero. Se avisa solo cuando la falta IMPIDE
+  // comprobar algo que sí se ha escrito: hay GF en el mes y no hay festivos cargados.
+  const gfDelMes = asignaciones.filter((a) => a.codigo === "GF" && dayset.has(a.fecha));
+  if (festivos.length === 0) {
+    if (gfDelMes.length) {
+      violations.push(aviso("INV-12", `Hay ${gfDelMes.length} guardia(s) marcadas GF pero no hay festivos cargados para ${anio}-${String(mes).padStart(2, "0")}: no se puede comprobar que caigan en festivo`, { fecha: gfDelMes[0].fecha }));
+    }
+  } else {
+    for (const a of asignaciones) {
+      if (!dayset.has(a.fecha)) continue;
+      const esFestivo = isHoliday(a.fecha, festivos);
+      if (a.codigo === "GF" && !esFestivo) {
+        violations.push(aviso("INV-12", `GF el ${a.fecha}, que no consta como festivo`, { fecha: a.fecha, residenteId: a.residenteId }));
+      } else if ((a.codigo === "G" || a.codigo === "GP") && esFestivo) {
+        violations.push(aviso("INV-12", `${a.codigo} el ${a.fecha}, que consta como festivo (debería ser GF)`, { fecha: a.fecha, residenteId: a.residenteId }));
+      }
+    }
+  }
 
   // ── INV-11: verano sin R1 + recuento entre R2 del mismo año ──
   if (mes === 6 || mes === 7 || mes === 8) {

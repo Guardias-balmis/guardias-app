@@ -5,7 +5,7 @@
 // (spec.md §5), mismo esquema visual de violaciones que CalendarScreen.
 import { COLOR, S, ANOS } from "./client/lib/design-tokens.js";
 import { defaultTrainingPeriods, levelOn, groupOf, periodOn } from "./v2/domain/residents.js";
-import { addDays, addYears, toISO } from "./v2/domain/calendar.js";
+import { addDays, addYears, toISO, daysInMonth, bridgesOfMonth } from "./v2/domain/calendar.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/domain/validate.js";
 import { accumulatedTally } from "./v2/domain/accumulate.js";
 import { canEdit } from "./v2/domain/cuadrante.js";
@@ -56,7 +56,26 @@ function resumenAcumulado(acc) {
   return `total=${acc.total}, findes=${acc.finde}, festivos=${acc.festivos}, prefestivos=${acc.prefestivos}, dobletes=${acc.dobletes}`;
 }
 
-function construirPrompt({ mes, anio, nombreMes, porNivel, acumulados, bloqueosDelMes }) {
+/**
+ * Festivos y puentes del mes, para el prompt. Los festivos son datos de entrada (S-4): el v1 le
+ * pedía al modelo "identifícalos tú" y eso es exactamente lo que no puede volver a pasar — un
+ * festivo alucinado se convierte en una GF mal puesta que INV-12 tendría que cazar después.
+ * Si no hay festivos cargados se DICE, en vez de callar y dejar que el modelo improvise.
+ */
+function construirFestivosTexto(festivos, puentes) {
+  if (!festivos || festivos.length === 0) {
+    return "FESTIVOS DEL MES: no hay ninguno cargado en la aplicación. NO inventes festivos: marca\ntodas las guardias como G y avisa de que falta el calendario.";
+  }
+  const lista = festivos
+    .map((f) => `  - ${f.fecha}${f.nombre ? ` — ${f.nombre}` : ""}${f.ambito ? ` (${f.ambito.toLowerCase()})` : ""}`)
+    .join("\n");
+  const puentesTexto = puentes && puentes.length
+    ? `\n\nPUENTES (día laborable entre dos no laborables; conviene repartirlos con equidad):\n${puentes.map((d) => `  - ${d}`).join("\n")}`
+    : "";
+  return `FESTIVOS DEL MES (los únicos que existen; la víspera de cada uno es prefestivo → GP):\n${lista}${puentesTexto}`;
+}
+
+function construirPrompt({ mes, anio, nombreMes, porNivel, acumulados, bloqueosDelMes, festivosDelMes, puentesDelMes }) {
   const bloques = ANOS.map((nivel) => {
     const lista = porNivel[nivel];
     if (!lista.length) return null;
@@ -79,6 +98,8 @@ nombre. Junto a cada uno se indica el contaje acumulado de SU año de residencia
 ${bloques || "(sin residentes activos este mes)"}
 
 ${construirBloqueosTexto(bloqueosDelMes)}
+
+${construirFestivosTexto(festivosDelMes, puentesDelMes)}
 
 NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
 1. Cada día lleva exactamente 1 guardia (G/GF/GP) de un residente Mayor (R3/R4) y 1 de un
@@ -104,8 +125,9 @@ NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
     documentado; si no conoces esas fechas, ignora esta norma.
 11. Junio, julio y agosto: ningún R1 hace guardia — ese puesto de Pequeño lo cubren los R2,
     repartido con equidad entre ellos.
-12. Usa el código GP para el prefestivo, GF para el propio festivo y G para el resto de
-    guardias ordinarias.
+12. Usa el código GP para el prefestivo (la VÍSPERA de un festivo), GF para el propio festivo y
+    G para el resto. Usa EXCLUSIVAMENTE las fechas festivas de la lista de arriba: no deduzcas
+    festivos por tu cuenta ni por el calendario que creas recordar.
 
 FORMATO DE RESPUESTA (obligatorio, sin excepciones):
 Responde ÚNICAMENTE con un JSON con esta forma exacta, sin texto ni bloques markdown
@@ -151,6 +173,7 @@ function GeneratorScreen() {
   // Estado del cuadrante (Fase 6.2): un mes PUBLICADO no admite aplicar el generador — el
   // servidor ya lo rechaza en guardarAsignaciones, esto solo lo refleja en la UI.
   const [estadoCuadrante, setEstadoCuadrante] = useState("BORRADOR");
+  const [festivos, setFestivos] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,7 +182,13 @@ function GeneratorScreen() {
       setContextError(null);
       setLoading(true);
 
-      const [rBloqueos, rEstado] = await Promise.all([api.listBloqueos(anio, mes), api.estadoCuadrante(anio, mes)]);
+      const monthEnd = toISO(anio, mes, daysInMonth(anio, mes));
+      const [rBloqueos, rEstado, rFestivos] = await Promise.all([
+        api.listBloqueos(anio, mes),
+        api.estadoCuadrante(anio, mes),
+        // Con margen: el vecino del día 1 y el del último día deciden si son puente (§3.4).
+        api.listFestivosRango(addDays(monthStart, -1), addDays(monthEnd, 1)),
+      ]);
       if (cancelled) return;
       // Un fallo de estadoCuadrante pasa por el MISMO contextError que un fallo de bloqueos
       // (no se distingue cuál falló): si no se sabe el estado real, no se puede asegurar que
@@ -172,9 +201,14 @@ function GeneratorScreen() {
         // prompt/comprobar() no deben mostrar datos reales de OTRO mes como si fueran de este.
         setBloqueos([]);
         setHistoricas([]);
+        setFestivos([]);
         return;
       }
       setEstadoCuadrante(rEstado.estado);
+      // Un fallo al cargar festivos NO tumba la pantalla (INV-12 es aviso, V-14), pero tampoco
+      // se calla: sin ellos el prompt le dice al modelo que no invente ninguno.
+      if (!rFestivos.ok) showToast("No se pudieron cargar los festivos: " + rFestivos.error, "err");
+      setFestivos(rFestivos.ok ? rFestivos.festivos : []);
 
       // Rango del histórico: cubre (a) desde el inicio del año de residencia en curso más
       // antiguo entre los residentes activos (para accumulatedTally, contrato C-1) y (b)
@@ -215,9 +249,15 @@ function GeneratorScreen() {
     () => accumulatedTally(residentes, historicas, addDays(monthStart, -1)),
     [residentes, historicas, monthStart]
   );
+  // Los puentes se DERIVAN de los festivos (§3.4), nunca se piden ni se escriben a mano.
+  const puentes = useMemo(() => bridgesOfMonth(anio, mes, festivos), [anio, mes, festivos]);
+  const festivosDelMes = useMemo(
+    () => festivos.filter((f) => f.fecha.startsWith(monthStart.slice(0, 7))),
+    [festivos, monthStart]
+  );
   const promptText = useMemo(
-    () => construirPrompt({ mes, anio, nombreMes, porNivel, acumulados, bloqueosDelMes: bloqueos }),
-    [mes, anio, nombreMes, porNivel, acumulados, bloqueos]
+    () => construirPrompt({ mes, anio, nombreMes, porNivel, acumulados, bloqueosDelMes: bloqueos, festivosDelMes, puentesDelMes: puentes }),
+    [mes, anio, nombreMes, porNivel, acumulados, bloqueos, festivosDelMes, puentes]
   );
 
   const [respuesta, setRespuesta] = useState("");
@@ -271,6 +311,7 @@ function GeneratorScreen() {
       historicas: historicas.filter((a) => a.fecha < monthStart),
       asignacionesDelMes: asignacionesRespuesta,
       bloqueos,
+      festivos,
     });
     try {
       setParseError(null);

@@ -8,6 +8,8 @@ import nodeCrypto from "node:crypto";
 import { handleRequest } from "../src/router.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
+import { parseISO } from "../../v2/domain/calendar.js";
+import { groupOnDate } from "../../v2/domain/residents.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -33,13 +35,15 @@ function makeDeps() {
     residentes: [headerOf(TABLES.residentes), recordToRow(TABLES.residentes, ANA)],
     responsables: [headerOf(TABLES.responsables)],
     bloqueos: [headerOf(TABLES.bloqueos)],
+    festivos: [headerOf(TABLES.festivos)],
   });
   const nonces = new Set();
   return {
     now: 1_000_000, today: "2027-07-16",
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
-    domain: {},
+    // parseISO/groupOnDate: las acciones de festivos validan fechas y piden permiso de Mayor.
+    domain: { parseISO, groupOnDate },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
     fetchTokeninfo: () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "ana@gmail.com", email_verified: "true", sub: "g-1", exp: String(2_000_000), nonce: [...nonces][0] }),
@@ -103,4 +107,69 @@ test("listBloqueosRango excluye los cancelados y valida el rango", () => {
 test("listBloqueosRango requiere sesión", () => {
   const r = call({ action: "listBloqueosRango", desde: "2026-09-01", hasta: "2026-11-30" }, makeDeps());
   assert.equal(r.ok, false);
+});
+
+
+// --- Festivos: dato de entrada (S-4), carga en lote y anulación por reinserción ---------------
+// ANA es R4 el 2027-07-16 (alta 2024-05-27) → MAYOR, y no hay mandato vigente, así que puede
+// cargarlos por V-16. Un Pequeño no podría.
+
+test("crearFestivos carga un lote y listFestivosRango los devuelve por rango", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  const r = call({ action: "crearFestivos", session, festivos: [
+    { fecha: "2026-12-25", nombre: "Navidad", ambito: "NACIONAL" },
+    { fecha: "2026-12-08", nombre: "Inmaculada", ambito: "NACIONAL" },
+    { fecha: "2027-01-06", nombre: "Reyes", ambito: "NACIONAL" },
+  ] }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(r.cargados, 3);
+
+  const dic = call({ action: "listFestivosRango", session, desde: "2026-12-01", hasta: "2026-12-31" }, deps);
+  assert.deepEqual(dic.festivos.map((f) => f.fecha).sort(), ["2026-12-08", "2026-12-25"]);
+  assert.equal(dic.festivos[0].nombre.length > 0, true, "el nombre viaja para poder mostrarlo");
+
+  const cruzando = call({ action: "listFestivosRango", session, desde: "2026-12-24", hasta: "2027-01-07" }, deps);
+  assert.deepEqual(cruzando.festivos.map((f) => f.fecha).sort(), ["2026-12-25", "2027-01-06"]);
+});
+
+test("crearFestivos rechaza el lote entero si una fecha no es ISO (la tabla no se reescribe)", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  const r = call({ action: "crearFestivos", session, festivos: [{ fecha: "2026-12-25" }, { fecha: "25/12/2026" }] }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /fecha inválida/);
+  assert.equal(deps.store.readRecords("festivos").length, 0, "no se cuela ninguna fila del lote");
+});
+
+test("anularFestivo reinserta con activo=false y deja de aparecer (jamás borra la fila)", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  const id = call({ action: "crearFestivos", session, festivos: [{ fecha: "2026-12-24", nombre: "mal cargado" }] }, deps).ids[0];
+  assert.equal(call({ action: "listFestivosRango", session, desde: "2026-12-01", hasta: "2026-12-31" }, deps).festivos.length, 1);
+
+  assert.equal(call({ action: "anularFestivo", session, id }, deps).ok, true);
+  assert.equal(call({ action: "listFestivosRango", session, desde: "2026-12-01", hasta: "2026-12-31" }, deps).festivos.length, 0);
+  assert.equal(deps.store.readRecords("festivos").length, 2, "las dos filas siguen ahí: append-only");
+});
+
+test("listFestivosRango valida el rango de verdad (ISO, no orden lexicográfico)", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  assert.equal(call({ action: "listFestivosRango", session, desde: "2026-12-31", hasta: "2026-12-01" }, deps).ok, false);
+  assert.equal(call({ action: "listFestivosRango", session, desde: "2026-12-01", hasta: "31/12/2026" }, deps).ok, false);
+  assert.equal(call({ action: "listFestivosRango", session, desde: "2026-12-01" }, deps).ok, false);
+});
+
+test("cargar o anular festivos exige ser Mayor: es dato compartido de todo el servicio", () => {
+  const deps = makeDeps();
+  deps.store.appendRecord("residentes", { id: "uuid-peque", nombre: "Pepa", email: "peque@gmail.com", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" });
+  deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "peque@gmail.com", email_verified: "true", sub: "g-2", exp: String(2_000_000), nonce: call({ action: "getNonce" }, deps).nonce });
+  const nonce = call({ action: "getNonce" }, deps).nonce;
+  deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "peque@gmail.com", email_verified: "true", sub: "g-2", exp: String(2_000_000), nonce });
+  const session = call({ action: "login", idToken: "jwt", nonce }, deps).session;
+  const r = call({ action: "crearFestivos", session, festivos: [{ fecha: "2026-12-25" }] }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /solo un R3 o R4/);
+  assert.equal(deps.store.readRecords("festivos").length, 0);
 });
