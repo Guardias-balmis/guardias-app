@@ -7,7 +7,7 @@ import { defaultTrainingPeriods, levelOn } from "./v2/domain/residents.js";
 import { datesOfMonth, weekday, isWeekend, addDays, addYears } from "./v2/domain/calendar.js";
 import { tally } from "./v2/domain/tally.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/domain/validate.js";
-import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit } from "./v2/domain/cuadrante.js";
+import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit, equityWarnings } from "./v2/domain/cuadrante.js";
 import { todayISO } from "./client/lib/dates.js";
 import { closeViolations } from "./client/lib/closes.js";
 import { violationText } from "./client/lib/violations.js";
@@ -34,6 +34,10 @@ function CalendarScreen() {
   const [guardando, setGuardando] = useState(false);
   const [validando, setValidando] = useState(false);
   const [violaciones, setViolaciones] = useState(null); // null = aún no validado
+  // Avisos de equidad pendientes de confirmar (decisión V-14): la equidad nunca bloquea, pero
+  // pasar a VALIDADO incumpliéndola es una decisión que alguien toma a la vista de los avisos,
+  // no un efecto colateral de pulsar Validar. null = no hay nada que confirmar.
+  const [equidadPorConfirmar, setEquidadPorConfirmar] = useState(null);
   const [estado, setEstado] = useState("BORRADOR");
   const [cambiandoEstado, setCambiandoEstado] = useState(false);
   // Si estadoCuadrante falla (red, sesión) NO se asume BORRADOR: un mes realmente PUBLICADO
@@ -65,6 +69,7 @@ function CalendarScreen() {
       else showToast("Error comprobando el estado del cuadrante: " + rEstado.error, "err");
       setPendientes({});
       setViolaciones(null);
+      setEquidadPorConfirmar(null);
       app.setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -107,6 +112,7 @@ function CalendarScreen() {
     setAsignaciones((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: siguiente } }));
     setPendientes((prev) => ({ ...prev, [`${residenteId}|${fecha}`]: { fecha, residenteId, codigo: siguiente } }));
     setViolaciones(null);
+    setEquidadPorConfirmar(null);
   };
 
   const cambios = Object.values(pendientes);
@@ -127,8 +133,9 @@ function CalendarScreen() {
     }
   };
 
-  const validar = async () => {
+  const validar = async (forzar = false) => {
     setValidando(true);
+    setEquidadPorConfirmar(null);
     // INV-5/6/7 dependen de los bloqueos de TODO el equipo (vacaciones/rotación/baja), no
     // solo de quien pulsa Validar — listBloqueos (a diferencia de misBloqueos) los trae
     // todos. Desde la decisión V-8, solo BAJA bloquea la asignación (INV-5); VACACIONES y
@@ -169,6 +176,17 @@ function CalendarScreen() {
     // `cambios.length === 0` es imprescindible: si hay ediciones sin guardar, lo que ve el
     // cliente (con la edición) puede diferir de lo que el servidor validaría (sin ella) —
     // publicar en ese hueco fijaría datos que nunca reflejaron lo que la pantalla mostraba.
+    // Decisión V-14: un desequilibrio de equidad no impide validar, pero se pregunta. La
+    // primera pasada solo muestra los avisos y ofrece "Validar de todas formas"; la segunda
+    // (forzar=true) es la que valida de verdad. El servidor no necesita saber nada de esto:
+    // los avisos nunca le han bloqueado nada, la confirmación es de quien firma el cuadrante.
+    const avisosEquidad = equityWarnings(v);
+    if (canValidate(v) && isResponsable && estado !== "PUBLICADO" && cambios.length === 0 && avisosEquidad.length > 0 && !forzar) {
+      setEquidadPorConfirmar(avisosEquidad.length);
+      setValidando(false);
+      return;
+    }
+
     if (canValidate(v) && isResponsable && estado !== "PUBLICADO" && cambios.length === 0) {
       const rVal = await app.api.marcarValidado(anio, mes);
       if (rVal.ok) { setEstado(rVal.estado); showToast("Cuadrante VALIDADO ✓"); }
@@ -229,7 +247,7 @@ function CalendarScreen() {
           <button style={pillBtn(COLOR.blue)} onClick={guardar} disabled={busy || bloqueadoPorPublicado}>
             {guardando ? "Guardando…" : `💾 Guardar${cambios.length ? ` (${cambios.length})` : ""}`}
           </button>
-          <button style={pillBtn(COLOR.greenMid)} onClick={validar} disabled={busy}>{validando ? "Validando…" : "✅ Validar"}</button>
+          <button style={pillBtn(COLOR.greenMid)} onClick={() => validar()} disabled={busy}>{validando ? "Validando…" : "✅ Validar"}</button>
           {isResponsable && canPublish(estado) && (
             <button style={pillBtn(COLOR.blueDark)} onClick={publicar} disabled={busy}>
               {cambiandoEstado ? "Publicando…" : "📢 Publicar"}
@@ -294,6 +312,21 @@ function CalendarScreen() {
 
       {violaciones !== null && (
         <Card title="Resultado de validación">
+          {/* Decisión V-14: la equidad nunca bloquea, pero validar incumpliéndola se confirma
+              a la vista de los avisos (que están justo debajo), no antes de poder leerlos. */}
+          {equidadPorConfirmar !== null && (
+            <div style={{ marginBottom: 12, padding: 10, borderRadius: 8, background: COLOR.orangeLight, border: `1.5px solid ${COLOR.orange}` }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: COLOR.orange, marginBottom: 6 }}>
+                ⚖️ El cuadrante incumple los criterios de equidad ({equidadPorConfirmar} {equidadPorConfirmar === 1 ? "aviso" : "avisos"})
+              </div>
+              <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 8 }}>
+                No impide validar: la normativa prevé compensar la diferencia en los meses siguientes. Revisa los avisos de abajo y decide.
+              </div>
+              <button style={pillBtn(COLOR.greenMid)} onClick={() => validar(true)} disabled={busy}>
+                {validando ? "Validando…" : "✅ Validar de todas formas"}
+              </button>
+            </div>
+          )}
           {violaciones.length === 0 ? (
             <div style={{ color: COLOR.green, fontWeight: 700, fontSize: 14 }}>✅ Sin violaciones</div>
           ) : (

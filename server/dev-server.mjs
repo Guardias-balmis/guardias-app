@@ -58,9 +58,14 @@ const SEED_RESIDENTES = [
   { id: "res-elena", nombre: "Elena Sansano", email: "elena@gmail.com", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" },
   { id: "res-ivan", nombre: "Iván Cortés", email: "ivan@gmail.com", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" },
 ];
+// Mandato del año en curso para Ana (era R3 el 1 de enero de 2026, como exige INV-14): sin una
+// fila aquí nadie tiene rol `responsable` en local y todo el ciclo VALIDADO/PUBLICADO —incluida
+// la confirmación de equidad de V-14— era imposible de probar sin tocar el store a mano.
+const ANIO_MANDATO = Number(new Date().toISOString().slice(0, 4));
+const SEED_MANDATO = { id: "mandato-dev", periodoInicio: `${ANIO_MANDATO}-01-01`, periodoFin: `${ANIO_MANDATO + 1}-01-01`, residenteId: "res-ana", metodo: "VOLUNTARIO" };
 const ss = memorySS({
   residentes: [headerOf(TABLES.residentes), ...SEED_RESIDENTES.map((r) => recordToRow(TABLES.residentes, r))],
-  responsables: [headerOf(TABLES.responsables)],
+  responsables: [headerOf(TABLES.responsables), recordToRow(TABLES.responsables, SEED_MANDATO)],
   voluntariosResponsable: [headerOf(TABLES.voluntariosResponsable)],
   asignaciones: [headerOf(TABLES.asignaciones)],
   preferencias: [headerOf(TABLES.preferencias)],

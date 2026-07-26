@@ -378,7 +378,7 @@ test("marcarValidado: el cierre TRIMESTRAL incumplido avisa pero no impide valid
   assert.equal(call({ action: "estadoCuadrante", session, mes: 11, anio: 2027 }, deps).estado, "VALIDADO");
 });
 
-test("marcarValidado: el cierre ANUAL incumplido es error y deja el cuadrante en BORRADOR", () => {
+test("marcarValidado: el cierre ANUAL incumplido AVISA y NO impide validar (decisión V-14)", () => {
   const deps = stubClean(makeDeps());
   const session = loggedInAs(deps, "resp@gmail.com");
   // Año de residencia 2027-05-27→2028-05-26 (el 4.º de ambos): Rita 3 guardias, Óscar ninguna.
@@ -388,11 +388,13 @@ test("marcarValidado: el cierre ANUAL incumplido es error y deja el cuadrante en
     { fecha: "2027-06-21", residenteId: "resp-1", codigo: "G" },
   ]);
   const r = call({ action: "marcarValidado", session, mes: 5, anio: 2028 }, deps);
-  assert.equal(r.ok, false);
-  const error = r.violaciones.find((v) => v.invariante === "INV-3" && v.severidad === "error");
-  assert.ok(error, "el cierre anual debe aparecer como error");
-  assert.match(error.detalle, /año de residencia/);
-  assert.equal(call({ action: "estadoCuadrante", session, mes: 5, anio: 2028 }, deps).estado, "BORRADOR");
+  assert.equal(r.ok, true);
+  assert.equal(r.estado, "VALIDADO");
+  assert.equal(r.violaciones.filter((v) => v.severidad === "error").length, 0, "la equidad no bloquea nunca");
+  const aviso = r.violaciones.find((v) => v.invariante === "INV-3" && v.severidad === "aviso");
+  assert.ok(aviso, "el cierre anual debe aparecer como aviso");
+  assert.match(aviso.detalle, /año de residencia/);
+  assert.equal(call({ action: "estadoCuadrante", session, mes: 5, anio: 2028 }, deps).estado, "VALIDADO");
 });
 
 test("marcarValidado: un mes que no cierra trimestre ni año no comprueba ningún cierre", () => {

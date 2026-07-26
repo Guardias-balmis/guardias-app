@@ -69,9 +69,11 @@ test("cierre anual en un mes que no cierra trimestre: pide desde el aniversario"
   });
   const r = await closeViolations({ api, mes: 10, anio: 2027, residentes: [C, D], asignacionesDelMes: [] });
   assert.deepEqual(api.calls[0], { tipo: "asignaciones", desde: "2026-10-15", hasta: "2027-10-31" });
-  const errores = r.violaciones.filter((v) => v.severidad === "error");
-  assert.equal(errores.length, 1); // 6 vs 1 en totales
-  assert.match(errores[0].detalle, /año de residencia/);
+  // Decisión V-14: el cierre anual avisa, no bloquea.
+  assert.equal(r.violaciones.filter((v) => v.severidad === "error").length, 0);
+  const avisos = r.violaciones.filter((v) => v.severidad === "aviso");
+  assert.equal(avisos.length, 1); // 6 vs 1 en totales
+  assert.match(avisos[0].detalle, /año de residencia/);
 });
 
 test("mayo cierra los dos a la vez (T4 y el año de residencia) con un solo par de peticiones", async () => {
@@ -82,8 +84,10 @@ test("mayo cierra los dos a la vez (T4 y el año de residencia) con un solo par 
   // El rango arranca en el aniversario (2026-05-27), anterior al inicio de T4 (2027-03-01).
   assert.deepEqual(api.calls.map((c) => c.desde), ["2026-05-27", "2026-05-27"]);
   assert.equal(api.calls.length, 2);
-  assert.equal(r.violaciones.filter((v) => v.severidad === "error").length, 1); // anual: 3 vs 1
-  assert.equal(r.violaciones.filter((v) => v.severidad === "aviso").length, 0); // T4: nadie tiene guardias
+  assert.equal(r.violaciones.filter((v) => v.severidad === "error").length, 0); // la equidad nunca bloquea (V-14)
+  const avisos = r.violaciones.filter((v) => v.severidad === "aviso");
+  assert.equal(avisos.length, 1); // solo el anual (3 vs 1); en T4 nadie tiene guardias
+  assert.match(avisos[0].detalle, /año de residencia/);
 });
 
 test("un fallo cargando asignaciones NO se da por comprobado", async () => {

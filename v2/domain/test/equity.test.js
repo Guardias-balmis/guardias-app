@@ -1,4 +1,5 @@
-// Tests de v2/domain/equity.js — INV-3 (equidad al cierre del año de residencia) + INV-4.
+// Tests de v2/domain/equity.js — INV-3 (equidad al cierre del año de residencia y del
+// trimestre) + INV-4. Ninguna de las dos bloquea nunca: son avisos (decisión V-14).
 // La ventana es el año de residencia INDIVIDUAL (aniversario), no el académico. Solo se
 // evalúa en el mes que contiene el cierre. Entrada tipo "Resumen del Excel": acumulados
 // hasta el mes anterior + asignaciones del mes (tally excluye 3P y cedidas/compradas → INV-4).
@@ -17,7 +18,10 @@ const A = R("r3a", "2024-05-27", "2028-05-26"); // cierre R3 el 2027-05-26
 const B = R("r3b", "2024-05-27", "2028-05-26");
 const R2A = R("r2a", "2025-05-26", "2029-05-25"); // cierre R2 el 2027-05-25
 const R2B = R("r2b", "2025-05-26", "2029-05-25");
-const only3 = (v) => v.filter((x) => x.invariante === "INV-3" && x.severidad === "error");
+// Desde la decisión V-14 las dos vertientes de INV-3 (cierre anual y trimestral) son AVISO:
+// filtrar por severidad aquí ocultaría justo lo que hay que comprobar, así que se filtra por
+// invariante y la severidad se asserta explícitamente en el test que la fija.
+const inv3 = (v) => v.filter((x) => x.invariante === "INV-3");
 
 test("INV-3: mes intermedio desigual no viola (no es mes de cierre)", () => {
   const v = validateResidencyYearClose({
@@ -26,7 +30,7 @@ test("INV-3: mes intermedio desigual no viola (no es mes de cierre)", () => {
     asignaciones: ["2026-10-02", "2026-10-06", "2026-10-10", "2026-10-15", "2026-10-20", "2026-10-24"].map((f) => g("r3a", f))
       .concat(["2026-10-04", "2026-10-08", "2026-10-17", "2026-10-28"].map((f) => g("r3b", f))),
   });
-  assert.equal(only3(v).length, 0);
+  assert.equal(inv3(v).length, 0);
 });
 
 test("INV-3: al cierre, diferencia 2 en totales es violación", () => {
@@ -35,10 +39,20 @@ test("INV-3: al cierre, diferencia 2 en totales es violación", () => {
     acumulados: { r3a: acc(54), r3b: acc(54) },
     asignaciones: ["2027-05-04", "2027-05-12", "2027-05-20"].map((f) => g("r3a", f)).concat([g("r3b", "2027-05-06")]),
   });
-  const e = only3(v);
+  const e = inv3(v);
   assert.equal(e.length, 1);
   assert.equal(e[0].fecha, "2027-05-26");
   assert.match(e[0].detalle, /57|55|total/i);
+});
+
+test("INV-3: el cierre anual AVISA, nunca bloquea (decisión V-14)", () => {
+  const v = validateResidencyYearClose({
+    mes: 5, anio: 2027, residentes: [A, B],
+    acumulados: { r3a: acc(54), r3b: acc(48) }, // diferencia 6, lo más lejos posible de cumplir
+    asignaciones: [],
+  });
+  assert.ok(v.length > 0, "un desequilibrio de 6 guardias tiene que reportarse");
+  assert.deepEqual([...new Set(v.map((x) => x.severidad))], ["aviso"]);
 });
 
 test("INV-3: guardias posteriores al aniversario no cuentan", () => {
@@ -47,7 +61,7 @@ test("INV-3: guardias posteriores al aniversario no cuentan", () => {
     acumulados: { r3a: acc(55), r3b: acc(55) },
     asignaciones: [g("r3a", "2027-05-05"), g("r3a", "2027-05-28"), g("r3a", "2027-05-30"), g("r3b", "2027-05-11")],
   });
-  assert.equal(only3(v).length, 0); // 56 vs 56 dentro de la ventana [.., 2027-05-26]
+  assert.equal(inv3(v).length, 0); // 56 vs 56 dentro de la ventana [.., 2027-05-26]
 });
 
 test("INV-3: guardia en el día exacto de cierre sí cuenta", () => {
@@ -56,7 +70,7 @@ test("INV-3: guardia en el día exacto de cierre sí cuenta", () => {
     acumulados: { r3a: acc(55), r3b: acc(54) },
     asignaciones: [g("r3a", "2027-05-19"), g("r3a", "2027-05-26"), g("r3b", "2027-05-24")],
   });
-  assert.equal(only3(v).length, 1); // 57 vs 55
+  assert.equal(inv3(v).length, 1); // 57 vs 55
 });
 
 test("INV-3: no se compara entre años formativos distintos", () => {
@@ -66,7 +80,7 @@ test("INV-3: no se compara entre años formativos distintos", () => {
     acumulados: { r4a: acc(48), r3a: acc(57), r3b: acc(57) },
     asignaciones: [],
   });
-  assert.equal(only3(v).length, 0); // Marta sin pares; R3 empatados
+  assert.equal(inv3(v).length, 0); // Marta sin pares; R3 empatados
 });
 
 test("INV-3: totales iguales pero fines de semana con diferencia 2", () => {
@@ -77,7 +91,7 @@ test("INV-3: totales iguales pero fines de semana con diferencia 2", () => {
     asignaciones: [g("r2a", "2027-05-03"), g("r2a", "2027-05-08"), g("r2a", "2027-05-16"),
       g("r2b", "2027-05-04"), g("r2b", "2027-05-13"), g("r2b", "2027-05-17")],
   });
-  const e = only3(v);
+  const e = inv3(v);
   assert.equal(e.length, 1);
   assert.match(e[0].detalle, /semana|finde/i);
 });
@@ -89,7 +103,7 @@ test("INV-3: doblete real vs falso doblete de semanas distintas", () => {
     asignaciones: [g("r2a", "2027-05-07"), g("r2a", "2027-05-09"), // vie+dom mismo finde → doblete
       g("r2b", "2027-05-14"), g("r2b", "2027-05-23")],             // vie+dom semanas distintas → no
   });
-  const e = only3(v);
+  const e = inv3(v);
   assert.equal(e.length, 1);
   assert.match(e[0].detalle, /doblete/i);
 });
@@ -101,7 +115,7 @@ test("INV-4: 3P no infla el cómputo (queda enmascarado un desequilibrio real)",
     asignaciones: [g("r2a", "2027-05-05"), g("r2a", "2027-05-12"), g("r2a", "2027-05-06", "3P"), g("r2a", "2027-05-13", "3P"),
       g("r2b", "2027-05-07")],
   });
-  const e = only3(v); // r2a 52 (los 2 3P no cuentan), r2b 54 → diff 2
+  const e = inv3(v); // r2a 52 (los 2 3P no cuentan), r2b 54 → diff 2
   assert.equal(e.length, 1);
 });
 
@@ -111,7 +125,7 @@ test("INV-4: guardias compradas no cuentan para quien las realiza", () => {
     acumulados: { r2a: acc(54), r2b: acc(53) },
     asignaciones: [g("r2b", "2027-05-08"), g("r2b", "2027-05-06", "G", { origen: "COMPRADA", cedentePrevio: "r2a" })],
   });
-  assert.equal(only3(v).length, 0); // r2a 54, r2b 54 (la comprada no suma) → diff 0
+  assert.equal(inv3(v).length, 0); // r2a 54, r2b 54 (la comprada no suma) → diff 0
 });
 
 test("INV-3: tres residentes, max−min > 1 aunque los pares adyacentes cumplan", () => {
@@ -123,7 +137,7 @@ test("INV-3: tres residentes, max−min > 1 aunque los pares adyacentes cumplan"
     acumulados: { r1a: acc(49), r1b: acc(48), r1c: acc(47) },
     asignaciones: [],
   });
-  const e = only3(v);
+  const e = inv3(v);
   assert.equal(e.length, 1);
   assert.equal(e[0].fecha, "2027-05-31");
 });
@@ -136,7 +150,7 @@ test("INV-3: frontera exacta diff 1 en todas las dimensiones no viola", () => {
     acumulados: { r1a: acc(48, 11, 4, 2, 2), r1b: acc(47, 10, 3, 1, 1) },
     asignaciones: [],
   });
-  assert.equal(only3(v).length, 0);
+  assert.equal(inv3(v).length, 0);
 });
 
 test("INV-3: aniversario en junio → mayo no es cierre", () => {
@@ -147,7 +161,7 @@ test("INV-3: aniversario en junio → mayo no es cierre", () => {
     acumulados: { r3a: acc(54), r3b: acc(52) },
     asignaciones: [],
   });
-  assert.equal(only3(v).length, 0);
+  assert.equal(inv3(v).length, 0);
 });
 
 test("INV-3: puentes libres con diferencia 2 es violación", () => {
@@ -156,7 +170,7 @@ test("INV-3: puentes libres con diferencia 2 es violación", () => {
     acumulados: { r2a: acc(54, 12, 4, 4, 2), r2b: acc(55, 12, 5, 2, 2) },
     asignaciones: [],
   });
-  const e = only3(v);
+  const e = inv3(v);
   assert.equal(e.length, 1);
   assert.match(e[0].detalle, /puente/i);
 });
@@ -167,7 +181,7 @@ test("INV-3: prefestivos con diferencia 2 al cierre es violación (la normativa 
     acumulados: { r2a: acc(54, 12, 4, 3, 2, 5), r2b: acc(54, 12, 4, 3, 2, 3) }, // prefestivos 5 vs 3
     asignaciones: [],
   });
-  const e = only3(v);
+  const e = inv3(v);
   assert.equal(e.length, 1);
   assert.match(e[0].detalle, /prefestivo/i);
 });
@@ -180,13 +194,12 @@ test("INV-3: baja médica se descuenta proporcionalmente (nota [a])", () => {
     bloqueos: [{ residenteId: "r2b", desde: "2027-02-01", hasta: "2027-02-28", motivo: "BAJA" }],
   });
   // ventana 2026-05-26..2027-05-25 (365 d); baja 28 d → f≈0.923; 50/0.923≈54.2 vs 54 → diff <1
-  assert.equal(only3(v).length, 0);
+  assert.equal(inv3(v).length, 0);
 });
 
 // --- Cierre de TRIMESTRE (INV-3 trimestral, P-8 / decisión V-13) ---------------------------
 // Solo el eje `total` («diferencia de número de guardias», p.2) y severidad `aviso` (la misma
 // frase prevé compensar el exceso en los meses siguientes). T2 = sep-nov: ventana de 91 días.
-const avisos3 = (v) => v.filter((x) => x.invariante === "INV-3" && x.severidad === "aviso");
 const nGuardias = (id, mesPrefix, dias, extra = {}) => dias.map((d) => g(id, `${mesPrefix}-${String(d).padStart(2, "0")}`, "G", extra));
 
 test("quarterCloseWindow: solo agosto, noviembre, febrero y mayo cierran trimestre", () => {
@@ -227,7 +240,7 @@ test("INV-3 trimestral: diferencia exactamente 1 no avisa", () => {
     mes: 11, anio: 2026, residentes: [A, B],
     asignaciones: [...nGuardias("r3a", "2026-09", [3, 12, 21, 28]), ...nGuardias("r3b", "2026-10", [5, 14, 27])],
   });
-  assert.equal(avisos3(v).length, 0);
+  assert.equal(inv3(v).length, 0);
 });
 
 test("INV-3 trimestral: solo mide totales — findes/festivos dispares con igual total no avisan", () => {
@@ -239,7 +252,7 @@ test("INV-3 trimestral: solo mide totales — findes/festivos dispares con igual
       ...nGuardias("r3b", "2026-09", [7, 8, 14, 15]),
     ],
   });
-  assert.equal(avisos3(v).length, 0);
+  assert.equal(inv3(v).length, 0);
 });
 
 test("INV-3 trimestral: no compara entre cohortes distintas", () => {
@@ -247,7 +260,7 @@ test("INV-3 trimestral: no compara entre cohortes distintas", () => {
     mes: 11, anio: 2026, residentes: [A, R2A], // cohortes 2024 y 2025
     asignaciones: nGuardias("r3a", "2026-09", [3, 12, 21, 25, 28]),
   });
-  assert.equal(avisos3(v).length, 0);
+  assert.equal(inv3(v).length, 0);
 });
 
 test("INV-3 trimestral: 3P y cedidas/compradas fuera del cómputo (INV-4 vía tally)", () => {
@@ -260,7 +273,7 @@ test("INV-3 trimestral: 3P y cedidas/compradas fuera del cómputo (INV-4 vía ta
       ...nGuardias("r3b", "2026-11", [6, 13], { origen: "CEDIDA" }),
     ],
   });
-  assert.equal(avisos3(v).length, 0); // 3 vs 3 computables
+  assert.equal(inv3(v).length, 0); // 3 vs 3 computables
 });
 
 test("INV-3 trimestral: las asignaciones de fuera de la ventana no cuentan", () => {
@@ -273,7 +286,7 @@ test("INV-3 trimestral: las asignaciones de fuera de la ventana no cuentan", () 
       ...nGuardias("r3b", "2026-10", [5, 14, 27]),
     ],
   });
-  assert.equal(avisos3(v).length, 0);
+  assert.equal(inv3(v).length, 0);
 });
 
 test("INV-3 trimestral: T3 cruza el año natural — febrero cuenta las guardias de diciembre", () => {
@@ -285,7 +298,7 @@ test("INV-3 trimestral: T3 cruza el año natural — febrero cuenta las guardias
       ...nGuardias("r3b", "2027-01", [5, 14, 27, 30]),
     ],
   });
-  const a = avisos3(v);
+  const a = inv3(v);
   assert.equal(a.length, 1);
   assert.equal(a[0].fecha, "2027-02-28");
   assert.match(a[0].detalle, /2026-12-01→2027-02-28/);
@@ -302,8 +315,8 @@ test("INV-3 trimestral: la baja se descuenta proporcionalmente (nota [a]) y evit
     bloqueos: [{ residenteId: "r3b", desde: "2026-10-01", hasta: "2026-10-31", motivo: "BAJA" }],
   });
   // 91 días de trimestre, 31 de baja → f≈0.66; 4/0.66≈6.07 vs 6 → diferencia < 1
-  assert.equal(avisos3(v).length, 0);
-  assert.equal(avisos3(validateQuarterClose({
+  assert.equal(inv3(v).length, 0);
+  assert.equal(inv3(validateQuarterClose({
     mes: 11, anio: 2026, residentes: [A, B],
     asignaciones: [
       ...nGuardias("r3a", "2026-09", [3, 12, 21, 25, 28, 30]),
@@ -321,7 +334,7 @@ test("INV-3 trimestral: con menos de medio trimestre disponible no se compara (e
     // r3b de baja 77 de los 91 días del trimestre y 0 guardias: 0 vs 6 dispararía un aviso
     bloqueos: [{ residenteId: "r3b", desde: "2026-09-15", hasta: "2026-11-30", motivo: "BAJA" }],
   });
-  assert.equal(avisos3(v).length, 0);
+  assert.equal(inv3(v).length, 0);
 });
 
 test("INV-3 trimestral: un residente que no estaba en el trimestre no se compara", () => {
@@ -330,7 +343,7 @@ test("INV-3 trimestral: un residente que no estaba en el trimestre no se compara
     mes: 11, anio: 2026, residentes: [A, SALIENTE],
     asignaciones: nGuardias("r3a", "2026-09", [3, 12, 21, 25, 28, 30]),
   });
-  assert.equal(avisos3(v).length, 0); // queda 1 solo residente comparable en la cohorte
+  assert.equal(inv3(v).length, 0); // queda 1 solo residente comparable en la cohorte
 });
 
 // --- Ensamblado del cierre anual (buildYearCloseContext / yearCloseHistoryStart) ------------
@@ -375,7 +388,7 @@ test("buildYearCloseContext: el ctx que produce es el que consume validateReside
     historicas: [...nGuardias("r3a", "2026-06", [2, 9, 16]), ...nGuardias("r3b", "2026-06", [1, 8, 15])],
     asignacionesDelMes,
   }));
-  const e = only3(v);
+  const e = inv3(v);
   assert.equal(e.length, 1); // 6 vs 3 en totales
   assert.match(e[0].detalle, /r3a=6.*r3b=3/);
 });

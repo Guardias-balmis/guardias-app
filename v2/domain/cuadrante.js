@@ -10,6 +10,22 @@ export function canValidate(violaciones) {
   return violaciones.every((v) => v.severidad !== "error");
 }
 
+/**
+ * Invariantes que miden EQUIDAD del reparto. Ninguno bloquea nunca (decisión V-14): un
+ * desequilibrio se avisa y quien valida decide si continúa. La lista existe para que la UI
+ * pueda pedir esa confirmación explícita sin reconocer mensajes por su texto — y para que
+ * quien mantenga esto en 2035 vea de un vistazo qué reglas son "de equidad".
+ *  - INV-3: equidad al cierre del año de residencia y del trimestre.
+ *  - INV-8: diferencia de 3.º puestos acumulados entre voluntarios al cierre.
+ *  - INV-11: recuento de verano entre R2 de la misma promoción.
+ */
+export const EQUITY_INVARIANTS = ["INV-3", "INV-8", "INV-11"];
+
+/** Los avisos de equidad de una lista de violaciones (los que exigen confirmación, V-14). */
+export function equityWarnings(violaciones) {
+  return violaciones.filter((v) => v.severidad === "aviso" && EQUITY_INVARIANTS.includes(v.invariante));
+}
+
 /** VALIDADO->PUBLICADO. */
 export function canPublish(estado) {
   return estado === "VALIDADO";

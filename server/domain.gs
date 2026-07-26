@@ -507,7 +507,8 @@ function validateThirdPost(ctx) {
     const max = Math.max(...cuentas), min = Math.min(...cuentas);
     if (max - min > 1) {
       const maxId = grupo.find((x) => x.acumulado === max).id;
-      violations.push(err(`Diferencia de 3P acumulados > 1 al cierre del año de residencia: ${grupo.map((x) => `${x.id}: ${x.acumulado}`).join(", ")}`, { residenteId: maxId }));
+      // Equidad → aviso, nunca error (decisión V-14): es el mismo criterio que INV-3.
+      violations.push(aviso(`Diferencia de 3P acumulados > 1 al cierre del año de residencia: ${grupo.map((x) => `${x.id}: ${x.acumulado}`).join(", ")}`, { residenteId: maxId }));
     }
   }
 
@@ -557,7 +558,10 @@ const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "do
 const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes"]); // se normalizan por disponibilidad
 const EPS = 1e-9;
 
-const err = (detalle, extra = {}) => ({ invariante: "INV-3", severidad: "error", detalle, ...extra });
+// Severidad SIEMPRE aviso, en los dos cierres (decisión V-14): un desequilibrio de equidad se
+// avisa y quien valida decide si continúa — nunca bloquea. No hay aquí ningún constructor de
+// severidad "error" a propósito; si algún día hiciera falta, sería un cambio de V-14, no un
+// detalle de implementación.
 const warn = (detalle, extra = {}) => ({ invariante: "INV-3", severidad: "aviso", detalle, ...extra });
 const cohortOf = (r) => Number(r.fechaInicio.slice(0, 4));
 const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Number(fecha.slice(5, 7)) === mes;
@@ -612,7 +616,7 @@ function validateResidencyYearClose(ctx) {
       const maxEntry = vals.reduce((a, b) => (b.v > a.v ? b : a));
       const minEntry = vals.reduce((a, b) => (b.v < a.v ? b : a));
       if (maxEntry.v - minEntry.v > 1 + EPS) {
-        violations.push(err(
+        violations.push(warn(
           `${labelDim(dim)} al cierre del año de residencia: ${maxEntry.id}=${round(maxEntry.v)} vs ${minEntry.id}=${round(minEntry.v)} (diferencia > 1)`,
           { fecha: maxEntry.cierre, residenteId: maxEntry.id }
         ));
@@ -1289,6 +1293,22 @@ function canValidate(violaciones) {
   return violaciones.every((v) => v.severidad !== "error");
 }
 
+/**
+ * Invariantes que miden EQUIDAD del reparto. Ninguno bloquea nunca (decisión V-14): un
+ * desequilibrio se avisa y quien valida decide si continúa. La lista existe para que la UI
+ * pueda pedir esa confirmación explícita sin reconocer mensajes por su texto — y para que
+ * quien mantenga esto en 2035 vea de un vistazo qué reglas son "de equidad".
+ *  - INV-3: equidad al cierre del año de residencia y del trimestre.
+ *  - INV-8: diferencia de 3.º puestos acumulados entre voluntarios al cierre.
+ *  - INV-11: recuento de verano entre R2 de la misma promoción.
+ */
+const EQUITY_INVARIANTS = ["INV-3", "INV-8", "INV-11"];
+
+/** Los avisos de equidad de una lista de violaciones (los que exigen confirmación, V-14). */
+function equityWarnings(violaciones) {
+  return violaciones.filter((v) => v.severidad === "aviso" && EQUITY_INVARIANTS.includes(v.invariante));
+}
+
 /** VALIDADO->PUBLICADO. */
 function canPublish(estado) {
   return estado === "VALIDADO";
@@ -1310,7 +1330,7 @@ function stateAfterEdit(estado) {
   return estado === "VALIDADO" ? "BORRADOR" : estado;
 }
 
-  return { STATES, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit };
+  return { STATES, canValidate, EQUITY_INVARIANTS, equityWarnings, canPublish, canUnpublish, canEdit, stateAfterEdit };
 })();
 
 // ── projection.js ──

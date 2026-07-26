@@ -22,7 +22,7 @@ import {
   validateResidencyYearClose, validateQuarterClose, quarterCloseWindow,
   yearCloseHistoryStart, buildYearCloseContext,
 } from "../equity.js";
-import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../cuadrante.js";
+import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings } from "../cuadrante.js";
 import { buildMonthSheetRows, buildResumenRows } from "../projection.js";
 import { handleRequest as esmHandleRequest } from "../../../server/src/router.js";
 import { issueSession } from "../../../server/src/session.js";
@@ -96,6 +96,7 @@ function runAll(api) {
     yearCloseCtx: api.buildYearCloseContext({ mes: 5, anio: 2027, residentes: EQ_CTX.residentes, historicas: QC_CTX.asignaciones, asignacionesDelMes: [] }),
     monthContext: ctx,
     canValidate: [api.canValidate([]), api.canValidate(violaciones)],
+    equityWarnings: api.equityWarnings([...violaciones, ...api.validateQuarterClose(QC_CTX)]),
     canPublish: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canPublish),
     canUnpublish: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canUnpublish),
     canEdit: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canEdit),
@@ -108,7 +109,7 @@ function runAll(api) {
 const esm = {
   weekday, levelOn, tally, validateMonth, validateThirdPost, validateResidencyYearClose,
   trimesterWindow, validateQuarterClose, quarterCloseWindow, yearCloseHistoryStart, buildYearCloseContext,
-  buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit,
+  buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings,
   buildMonthSheetRows, buildResumenRows,
 };
 
@@ -121,7 +122,7 @@ function loadBundle(code) {
 
 test("el bundle expone la API pública esperada", () => {
   const Domain = loadBundle(buildBundle());
-  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "buildYearCloseContext", "yearCloseHistoryStart", "validateQuarterClose", "quarterCloseWindow", "trimesterWindow", "validateThirdPost", "levelOn", "groupOf", "weekday", "canValidate", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows"]) {
+  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "buildYearCloseContext", "yearCloseHistoryStart", "validateQuarterClose", "quarterCloseWindow", "trimesterWindow", "validateThirdPost", "levelOn", "groupOf", "weekday", "canValidate", "equityWarnings", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows"]) {
     assert.equal(typeof Domain[fn], "function", `Domain.${fn} debe ser función`);
   }
 });

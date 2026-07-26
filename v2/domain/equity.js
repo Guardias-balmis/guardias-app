@@ -22,7 +22,10 @@ const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "do
 const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes"]); // se normalizan por disponibilidad
 const EPS = 1e-9;
 
-const err = (detalle, extra = {}) => ({ invariante: "INV-3", severidad: "error", detalle, ...extra });
+// Severidad SIEMPRE aviso, en los dos cierres (decisión V-14): un desequilibrio de equidad se
+// avisa y quien valida decide si continúa — nunca bloquea. No hay aquí ningún constructor de
+// severidad "error" a propósito; si algún día hiciera falta, sería un cambio de V-14, no un
+// detalle de implementación.
 const warn = (detalle, extra = {}) => ({ invariante: "INV-3", severidad: "aviso", detalle, ...extra });
 const cohortOf = (r) => Number(r.fechaInicio.slice(0, 4));
 const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Number(fecha.slice(5, 7)) === mes;
@@ -77,7 +80,7 @@ export function validateResidencyYearClose(ctx) {
       const maxEntry = vals.reduce((a, b) => (b.v > a.v ? b : a));
       const minEntry = vals.reduce((a, b) => (b.v < a.v ? b : a));
       if (maxEntry.v - minEntry.v > 1 + EPS) {
-        violations.push(err(
+        violations.push(warn(
           `${labelDim(dim)} al cierre del año de residencia: ${maxEntry.id}=${round(maxEntry.v)} vs ${minEntry.id}=${round(minEntry.v)} (diferencia > 1)`,
           { fecha: maxEntry.cierre, residenteId: maxEntry.id }
         ));

@@ -81,14 +81,16 @@ test("INV-8c: diferencia 2 a mitad de año no es error", () => {
   assert.equal(only8(v).length, 0);
 });
 
-test("INV-8c: diferencia 2 al cierre del año de residencia es error", () => {
+test("INV-8c: diferencia 2 al cierre del año de residencia AVISA, no bloquea (decisión V-14)", () => {
   const historial3P = {
     "r2-bruno": ["2026-06-08", "2026-07-14", "2026-09-16", "2026-11-19", "2027-02-13"],
     "r2-carla": ["2026-06-22", "2026-08-19", "2026-12-11", "2027-03-06"],
   };
   const v = validateThirdPost({ mes: 5, anio: 2027, residentes: [BRUNO, CARLA], voluntarios3P: ["r2-bruno", "r2-carla"], historial3P, asignaciones: [p3("r2-bruno", "2027-05-14")] });
-  const e = only8(v);
-  assert.equal(e.length, 1); // Bruno 6, Carla 4 → diferencia 2 al cierre 2027-05-24
+  assert.equal(only8(v).length, 0); // la equidad no bloquea nunca
+  const av = v.filter((x) => x.invariante === "INV-8" && x.severidad === "aviso");
+  assert.equal(av.length, 1); // Bruno 6, Carla 4 → diferencia 2 al cierre 2027-05-24
+  assert.match(av[0].detalle, /3P acumulados/);
 });
 
 test("INV-8c: 3P posterior al aniversario cuenta el año siguiente", () => {

@@ -97,7 +97,8 @@ export function validateThirdPost(ctx) {
     const max = Math.max(...cuentas), min = Math.min(...cuentas);
     if (max - min > 1) {
       const maxId = grupo.find((x) => x.acumulado === max).id;
-      violations.push(err(`Diferencia de 3P acumulados > 1 al cierre del año de residencia: ${grupo.map((x) => `${x.id}: ${x.acumulado}`).join(", ")}`, { residenteId: maxId }));
+      // Equidad → aviso, nunca error (decisión V-14): es el mismo criterio que INV-3.
+      violations.push(aviso(`Diferencia de 3P acumulados > 1 al cierre del año de residencia: ${grupo.map((x) => `${x.id}: ${x.acumulado}`).join(", ")}`, { residenteId: maxId }));
     }
   }
 
