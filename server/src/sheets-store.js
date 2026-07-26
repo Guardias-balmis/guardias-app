@@ -26,15 +26,31 @@ export function makeStore({ ss, withLock, newId }) {
     return t;
   }
 
-  /** Añade un registro (append-only). Genera `id` si no lo trae. Devuelve el id. */
-  function appendRecord(nameOrTable, record) {
+  /**
+   * Añade VARIOS registros (append-only) en una sola escritura: un lock, una comprobación de
+   * cabecera y un solo `ss.append`. Devuelve los ids generados, en orden.
+   *
+   * Existe porque `appendRecord` por fila no escala en Apps Script: aplicar un mes del generador
+   * son ~60-90 cambios, y cada uno tomaba el lock y RELEÍA la tabla entera solo para ver si
+   * faltaba la cabecera — con `asignaciones` creciendo ~700 filas/año y sin borrados, eso es
+   * coste (filas × cambios) contra el límite de ejecución. Y en lote la escritura es atómica
+   * frente a otros escritores, así que ya no puede quedar un mes medio aplicado cuyo estado
+   * VALIDADO nadie revierte.
+   */
+  function appendRecords(nameOrTable, records) {
     const t = table(nameOrTable);
+    if (!records.length) return [];
     return withLock(() => {
       if (ss.read(t.name).length === 0) ss.append(t.name, [headerOf(t)]); // cabecera si falta
-      const id = record.id || newId();
-      ss.append(t.name, [recordToRow(t, { ...record, id })]);
-      return id;
+      const conId = records.map((r) => ({ ...r, id: r.id || newId() }));
+      ss.append(t.name, conId.map((r) => recordToRow(t, r)));
+      return conId.map((r) => r.id);
     });
+  }
+
+  /** Añade un registro (append-only). Genera `id` si no lo trae. Devuelve el id. */
+  function appendRecord(nameOrTable, record) {
+    return appendRecords(nameOrTable, [record])[0];
   }
 
   /** Lee todos los registros de una tabla normalizada. */
@@ -79,5 +95,5 @@ export function makeStore({ ss, withLock, newId }) {
     });
   }
 
-  return { appendRecord, readRecords, readLatest, rebuildSheet };
+  return { appendRecord, appendRecords, readRecords, readLatest, rebuildSheet };
 }

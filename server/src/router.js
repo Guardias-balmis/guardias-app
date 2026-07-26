@@ -87,9 +87,12 @@ export function handleRequest(rawBody, deps) {
           const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
           if (publicado) return { ok: false, error: `el cuadrante de ${publicado.mes}/${publicado.anio} está PUBLICADO y no admite ediciones` };
 
-          for (const c of req.cambios) {
-            deps.store.appendRecord("asignaciones", { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen });
-          }
+          // Una sola escritura para todo el lote (appendRecords): un mes del generador son
+          // ~60-90 cambios y fila a fila era un lock y una relectura íntegra de la tabla por cada
+          // uno. Además así el lote es atómico y no puede quedar medio aplicado.
+          deps.store.appendRecords("asignaciones", req.cambios.map((c) => (
+            { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen }
+          )));
           for (const m of meses) {
             const siguiente = deps.domain.stateAfterEdit(m.estado);
             if (siguiente !== m.estado) writeCuadranteEstado(deps, session, m.mes, m.anio, siguiente);

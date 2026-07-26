@@ -132,15 +132,31 @@ function makeStore({ ss, withLock, newId }) {
     return t;
   }
 
-  /** Añade un registro (append-only). Genera `id` si no lo trae. Devuelve el id. */
-  function appendRecord(nameOrTable, record) {
+  /**
+   * Añade VARIOS registros (append-only) en una sola escritura: un lock, una comprobación de
+   * cabecera y un solo `ss.append`. Devuelve los ids generados, en orden.
+   *
+   * Existe porque `appendRecord` por fila no escala en Apps Script: aplicar un mes del generador
+   * son ~60-90 cambios, y cada uno tomaba el lock y RELEÍA la tabla entera solo para ver si
+   * faltaba la cabecera — con `asignaciones` creciendo ~700 filas/año y sin borrados, eso es
+   * coste (filas × cambios) contra el límite de ejecución. Y en lote la escritura es atómica
+   * frente a otros escritores, así que ya no puede quedar un mes medio aplicado cuyo estado
+   * VALIDADO nadie revierte.
+   */
+  function appendRecords(nameOrTable, records) {
     const t = table(nameOrTable);
+    if (!records.length) return [];
     return withLock(() => {
       if (ss.read(t.name).length === 0) ss.append(t.name, [headerOf(t)]); // cabecera si falta
-      const id = record.id || newId();
-      ss.append(t.name, [recordToRow(t, { ...record, id })]);
-      return id;
+      const conId = records.map((r) => ({ ...r, id: r.id || newId() }));
+      ss.append(t.name, conId.map((r) => recordToRow(t, r)));
+      return conId.map((r) => r.id);
     });
+  }
+
+  /** Añade un registro (append-only). Genera `id` si no lo trae. Devuelve el id. */
+  function appendRecord(nameOrTable, record) {
+    return appendRecords(nameOrTable, [record])[0];
   }
 
   /** Lee todos los registros de una tabla normalizada. */
@@ -185,7 +201,7 @@ function makeStore({ ss, withLock, newId }) {
     });
   }
 
-  return { appendRecord, readRecords, readLatest, rebuildSheet };
+  return { appendRecord, appendRecords, readRecords, readLatest, rebuildSheet };
 }
 
   return { makeStore };
@@ -405,9 +421,12 @@ function handleRequest(rawBody, deps) {
           const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
           if (publicado) return { ok: false, error: `el cuadrante de ${publicado.mes}/${publicado.anio} está PUBLICADO y no admite ediciones` };
 
-          for (const c of req.cambios) {
-            deps.store.appendRecord("asignaciones", { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen });
-          }
+          // Una sola escritura para todo el lote (appendRecords): un mes del generador son
+          // ~60-90 cambios y fila a fila era un lock y una relectura íntegra de la tabla por cada
+          // uno. Además así el lote es atómico y no puede quedar medio aplicado.
+          deps.store.appendRecords("asignaciones", req.cambios.map((c) => (
+            { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen }
+          )));
           for (const m of meses) {
             const siguiente = deps.domain.stateAfterEdit(m.estado);
             if (siguiente !== m.estado) writeCuadranteEstado(deps, session, m.mes, m.anio, siguiente);
