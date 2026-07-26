@@ -815,6 +815,17 @@ var Validate = (function () {
 // Reconciliación INV-1/INV-9 (decisión V-1): un día con dos Pequeños AMBOS R2 lo evalúa
 // INV-9 (excepción 2×R2); cualquier otro día defectuoso, INV-1. El comportamiento
 // aceptar/rechazar es el de la normativa; solo se unifica qué etiqueta lo reporta.
+//
+// SEVERIDADES (decisión V-14, ampliada el 2026-07-26): de todo lo que vive aquí, solo tres
+// cosas bloquean el paso a VALIDADO, porque son las únicas imposibles de ejecutar o ilegales:
+// un día que NADIE cubre y una composición de 2+ personas que no puede ser (INV-1), una
+// guardia sobre una baja médica (INV-5) y un R1 asignado en junio-agosto (INV-11). Todo lo
+// demás —recuento mensual (INV-2), ausencias simultáneas (INV-6), cobertura de la rotación
+// cercana (INV-7), 2×R2 sin justificar (INV-9), eventos (INV-10), equidad de verano (INV-11)—
+// es `aviso`: informa y deja que quien firma el cuadrante decida. El criterio es del autor y
+// tiene un motivo estructural: la app debe funcionar sin administrador, y una regla que
+// bloquea por algo que no se puede corregir DENTRO de la herramienta deja al servicio sin
+// cuadrante. No subir nada a `error` sin revisar V-14 en spec.md §6.
 
   const { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays } = Calendar;
   const { defaultTrainingPeriods, levelOn, groupOf } = Residents;
@@ -920,7 +931,10 @@ function validateMonth(ctx) {
       // Candidato 2×R2 → lo gobierna INV-9
       if (!twoR2Justified(fecha)) {
         const antesDeDiciembre = compareISO(fecha, toISO(academicYearOf(fecha), 12, 1)) < 0;
-        violations.push(err("INV-9", antesDeDiciembre
+        // Aviso, no error (V-14): la Excepcion justificada todavía no se puede registrar desde
+        // la app, así que bloquear aquí impide validar un mes por algo que nadie puede resolver
+        // dentro de la herramienta.
+        violations.push(aviso("INV-9", antesDeDiciembre
           ? `2×R2 el ${fecha}: la excepción solo aplica desde diciembre del año académico`
           : `2×R2 el ${fecha}: sin justificación documentada (rotaciones de mayores o necesidad organizativa)`,
           { fecha }));
@@ -1002,7 +1016,9 @@ function validateMonth(ctx) {
     if (hasFriday && !cubreV) faltan.push("viernes");
     if (hasSaturday && !cubreS) faltan.push("sábado");
     if (faltan.length) {
-      violations.push(err("INV-7", `${b.residenteId}: rotación en ${b.provincia} (${b.desde}..${b.hasta}) sin guardia de ${faltan.join(" ni ")} en el cuadrante propio`, { residenteId: b.residenteId }));
+      // Aviso, no error (V-14): puede no existir hueco de viernes o sábado dentro del periodo
+      // sin romper la composición del resto del grupo — no siempre se arregla en el cuadrante.
+      violations.push(aviso("INV-7", `${b.residenteId}: rotación en ${b.provincia} (${b.desde}..${b.hasta}) sin guardia de ${faltan.join(" ni ")} en el cuadrante propio`, { residenteId: b.residenteId }));
     }
   }
 
@@ -1076,7 +1092,9 @@ function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, viol
         let culpable;
         if (vacs.length) culpable = vacs[vacs.length - 1].id;            // rotación prioritaria: cede el de vacaciones
         else culpable = ausentes.slice().sort((a, b) => compareISO(a.desde, b.desde)).pop().id; // el último en incorporarse
-        violations.push(err("INV-6", `Más de 2 residentes de la promoción ${c} ausentes simultáneamente el ${fecha} (${ausentes.map((a) => a.id).join(", ")})`, { fecha, residenteId: culpable }));
+        // Aviso, no error (V-14): las ausencias vienen de vacaciones y rotaciones ya
+        // concedidas; el cuadrante del mes no puede deshacerlas.
+        violations.push(aviso("INV-6", `Más de 2 residentes de la promoción ${c} ausentes simultáneamente el ${fecha} (${ausentes.map((a) => a.id).join(", ")})`, { fecha, residenteId: culpable }));
       }
       emittedRun.set(c, excess);
     }

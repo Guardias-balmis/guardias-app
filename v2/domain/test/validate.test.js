@@ -696,3 +696,58 @@ test("buildMonthContext: historicas es opcional (por defecto [])", () => {
   const ctx = buildMonthContext({ mes: 7, anio: 2026, residentes: [], asignacionesDelMes: mesActual, bloqueos: [] });
   assert.deepEqual(ctx.asignaciones, mesActual);
 });
+
+// ─────────────── Severidades: qué bloquea y qué no (decisión V-14) ───────────────
+// La lista de lo que impide pasar a VALIDADO es corta y deliberada: lo imposible de ejecutar
+// (INV-1) y lo ilegal (INV-5, INV-11 con un R1 en verano). Todo lo demás avisa. Estos tests
+// existen para que subir cualquier severidad rompa algo en rojo y obligue a releer V-14.
+
+test("V-14: INV-6, INV-7 e INV-9 avisan, no bloquean (su causa no vive en el cuadrante del mes)", () => {
+  const M1 = cohort("M1", 2024), M2 = cohort("M2", 2024), M3 = cohort("M3", 2024);
+  const i6 = validateMonth({
+    mes: 7, anio: 2026, residentes: [M1, M2, M3], asignaciones: [],
+    bloqueos: [
+      blk("M1", "2026-07-01", "2026-07-20", "ROTACION"),
+      blk("M2", "2026-07-10", "2026-07-31", "ROTACION"),
+      blk("M3", "2026-07-20", "2026-08-16", "ROTACION"),
+    ],
+  }).filter((x) => x.invariante === "INV-6");
+  assert.equal(i6.length, 1);
+  assert.equal(i6[0].severidad, "aviso");
+
+  const R7 = R("M7", "2024-05-27", "2028-05-26");
+  const i7 = validateMonth({
+    mes: 11, anio: 2026, residentes: [R7], asignaciones: [asg("M7", "2026-11-06", "G"), asg("M7", "2026-11-20", "G")],
+    bloqueos: [blk("M7", "2026-11-02", "2026-11-29", "ROTACION", { provincia: "Murcia" })],
+  }).filter((x) => x.invariante === "INV-7");
+  assert.equal(i7.length, 1);
+  assert.equal(i7[0].severidad, "aviso");
+
+  const A2 = R("A2", "2025-05-26", "2029-05-25"), B2 = R("B2", "2025-05-26", "2029-05-25"); // ambos R2 en nov-2026
+  const i9 = validateMonth({
+    mes: 11, anio: 2026, residentes: [A2, B2],
+    asignaciones: [asg("A2", "2026-11-10", "G"), asg("B2", "2026-11-10", "G")],
+  }).filter((x) => x.invariante === "INV-9");
+  assert.equal(i9.length, 1);
+  assert.equal(i9[0].severidad, "aviso");
+});
+
+test("V-14: lo imposible y lo ilegal SÍ bloquean (INV-1 sin cubrir, INV-5 sobre baja, INV-11 R1 en verano)", () => {
+  const MAYOR = R("MAY", "2024-05-27", "2028-05-26");
+  const sinCubrir = validateMonth({ mes: 11, anio: 2026, residentes: [MAYOR], asignaciones: [] })
+    .filter((x) => x.invariante === "INV-1");
+  assert.ok(sinCubrir.length > 0);
+  assert.deepEqual([...new Set(sinCubrir.map((x) => x.severidad))], ["error"]);
+
+  const sobreBaja = validateMonth({
+    mes: 11, anio: 2026, residentes: [MAYOR], asignaciones: [asg("MAY", "2026-11-10", "G")],
+    bloqueos: [blk("MAY", "2026-11-01", "2026-11-30", "BAJA")],
+  }).filter((x) => x.invariante === "INV-5");
+  assert.equal(sobreBaja.length, 1);
+  assert.equal(sobreBaja[0].severidad, "error");
+
+  const R1 = R("R1V", "2026-05-25", "2030-05-24"); // R1 en julio-2026
+  const r1Verano = validateMonth({ mes: 7, anio: 2026, residentes: [R1], asignaciones: [asg("R1V", "2026-07-15", "G")] })
+    .filter((x) => x.invariante === "INV-11" && x.severidad === "error");
+  assert.equal(r1Verano.length, 1);
+});
