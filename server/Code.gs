@@ -123,18 +123,42 @@ function sheetsStore_() {
     overwrite: function (n, rows) {
       var sh = ss.getSheetByName(n);
       sh.clearContents();
-      if (rows.length) sh.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
+      if (rows.length) ensureGrid_(sh, rows.length, rows[0].length).getRange(1, 1, rows.length, rows[0].length).setValues(rows);
     },
     append: function (n, rows) {
       if (!rows.length) return;
-      var sh = ss.getSheetByName(n);
-      sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+      // Si la pestaña no existe, se crea: así el arranque no depende de haber creado a mano las
+      // 9 hojas de datos (la cabecera la escribe sheets-store al ver la hoja vacía), y una tabla
+      // nueva del esquema no revienta con "Cannot read properties of null". El fake de los tests
+      // y el dev-server ya se comportaban así; producción era el único sitio que fallaba.
+      var sh = ss.getSheetByName(n) || ss.insertSheet(n);
+      var desde = sh.getLastRow() + 1;
+      ensureGrid_(sh, desde + rows.length - 1, rows[0].length).getRange(desde, 1, rows.length, rows[0].length).setValues(rows);
     },
     createSheet: function (n) { ss.insertSheet(n); },
     deleteSheet: function (n) { var sh = ss.getSheetByName(n); if (sh) ss.deleteSheet(sh); },
     renameSheet: function (from, to) { ss.getSheetByName(from).setName(to); },
   };
   return Server.makeStore({ ss: adapter, withLock: withScriptLock_, newId: function () { return Utilities.getUuid(); } });
+}
+
+/**
+ * Crece la rejilla de la hoja hasta que quepa lo que se va a escribir, y la devuelve.
+ *
+ * `getRange` NO amplía la hoja: pedir un rango fuera de la rejilla lanza, y una hoja nueva de
+ * Apps Script nace con 1000 filas × 26 columnas. Eso son dos fallos garantizados sin esto:
+ *  - Columnas: la pestaña mensual de la proyección tiene 9 columnas fijas + un día por columna =
+ *    hasta 40. El PRIMER "Publicar" real habría lanzado antes de escribir una sola fórmula.
+ *  - Filas: `asignaciones` crece ~700 filas/año y nunca se borra (append-only), así que el tope
+ *    de 1000 se alcanza en año y medio y a partir de ahí NADA se puede guardar.
+ * Los dos son invisibles para los tests: el `ss` falso es un array de arrays sin límites.
+ */
+function ensureGrid_(sh, filas, columnas) {
+  var maxFilas = sh.getMaxRows();
+  if (filas > maxFilas) sh.insertRowsAfter(maxFilas, filas - maxFilas);
+  var maxCols = sh.getMaxColumns();
+  if (columnas > maxCols) sh.insertColumnsAfter(maxCols, columnas - maxCols);
+  return sh;
 }
 
 // Escritor único serializado para los 15 usuarios (script lock, no user lock).

@@ -8,6 +8,7 @@ import { handleRequest } from "../src/router.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible } from "../../v2/domain/responsible.js";
+import { groupOnDate } from "../../v2/domain/residents.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -46,7 +47,8 @@ function makeDeps(overrides = {}) {
     now: 1_000_000, today: "2026-12-01",
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
-    domain: { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible },
+    // groupOnDate: el sorteo pasa por requireCicloPermiso desde que escribe un mandato irreversible.
+    domain: { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible, groupOnDate },
     newSeed: () => `semilla-${++seedCounter}`,
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),

@@ -179,7 +179,8 @@ function CalendarScreen() {
     // Cierres de equidad de INV-3 (P-8, decisión V-13): el trimestral en ago/nov/feb/may y el
     // anual en el mes del aniversario de alguien. Es la MISMA comprobación que hará el
     // servidor en marcarValidado; si falla la carga no se sigue, porque un cierre no
-    // comprobado en silencio es peor que no validar (el anual es error y bloquea).
+    // comprobado en silencio es peor que dar por bueno lo que no se ha mirado (V-14: ninguno de
+    // los dos cierres bloquea, pero la confirmación explícita sí depende de haberlos calculado).
     const rCierres = await closeViolations({ api: app.api, mes, anio, residentes, asignacionesDelMes });
     if (!rCierres.ok) {
       setCierresError(rCierres.error);

@@ -6,6 +6,14 @@
 //
 // `ss` debe ofrecer: listSheets, exists, read, overwrite, append, createSheet, deleteSheet,
 // renameSheet. `newId()` genera UUID (Utilities.getUuid en Apps Script).
+//
+// Contrato del adaptador, fijado tras un fallo que ningún test podía ver (2026-07-27):
+//  - `append(nombre, filas)` CREA la hoja si no existe (este módulo escribe luego la cabecera).
+//  - `overwrite` y `append` deben AMPLIAR la rejilla si hace falta. En Apps Script una hoja nace
+//    con 1000 filas × 26 columnas y `getRange` fuera de rango lanza: la pestaña mensual de la
+//    proyección necesita hasta 40 columnas, y una tabla append-only pasa de 1000 filas sola.
+//    El `ss` de los tests es un array de arrays sin límites, así que esto NO lo cubre ningún
+//    test: vive en server/Code.gs y se verifica a mano contra el Sheet real.
 
 import { TABLES, headerOf, recordToRow, rowsToRecords } from "./sheets-schema.js";
 

@@ -112,6 +112,14 @@ var SheetsStore = (function () {
 //
 // `ss` debe ofrecer: listSheets, exists, read, overwrite, append, createSheet, deleteSheet,
 // renameSheet. `newId()` genera UUID (Utilities.getUuid en Apps Script).
+//
+// Contrato del adaptador, fijado tras un fallo que ningún test podía ver (2026-07-27):
+//  - `append(nombre, filas)` CREA la hoja si no existe (este módulo escribe luego la cabecera).
+//  - `overwrite` y `append` deben AMPLIAR la rejilla si hace falta. En Apps Script una hoja nace
+//    con 1000 filas × 26 columnas y `getRange` fuera de rango lanza: la pestaña mensual de la
+//    proyección necesita hasta 40 columnas, y una tabla append-only pasa de 1000 filas sola.
+//    El `ss` de los tests es un array de arrays sin límites, así que esto NO lo cubre ningún
+//    test: vive en server/Code.gs y se verifica a mano contra el Sheet real.
 
   const { TABLES, headerOf, recordToRow, rowsToRecords } = SheetsSchema;
 
@@ -414,10 +422,19 @@ function handleRequest(rawBody, deps) {
           return { ok: true, prefs: mine || null };
         });
 
+      // Lista blanca de columnas, no spread del cliente: con `...req.prefs` al final, un residente
+      // podía escribir preferencias EN NOMBRE de otro (su `residenteId` pisaba el de la sesión) y
+      // colar un `id` propio, que el store honra. Invertir el orden del spread no bastaría: el `id`
+      // seguiría pasando, y de hecho la pantalla ya reenvía el suyo y duplica ids en producción.
       case "guardarPreferencias":
         return authed(req, deps, (session) => {
           if (!req.prefs || typeof req.prefs !== "object") return { ok: false, error: "prefs inválido" };
-          deps.store.appendRecord("preferencias", { residenteId: session.sub, anio: req.anio, mes: req.mes, ...req.prefs });
+          if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
+          const { maxGuardias, preferDobles, fechasEvitar, notas } = req.prefs;
+          deps.store.appendRecord("preferencias", {
+            residenteId: session.sub, anio: req.anio, mes: req.mes,
+            maxGuardias, preferDobles, fechasEvitar, notas,
+          });
           return { ok: true };
         });
 
@@ -495,9 +512,16 @@ function handleRequest(rawBody, deps) {
           return { ok: true };
         });
 
+      // El sorteo escribe una fila de mandato append-only e IRREVERSIBLE para todo un año: no
+      // puede quedar al alcance de cualquier sesión (un R1 podía quemar el mandato antes de que
+      // nadie se ofreciera). Mismo permiso que las transiciones del cuadrante (V-16): el
+      // Responsable en mandato o, si no hay ninguno —que es justo cuando hay que sortear—,
+      // cualquier Mayor.
       case "ejecutarSorteoResponsable":
-        return authed(req, deps, () => {
+        return authed(req, deps, (session) => {
           if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
+          const denegado = requireCicloPermiso(deps, session, "lanzar el sorteo del Responsable");
+          if (denegado) return denegado;
           const { periodoInicio, periodoFin } = mandatoPeriod(req.anio);
           if (currentMandate(deps, periodoInicio)) return { ok: false, error: "el responsable de ese periodo ya está decidido" };
           const residentes = deps.store.readRecords("residentes");
@@ -692,7 +716,8 @@ function monthSnapshot(deps) {
  * Violaciones de los cierres de equidad de INV-3 que caen en el mes validado, cada uno con la
  * severidad que le da spec.md §5: el TRIMESTRAL (agosto/noviembre/febrero/mayo; solo el eje
  * `total`, severidad aviso — P-8, decisión V-13) y el ANUAL (solo si algún residente cierra su
- * año de residencia ese mes; los seis ejes, severidad error). Devuelve [] cuando el mes no
+ * año de residencia ese mes; los seis ejes, severidad aviso como todo lo de equidad desde
+ * V-14). Devuelve [] cuando el mes no
  * cierra ninguno de los dos, que es lo normal en 8 de cada 12 meses.
  *
  * Los rangos que hay que leer los decide el dominio (`quarterCloseWindow`,
@@ -873,10 +898,22 @@ function currentMandate(deps, periodoInicio) {
   return deps.store.readLatest("responsables", (r) => r.periodoInicio).find((r) => r.periodoInicio === periodoInicio) || null;
 }
 
-/** Valida la sesión y ejecuta `fn(payload)`, o devuelve el error de sesión. */
+/**
+ * Valida la sesión y ejecuta `fn(payload)`, o devuelve el error de sesión.
+ *
+ * El `pendingToken` de `handleLogin` (emitido a un email que Google verificó pero que NO está
+ * vinculado a ningún residente) va firmado con el MISMO secreto que una sesión, así que sin la
+ * segunda comprobación valdría como sesión completa: y como el endpoint es ANYONE_ANONYMOUS y el
+ * client_id es público, cualquiera con una cuenta de Google podía conseguir uno abriendo la web.
+ * Se exige un `sub` (id de residente) en POSITIVO, no se descarta `pending` en negativo: así
+ * cualquier clase futura de token sin sujeto queda fuera por defecto en vez de por enumeración.
+ */
 function authed(req, deps, fn) {
   const s = verifySession(req.session, { now: deps.now, secret: deps.sessionSecret, crypto: deps.crypto });
   if (!s.valid) return { ok: false, error: `sesión ${s.reason}` };
+  if (typeof s.payload.sub !== "string" || !s.payload.sub) {
+    return { ok: false, error: "el token no identifica a ningún residente (¿es un token de alta?)" };
+  }
   return fn(s.payload);
 }
 
