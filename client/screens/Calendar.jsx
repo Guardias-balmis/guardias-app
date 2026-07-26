@@ -10,6 +10,7 @@ import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/dom
 import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit } from "./v2/domain/cuadrante.js";
 import { todayISO } from "./client/lib/dates.js";
 import { closeViolations } from "./client/lib/closes.js";
+import { violationText } from "./client/lib/violations.js";
 
 const { useState, useEffect } = React;
 const { Card, Btn, Aviso } = window.UI;
@@ -303,7 +304,7 @@ function CalendarScreen() {
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                     {errores.map((v, i) => (
                       <div key={i} style={{ fontSize: 12, color: COLOR.red, background: COLOR.redLight, borderRadius: 6, padding: "4px 8px" }}>
-                        [{v.invariante}] {v.detalle}
+                        [{v.invariante}] {violationText(v, residentes)}
                       </div>
                     ))}
                   </div>
@@ -315,7 +316,7 @@ function CalendarScreen() {
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                     {avisos.map((v, i) => (
                       <div key={i} style={{ fontSize: 12, color: COLOR.orange, background: COLOR.orangeLight, borderRadius: 6, padding: "4px 8px" }}>
-                        [{v.invariante}] {v.detalle}
+                        [{v.invariante}] {violationText(v, residentes)}
                       </div>
                     ))}
                   </div>

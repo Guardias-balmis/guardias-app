@@ -9,6 +9,7 @@ import { addDays, addYears, toISO } from "./v2/domain/calendar.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/domain/validate.js";
 import { accumulatedTally } from "./v2/domain/accumulate.js";
 import { canEdit } from "./v2/domain/cuadrante.js";
+import { violationText } from "./client/lib/violations.js";
 
 const { useState, useMemo, useEffect } = React;
 const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
@@ -114,10 +115,10 @@ alrededor:
 Genera el cuadrante completo de ${nombreMes} (mes=${mes}, año=${anio}) respetando estas normas.`;
 }
 
-function ViolationBox({ v, color, bg }) {
+function ViolationBox({ v, color, bg, residentes }) {
   return (
     <div style={{ fontSize: 12, color, background: bg, borderRadius: 6, padding: "4px 8px" }}>
-      [{v.invariante}] {v.detalle}
+      [{v.invariante}] {violationText(v, residentes)}
     </div>
   );
 }
@@ -362,7 +363,7 @@ function GeneratorScreen() {
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: COLOR.red, marginBottom: 6 }}>⛔ Errores ({errores.length}) — bloquean la aplicación</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    {errores.map((v, i) => <ViolationBox key={i} v={v} color={COLOR.red} bg={COLOR.redLight} />)}
+                    {errores.map((v, i) => <ViolationBox key={i} v={v} residentes={residentes} color={COLOR.red} bg={COLOR.redLight} />)}
                   </div>
                 </div>
               )}
@@ -370,7 +371,7 @@ function GeneratorScreen() {
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 700, color: COLOR.orange, marginBottom: 6 }}>⚠️ Avisos ({avisos.length}) — informativos</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    {avisos.map((v, i) => <ViolationBox key={i} v={v} color={COLOR.orange} bg={COLOR.orangeLight} />)}
+                    {avisos.map((v, i) => <ViolationBox key={i} v={v} residentes={residentes} color={COLOR.orange} bg={COLOR.orangeLight} />)}
                   </div>
                 </div>
               )}
