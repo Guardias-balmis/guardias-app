@@ -11,7 +11,13 @@ const g = (residenteId, fecha, codigo = "G") => ({ residenteId, fecha, codigo })
 const A = R("r3a", "2024-05-27", "2028-05-26"); // cierra su año de residencia el 2027-05-26
 const B = R("r3b", "2024-05-27", "2028-05-26");
 
-function fakeApi({ asignaciones = [], bloqueos = [], failAsig = false, failBloq = false } = {}) {
+// Festivos reales del tramo que usan los tests del cierre anual. El 8-dic-2026 es martes y el
+// 6-dic domingo, así que el lunes 7 es puente; el 12-oct-2027 es martes, así que el lunes 11
+// también. Uno cae en un año natural y el otro en el siguiente: es el caso que obliga a pedir
+// dos años de festivos (fase 3 de V-17).
+const FESTIVOS = ["2026-12-06", "2026-12-08", "2026-12-25", "2027-01-01", "2027-01-06", "2027-10-12"];
+
+function fakeApi({ asignaciones = [], bloqueos = [], festivos = FESTIVOS, failAsig = false, failBloq = false, failFest = false } = {}) {
   const calls = [];
   return {
     calls,
@@ -22,6 +28,10 @@ function fakeApi({ asignaciones = [], bloqueos = [], failAsig = false, failBloq 
     listBloqueosRango: async (desde, hasta) => {
       calls.push({ tipo: "bloqueos", desde, hasta });
       return failBloq ? { ok: false, error: "sin red" } : { ok: true, bloqueos };
+    },
+    listFestivosRango: async (desde, hasta) => {
+      calls.push({ tipo: "festivos", desde, hasta });
+      return failFest ? { ok: false, error: "sin red" } : { ok: true, festivos };
     },
   };
 }
@@ -69,6 +79,10 @@ test("cierre anual en un mes que no cierra trimestre: pide desde el aniversario"
   });
   const r = await closeViolations({ api, mes: 10, anio: 2027, residentes: [C, D], asignacionesDelMes: [] });
   assert.deepEqual(api.calls[0], { tipo: "asignaciones", desde: "2026-10-15", hasta: "2027-10-31" });
+  // Los festivos se piden por AÑOS NATURALES completos (más un día de margen): además de los
+  // vecinos del borde (§3.4), el validador necesita ver el año entero para poder distinguir
+  // «ese año no está cargado» de «ese tramo del año no tiene festivos».
+  assert.deepEqual(api.calls.find((c) => c.tipo === "festivos"), { tipo: "festivos", desde: "2025-12-31", hasta: "2028-01-01" });
   // Decisión V-14: el cierre anual avisa, no bloquea.
   assert.equal(r.violaciones.filter((v) => v.severidad === "error").length, 0);
   const avisos = r.violaciones.filter((v) => v.severidad === "aviso");
@@ -81,9 +95,10 @@ test("mayo cierra los dos a la vez (T4 y el año de residencia) con un solo par 
     asignaciones: [...["2026-06-02", "2026-06-09", "2026-07-07"].map((f) => g("r3a", f)), g("r3b", "2026-06-03")],
   });
   const r = await closeViolations({ api, mes: 5, anio: 2027, residentes: [A, B], asignacionesDelMes: [] });
-  // El rango arranca en el aniversario (2026-05-27), anterior al inicio de T4 (2027-03-01).
-  assert.deepEqual(api.calls.map((c) => c.desde), ["2026-05-27", "2026-05-27"]);
-  assert.equal(api.calls.length, 2);
+  // El rango arranca en el aniversario (2026-05-27), anterior al inicio de T4 (2027-03-01); el
+  // de festivos abarca los dos años naturales que cruza la ventana.
+  assert.deepEqual(api.calls.map((c) => c.desde), ["2026-05-27", "2026-05-27", "2025-12-31"]);
+  assert.equal(api.calls.length, 3);
   assert.equal(r.violaciones.filter((v) => v.severidad === "error").length, 0); // la equidad nunca bloquea (V-14)
   const avisos = r.violaciones.filter((v) => v.severidad === "aviso");
   assert.equal(avisos.length, 1); // solo el anual (3 vs 1); en T4 nadie tiene guardias
@@ -100,6 +115,60 @@ test("un fallo cargando bloqueos NO se da por comprobado", async () => {
   const api = fakeApi({ failBloq: true });
   const r = await closeViolations({ api, mes: 11, anio: 2026, residentes: [A, B], asignacionesDelMes: [] });
   assert.deepEqual(r, { ok: false, error: "sin red" });
+});
+
+test("un fallo cargando festivos NO se da por comprobado (el eje de puentes no se supone cuadrado)", async () => {
+  const api = fakeApi({ failFest: true });
+  const r = await closeViolations({ api, mes: 5, anio: 2027, residentes: [A, B], asignacionesDelMes: [] });
+  assert.deepEqual(r, { ok: false, error: "sin red" });
+});
+
+test("el trimestre NO pide festivos: solo mide `total` (V-13a)", async () => {
+  const api = fakeApi();
+  await closeViolations({ api, mes: 11, anio: 2026, residentes: [A, B], asignacionesDelMes: [] });
+  assert.equal(api.calls.filter((c) => c.tipo === "festivos").length, 0);
+});
+
+test("puentes libres: el puente de DICIEMBRE cuenta para el cierre de MAYO (la ventana cruza el año natural)", async () => {
+  // La ventana de A y B es 2026-05-27→2027-05-26 y tiene dos puentes: el 7-dic-2026, en el año
+  // natural ANTERIOR y que llega por el histórico, y el 3-may-2027, dentro del mes que se valida
+  // y que llega por `puentesDelMes`. r3a hace guardia en los dos, r3b en ninguno → 0 vs 2.
+  // El aviso solo existe si el rango de festivos cruza el año: si el eje volviera a compararse
+  // sobre ceros, este test se pondría en rojo (es lo que le faltaba a su primera versión).
+  const api = fakeApi({
+    festivos: [...FESTIVOS, "2027-05-04"], // martes: convierte el lunes 3 en puente
+    asignaciones: [g("r3a", "2026-12-07"), g("r3b", "2026-12-14")],
+  });
+  const r = await closeViolations({
+    api, mes: 5, anio: 2027, residentes: [A, B], asignacionesDelMes: [g("r3a", "2027-05-03")],
+  });
+  assert.equal(r.ok, true);
+  const puentes = r.violaciones.filter((v) => /puentes libres/i.test(v.detalle));
+  assert.equal(puentes.length, 1);
+  assert.match(puentes[0].detalle, /r3b=2.*r3a=0/);
+});
+
+test("puentes libres: diferencia 2 avisa, y el aviso nombra el eje", async () => {
+  // C y D cierran en octubre-2027: su ventana contiene los DOS puentes (7-dic-2026 y 11-oct-2027).
+  const C = R("r3c", "2024-10-15", "2028-10-14");
+  const D = R("r3d", "2024-10-15", "2028-10-14");
+  const api = fakeApi({ asignaciones: [g("r3c", "2026-12-07")] }); // el otro puente va en el mes validado
+  const r = await closeViolations({
+    api, mes: 10, anio: 2027, residentes: [C, D],
+    asignacionesDelMes: [g("r3c", "2027-10-11")], // C pierde los dos puentes; D, ninguno
+  });
+  const puentes = r.violaciones.filter((v) => /puentes libres/i.test(v.detalle));
+  assert.equal(puentes.length, 1, "0 vs 2 puentes libres tiene que avisar");
+  assert.equal(puentes[0].severidad, "aviso"); // la equidad nunca bloquea (V-14)
+  assert.match(puentes[0].detalle, /r3d=2.*r3c=0/);
+});
+
+test("sin festivos cargados el cierre anual lo DICE, en vez de cuadrar el eje con ceros", async () => {
+  const api = fakeApi({ festivos: [] });
+  const r = await closeViolations({ api, mes: 5, anio: 2027, residentes: [A, B], asignacionesDelMes: [] });
+  const sinCalendario = r.violaciones.filter((v) => /no hay ningún festivo cargado/i.test(v.detalle));
+  assert.equal(sinCalendario.length, 1);
+  assert.equal(sinCalendario[0].severidad, "aviso");
 });
 
 test("los bloqueos del rango llegan al descuento proporcional de la baja (nota [a])", async () => {

@@ -834,11 +834,15 @@ function closeViolations(deps, mes, anio, snap) {
 
   const desdeAnual = deps.domain.yearCloseHistoryStart(snap.residentes, mes, anio);
   if (desdeAnual) {
+    // El eje `puentesLibres` mira el año de residencia entero (fase 3 de V-17), que cruza dos
+    // años naturales: el rango de festivos lo da el dominio, no se recorta aquí.
+    const rangoFestivos = deps.domain.yearCloseFestivosRange(snap.residentes, mes, anio);
     violaciones.push(...deps.domain.validateResidencyYearClose(deps.domain.buildYearCloseContext({
       mes, anio, residentes: snap.residentes,
       historicas: snap.asignaciones.filter((a) => a.fecha >= desdeAnual && a.fecha < monthStart),
       asignacionesDelMes: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
       bloqueos: bloqueosInRange(snap.bloqueos, desdeAnual, monthEnd),
+      festivos: (snap.festivos || []).filter((f) => f.fecha >= rangoFestivos.desde && f.fecha <= rangoFestivos.hasta),
     })));
   }
 

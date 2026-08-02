@@ -50,7 +50,22 @@ Load-bearing contracts, easy to silently break:
 - **Un solo cuadrante mensual (decisión V-15).** Los «2 grupos» y sus «cuadrantes provisionales» de la normativa son la regla de composición Pequeño+Mayor (INV-1) y la organización de cada grupo, no dos unidades de datos: no hay ni habrá un cuadrante por grupo, ni dos pestañas.
 - **Los dos cierres de INV-3 se invocan desde `marcarValidado` (servidor) y `Calendar.jsx` (vía `client/lib/closes.js`), no desde `validateMonth`.** `validateMonth` es de ámbito mes y no los incluye: quien añada otra pantalla que valide un mes tiene que llamar también a `closes.js`, o la equidad de cierre no se comprueba ahí. Los rangos que hay que leer los dan `quarterCloseWindow` y `yearCloseHistoryStart` — no se adivinan (mismo error que costó la regresión de C-2).
 - `cohorte` (calendar year of `fechaInicio`, used by INV-6/INV-11) and `nivel` (date-derived level, used for MAYOR/PEQUENO) are distinct — don't conflate them.
-- INV-12 (GF-must-be-actual-holiday) and INV-13 (Imaginaria rotation) are **not implemented yet** — don't assume `validateMonth` covers holiday-coherence.
+- **C-3 (ventana de `puentesLibres`):** el eje `puentesLibres` de INV-3 compara el **año de
+  residencia entero**, no el mes: los puentes se derivan de la tabla `festivos` con
+  `calendar.js:bridgesBetween` sobre `[aniversario, aniversario+1año)`, que **cruza dos años
+  naturales** (el aniversario cae en mayo). El rango de festivos que hay que leer lo da
+  `equity.js:yearCloseFestivosRange`, igual que `yearCloseHistoryStart` da el de asignaciones: no
+  se adivina en el invocador (mismo error que costó la regresión de C-2). Ese rango son los **años
+  naturales completos** que toca la ventana (±1 día), no la ventana recortada, y eso es
+  deliberado: si falta el calendario el cierre **avisa de que el eje no se ha podido comprobar**
+  en vez de comparar ceros y parecer que cuadra, pero la pregunta tiene que ser «¿está cargado el
+  año 2027?» y no «¿hay algún festivo en la ventana?» — la carga es por año (V-17a) y la ventana
+  cruza dos, así que «uno sí y otro no» es el estado normal, y con la pregunta laxa medio eje
+  volvía a compararse sobre ceros en silencio. El aviso solo se emite cuando el invocador pasa
+  `festivos` (los tests que inyectan `acumulados` a mano no lo ven) y cuando alguna cohorte tiene
+  ≥2 miembros, que es cuando el eje se compara con alguien.
+- INV-13 (rotación de Imaginaria) es el único invariante **sin implementar**. INV-12 sí lo está
+  desde la decisión V-17 (`validateMonth` cubre la coherencia código↔festivo, siempre como aviso).
 
 Style: identifiers/code in English, comments/JSDoc in Spanish, explaining *why* (spec.md cross-references), never *what*. Never add an npm dependency under `v2/domain`.
 

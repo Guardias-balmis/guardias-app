@@ -13,14 +13,14 @@ import nodeCrypto from "node:crypto";
 import { buildBundle, buildServerBundle, transformModule } from "../../../build/build-gas.mjs";
 
 // Fuente ESM
-import { weekday, trimesterWindow } from "../calendar.js";
+import { weekday, trimesterWindow, bridgesBetween } from "../calendar.js";
 import { levelOn, groupOnDate } from "../residents.js";
 import { tally } from "../tally.js";
 import { validateMonth, buildMonthContext } from "../validate.js";
 import { validateThirdPost } from "../thirdpost.js";
 import {
   validateResidencyYearClose, validateQuarterClose, quarterCloseWindow,
-  yearCloseHistoryStart, buildYearCloseContext,
+  yearCloseHistoryStart, yearCloseFestivosRange, buildYearCloseContext,
 } from "../equity.js";
 import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings } from "../cuadrante.js";
 import { buildMonthSheetRows, buildResumenRows } from "../projection.js";
@@ -67,6 +67,9 @@ const EQ_CTX = {
   },
   asignaciones: [],
 };
+// El 8-dic-2026 es martes y el 6-dic domingo → el lunes 7 es puente. Cae en el año natural
+// ANTERIOR al del cierre de mayo-2027: ejercita el cruce de dos años del eje `puentesLibres`.
+const EQ_FESTIVOS = ["2026-12-06", "2026-12-08", "2026-12-25", "2027-01-01"];
 // Cierre de T2 (nov-2026) con diferencia 2 en totales → un aviso (P-8, decisión V-13).
 const QC_CTX = {
   mes: 11, anio: 2026,
@@ -94,7 +97,9 @@ function runAll(api) {
     quarterCloseWindow: [api.quarterCloseWindow(11, 2026), api.quarterCloseWindow(10, 2026)],
     quarterClose: api.validateQuarterClose(QC_CTX),
     yearCloseStart: [api.yearCloseHistoryStart(EQ_CTX.residentes, 5, 2027), api.yearCloseHistoryStart(EQ_CTX.residentes, 10, 2026)],
-    yearCloseCtx: api.buildYearCloseContext({ mes: 5, anio: 2027, residentes: EQ_CTX.residentes, historicas: QC_CTX.asignaciones, asignacionesDelMes: [] }),
+    yearCloseCtx: api.buildYearCloseContext({ mes: 5, anio: 2027, residentes: EQ_CTX.residentes, historicas: QC_CTX.asignaciones, asignacionesDelMes: [], festivos: EQ_FESTIVOS }),
+    yearCloseFestivosRange: [api.yearCloseFestivosRange(EQ_CTX.residentes, 5, 2027), api.yearCloseFestivosRange(EQ_CTX.residentes, 10, 2026)],
+    bridgesBetween: api.bridgesBetween("2026-05-27", "2027-05-26", EQ_FESTIVOS),
     monthContext: ctx,
     canValidate: [api.canValidate([]), api.canValidate(violaciones)],
     equityWarnings: api.equityWarnings([...violaciones, ...api.validateQuarterClose(QC_CTX)]),
@@ -109,7 +114,8 @@ function runAll(api) {
 
 const esm = {
   weekday, levelOn, groupOnDate, tally, validateMonth, validateThirdPost, validateResidencyYearClose,
-  trimesterWindow, validateQuarterClose, quarterCloseWindow, yearCloseHistoryStart, buildYearCloseContext,
+  trimesterWindow, validateQuarterClose, quarterCloseWindow, yearCloseHistoryStart, yearCloseFestivosRange,
+  buildYearCloseContext, bridgesBetween,
   buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings,
   buildMonthSheetRows, buildResumenRows,
 };

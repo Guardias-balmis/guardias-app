@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   parseISO, toISO, weekday, isWeekend, addDays, addYears, daysInMonth,
-  datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, compareISO, isHoliday, bridgesOfMonth,
+  datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, compareISO, isHoliday, bridgesOfMonth, bridgesBetween,
 } from "../calendar.js";
 
 test("parseISO acepta fechas válidas y devuelve componentes", () => {
@@ -147,4 +147,22 @@ test("bridgesOfMonth: los vecinos del día 1 y del último día caen FUERA del m
   assert.deepEqual(bridgesOfMonth(2026, 6, ["2026-06-02"]), ["2026-06-01"]);
   // El 31-jul-2026 es viernes: con el jueves 30 festivo y el sábado 1-ago, es puente.
   assert.deepEqual(bridgesOfMonth(2026, 7, ["2026-07-30"]), ["2026-07-31"]);
+});
+
+test("bridgesBetween: cruza meses y años naturales (la ventana de INV-3 va de mayo a mayo)", () => {
+  const festivos = ["2026-12-08", "2026-12-25", "2027-01-01", "2027-10-12"];
+  assert.deepEqual(bridgesBetween("2026-05-27", "2027-05-26", festivos), ["2026-12-07"]);
+  // El puente del 11-oct-2027 solo aparece si el rango llega hasta allí.
+  assert.deepEqual(bridgesBetween("2026-10-15", "2027-10-14", festivos), ["2026-12-07", "2027-10-11"]);
+});
+
+test("bridgesBetween: recorta por los extremos, no por el mes entero", () => {
+  const festivos = ["2026-12-08"];
+  assert.deepEqual(bridgesBetween("2026-12-01", "2026-12-31", festivos), ["2026-12-07"]);
+  assert.deepEqual(bridgesBetween("2026-12-08", "2026-12-31", festivos), [], "el puente queda antes del inicio");
+  assert.deepEqual(bridgesBetween("2026-12-07", "2026-12-07", festivos), ["2026-12-07"], "rango de un solo día");
+});
+
+test("bridgesBetween: un rango invertido devuelve [] en vez de iterar sin fin", () => {
+  assert.deepEqual(bridgesBetween("2027-01-01", "2026-01-01", ["2026-12-08"]), []);
 });

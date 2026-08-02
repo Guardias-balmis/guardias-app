@@ -9,7 +9,7 @@ import { handleRequest } from "../src/router.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "../../v2/domain/validate.js";
-import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, validateQuarterClose, quarterCloseWindow } from "../../v2/domain/equity.js";
+import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange, validateQuarterClose, quarterCloseWindow } from "../../v2/domain/equity.js";
 import { groupOnDate } from "../../v2/domain/residents.js";
 import { eligibleCandidates } from "../../v2/domain/responsible.js";
 import { parseISO } from "../../v2/domain/calendar.js";
@@ -44,6 +44,7 @@ function makeDeps(overrides = {}) {
     responsables: [headerOf(TABLES.responsables), recordToRow(TABLES.responsables, { id: "m1", periodoInicio: "2027-01-01", periodoFin: "2028-01-01", residenteId: "resp-1", metodo: "VOLUNTARIO" })],
     asignaciones: [headerOf(TABLES.asignaciones)],
     cuadrantes: [headerOf(TABLES.cuadrantes)],
+    festivos: [headerOf(TABLES.festivos)],
   });
   const nonces = new Set();
   return {
@@ -51,12 +52,14 @@ function makeDeps(overrides = {}) {
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     ss, // expuesto para que los tests inspeccionen pestañas proyectadas (no lo usa el router)
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${nodeCrypto.randomUUID()}` }),
-    // Mismo conjunto que deps.domain de Code.gs: marcarValidado comprueba el mes Y los dos
-    // cierres de equidad de INV-3 (trimestral y anual), así que las cinco funciones nuevas
-    // tienen que estar aquí o la acción falla por TypeError.
+    // Subconjunto a mano de lo que Code.gs pasa entero (`deps.domain = Domain`): marcarValidado
+    // comprueba el mes Y los dos cierres de equidad de INV-3 (trimestral y anual), así que cada
+    // función del dominio que el router llame tiene que estar aquí o la acción falla por
+    // TypeError — que es justo el fallo que este harness sirve para detectar antes que producción.
     domain: {
       validateMonth, buildMonthContext, rotationHistoryStart, parseISO,
-      validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, validateQuarterClose, quarterCloseWindow,
+      validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange,
+      validateQuarterClose, quarterCloseWindow,
       groupOnDate, eligibleCandidates,
       canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, buildMonthSheetRows, buildResumenRows,
     },
@@ -394,10 +397,41 @@ test("marcarValidado: el cierre ANUAL incumplido AVISA y NO impide validar (deci
   assert.equal(r.ok, true);
   assert.equal(r.estado, "VALIDADO");
   assert.equal(r.violaciones.filter((v) => v.severidad === "error").length, 0, "la equidad no bloquea nunca");
-  const aviso = r.violaciones.find((v) => v.invariante === "INV-3" && v.severidad === "aviso");
+  const aviso = r.violaciones.find((v) => v.invariante === "INV-3" && /año de residencia/.test(v.detalle));
   assert.ok(aviso, "el cierre anual debe aparecer como aviso");
-  assert.match(aviso.detalle, /año de residencia/);
+  assert.equal(aviso.severidad, "aviso");
   assert.equal(call({ action: "estadoCuadrante", session, mes: 5, anio: 2028 }, deps).estado, "VALIDADO");
+});
+
+// Fase 3 de V-17: el eje `puentesLibres` sale de la tabla `festivos` y su ventana es el año de
+// residencia entero, que cruza dos años naturales. Antes de esto comparaba ceros siempre.
+test("marcarValidado: el eje de puentes libres se deriva de la tabla `festivos` de DOS años", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  // Año de residencia 2027-05-27→2028-05-26. Con los festivos reales de esos dos años naturales
+  // la ventana tiene tres puentes: el martes 7-dic-2027 (entre dos festivos), el lunes
+  // 11-oct-2027 y el viernes 7-ene-2028. Ninguno cae en el mes que se valida (mayo-2028): si el
+  // eje solo mirase el mes, como hacía antes de esta fase, los tres serían invisibles.
+  call({ action: "crearFestivos", session, festivos: [
+    { fecha: "2027-10-12", nombre: "Hispanidad" },
+    { fecha: "2027-12-06", nombre: "Constitución" },
+    { fecha: "2027-12-08", nombre: "Inmaculada" },
+    { fecha: "2028-01-06", nombre: "Reyes" },
+  ] }, deps);
+  guardar(deps, session, [
+    { fecha: "2027-10-11", residenteId: "resp-1", codigo: "G" },
+    { fecha: "2027-12-07", residenteId: "resp-1", codigo: "G" },
+  ]);
+
+  const r = call({ action: "marcarValidado", session, mes: 5, anio: 2028 }, deps);
+  assert.equal(r.ok, true, "la equidad nunca bloquea (V-14)");
+  // Ya no aparece el aviso de "no hay festivos": el calendario está cargado y el eje se comprueba.
+  assert.equal(r.violaciones.filter((v) => /no hay ningún festivo cargado/.test(v.detalle)).length, 0);
+  // Rita se come dos de los tres puentes, Óscar ninguno → 1 vs 3, diferencia 2.
+  const puentes = r.violaciones.filter((v) => /puentes libres/i.test(v.detalle));
+  assert.equal(puentes.length, 1);
+  assert.equal(puentes[0].severidad, "aviso");
+  assert.match(puentes[0].detalle, /otro-1=3.*resp-1=1/);
 });
 
 test("marcarValidado: un mes que no cierra trimestre ni año no comprueba ningún cierre", () => {

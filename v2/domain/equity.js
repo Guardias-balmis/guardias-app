@@ -14,11 +14,16 @@
 // `error`, porque la propia frase prevé compensar el exceso «en los meses siguientes hasta
 // equilibrar el cómputo dentro del año de residencia» (criterio V-4: lo compensable avisa).
 
-import { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow } from "./calendar.js";
+import { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow, bridgesOfMonth, bridgesBetween } from "./calendar.js";
 import { tally } from "./tally.js";
 import { accumulatedTally } from "./accumulate.js";
 
 const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "dobletes"];
+// Los tres códigos que ocupan puesto. El 3P queda fuera a propósito (INV-4): es voluntario, así
+// que quien lo hace en un puente renuncia él al puente — el eje mide si el reparto se lo quitó.
+// Las cedidas/compradas SÍ cuentan aquí aunque no sumen a `total`: quien tiene la fila trabaja
+// ese día, que es justo lo que este eje pregunta.
+const GUARDIA = ["G", "GF", "GP"];
 const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes"]); // se normalizan por disponibilidad
 const EPS = 1e-9;
 
@@ -32,14 +37,22 @@ const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Numb
 const inRange = (f, a, b) => compareISO(f, a) >= 0 && compareISO(f, b) <= 0;
 
 /**
- * @param {object} ctx { mes, anio, residentes, acumulados, asignaciones?, puentesDelMes?, bloqueos? }
+ * @param {object} ctx { mes, anio, residentes, acumulados, asignaciones?, puentesDelMes?, bloqueos?, festivos? }
  *   - acumulados: { id: {total, findes, festivos, puentesLibres, dobletes} } hasta fin del mes anterior
  *   - asignaciones: del mes validado (G/GF/GP/3P, con origen? para cedidas/compradas)
- *   - puentesDelMes: [{desde, hasta}] puentes que caen en el mes validado (para puentesLibres)
+ *   - puentesDelMes: [string] fechas ISO de los puentes del mes validado, derivadas de la tabla
+ *     `festivos` con `bridgesOfMonth` (V-17b: los puentes se derivan, nunca se escriben)
  *   - bloqueos: del año (para el descuento proporcional por baja, nota [a])
+ *   - festivos: la lista que se usó para derivar los puentes, por AÑOS NATURALES completos (el
+ *     rango lo da `yearCloseFestivosRange`). Solo sirve para saber si el eje `puentesLibres` se
+ *     ha podido comprobar de verdad: `undefined` significa "el invocador no pretende comprobar
+ *     puentes" (los tests del propio validador, que inyectan `acumulados` a mano) y no avisa; un
+ *     array al que le falte ENTERO alguno de los años que cubre la ventana significa "ese
+ *     calendario no está cargado" y sí avisa, porque si no ese eje compararía ceros y se leería
+ *     como verificado (el fallo que V-13(e) dejó anotado).
  */
 export function validateResidencyYearClose(ctx) {
-  const { mes, anio, residentes, acumulados = {}, asignaciones = [], puentesDelMes = [], bloqueos = [] } = ctx;
+  const { mes, anio, residentes, acumulados = {}, asignaciones = [], puentesDelMes = [], bloqueos = [], festivos } = ctx;
   const violations = [];
   const monthDays = datesOfMonth(anio, mes);
   const monthStart = monthDays[0];
@@ -69,12 +82,44 @@ export function validateResidencyYearClose(ctx) {
 
     const cohorte = cohortOf(r);
     if (!byCohort.has(cohorte)) byCohort.set(cohorte, []);
-    byCohort.get(cohorte).push({ id: r.id, cierre: win.end, dims, f });
+    byCohort.get(cohorte).push({ id: r.id, cierre: win.end, win, dims, f });
+  }
+
+  // Solo se compara dentro de una cohorte con al menos dos miembros: quien cierra su año siendo
+  // el único de su promoción no tiene con quién compararse en NINGÚN eje.
+  const comparables = [...byCohort.values()].filter((grupo) => grupo.length >= 2);
+
+  // El eje `puentesLibres` se deriva de la tabla `festivos` (V-17b), y si el calendario no está
+  // cargado compararía ceros y saldría "cuadrado" sin haber mirado nada. La comprobación es por
+  // AÑO NATURAL, no "¿hay algún festivo en la ventana?": la ventana del cierre cruza siempre dos
+  // años (el aniversario cae en mayo) y `crearFestivos` carga un año de golpe (V-17a), así que
+  // "2026 cargado y 2027 no" es el estado intermedio NORMAL del sistema — y con la pregunta
+  // laxa bastaba un festivo de 2026 para dar por comprobados también los puentes de 2027.
+  // Tampoco aplica aquí el matiz de V-17(d) —no avisar en un febrero sin festivos—: un año
+  // natural español entero sin ningún festivo no existe, solo puede ser calendario sin cargar.
+  if (festivos !== undefined && comparables.length) {
+    // Comparación de cadenas, no `parseISO`: esto es una heurística de "¿está cargado el
+    // calendario de este año?", no aritmética de fechas, y la tabla vive en un Sheet que alguien
+    // puede editar a mano — una fila con una fecha mal escrita no debe tumbar el cierre entero.
+    // Misma tolerancia que `isHoliday`, que tampoco valida lo que le pasan.
+    const fechaDe = (f) => (typeof f === "string" ? f : f && f.fecha) || "";
+    const ventanas = comparables.flat().map((x) => x.win);
+    const desde = ventanas.reduce((min, w) => (w.start < min ? w.start : min), ventanas[0].start);
+    const hasta = ventanas.reduce((max, w) => (w.end > max ? w.end : max), ventanas[0].end);
+    const sinCargar = [];
+    for (let y = Number(desde.slice(0, 4)); y <= Number(hasta.slice(0, 4)); y++) {
+      if (!festivos.some((f) => fechaDe(f).startsWith(`${y}-`))) sinCargar.push(y);
+    }
+    if (sinCargar.length) {
+      violations.push(warn(
+        `Puentes libres: no hay ningún festivo cargado de ${sinCargar.join(" ni de ")}, así que ese eje del cierre anual (ventana ${desde}→${hasta}) no se ha podido comprobar`,
+        { fecha: hasta }
+      ));
+    }
   }
 
   // Comparación por dimensión dentro de cada cohorte.
-  for (const [, grupo] of byCohort) {
-    if (grupo.length < 2) continue;
+  for (const grupo of comparables) {
     for (const dim of DIMS) {
       const vals = grupo.map((x) => ({ id: x.id, cierre: x.cierre, v: PROPORCIONAL.has(dim) ? x.dims[dim] / x.f : x.dims[dim] }));
       const maxEntry = vals.reduce((a, b) => (b.v > a.v ? b : a));
@@ -119,21 +164,66 @@ export function yearCloseHistoryStart(residentes, mes, anio) {
  * dentro de la ventana que recibe. La contribución del mes la computa el validador aparte,
  * desde `asignaciones`.
  *
+ * Los puentes (fase 3 de V-17) se DERIVAN aquí de `festivos`, nunca se reciben ya calculados:
+ * los del mes validado con `bridgesOfMonth`, y los anteriores —el resto del año de residencia,
+ * que es lo que INV-3 compara— con `bridgesBetween` sobre la ventana de CADA residente que
+ * cierra. El reparto entre `acumulados` y `puentesDelMes` no es cosmético: la contribución del
+ * mes tiene que salir de `asignacionesDelMes` (lo que hay en pantalla, ediciones sin guardar
+ * incluidas), mientras que la del resto del año sale de `historicas` (el store), igual que ya
+ * ocurre con los otros cinco ejes.
+ *
  * @param {object} args
  *   - historicas: asignaciones anteriores al mes (desde `yearCloseHistoryStart`)
  *   - asignacionesDelMes: las del mes validado (las que se están por validar, no las del store)
- *   - puentesDelMes: hueco conocido — no existe todavía tabla de festivos/puentes (mismo
- *     bloqueo que INV-12), así que por defecto va vacío y el eje `puentesLibres` compara ceros:
- *     ese eje de INV-3 NO está comprobado de verdad hasta que exista esa entrada.
+ *   - festivos: los de TODA la ventana del cierre con un día de margen a cada lado — el rango
+ *     lo da `yearCloseFestivosRange`, no se adivina. Cruza dos años naturales porque el año de
+ *     residencia va de aniversario a aniversario (en la práctica, de mayo a mayo).
  */
-export function buildYearCloseContext({ mes, anio, residentes, historicas = [], asignacionesDelMes = [], bloqueos = [], puentesDelMes = [] }) {
-  const acumulado = accumulatedTally(residentes, [...historicas, ...asignacionesDelMes], addDays(toISO(anio, mes, 1), -1));
+export function buildYearCloseContext({ mes, anio, residentes, historicas = [], asignacionesDelMes = [], bloqueos = [], festivos = [] }) {
+  const finAcumulado = addDays(toISO(anio, mes, 1), -1);
+  const acumulado = accumulatedTally(residentes, [...historicas, ...asignacionesDelMes], finAcumulado);
   const acumulados = {};
   for (const [id, t] of acumulado) {
     // `tally` llama `finde` a lo que INV-3 compara como `findes`: la traducción vive aquí, una vez.
     acumulados[id] = { total: t.total, findes: t.finde, festivos: t.festivos, prefestivos: t.prefestivos, dobletes: t.dobletes, puentesLibres: 0 };
   }
-  return { mes, anio, residentes, acumulados, asignaciones: asignacionesDelMes, bloqueos, puentesDelMes };
+
+  // Puentes libres acumulados: solo hacen falta para quien cierra su año este mes (al resto ni
+  // se le compara este eje), y su ventana es la suya, no una común.
+  for (const r of residentes) {
+    const win = closingWindowThisMonth(r, mes, anio);
+    if (!win || !acumulados[r.id] || compareISO(win.start, finAcumulado) > 0) continue;
+    acumulados[r.id].puentesLibres = bridgesBetween(win.start, finAcumulado, festivos)
+      .filter((p) => residentIsFreeOnBridge(r.id, historicas, p, win)).length;
+  }
+
+  return {
+    mes, anio, residentes, acumulados, asignaciones: asignacionesDelMes, bloqueos, festivos,
+    puentesDelMes: bridgesOfMonth(anio, mes, festivos),
+  };
+}
+
+/**
+ * Rango de festivos que hay que leer para evaluar el cierre ANUAL en este mes, o `null` si no
+ * cierra nadie. Mismo papel que `yearCloseHistoryStart` para las asignaciones (y misma razón:
+ * el invocador no puede adivinar el rango del validador — es el error que ya costó la regresión
+ * del contrato C-2).
+ *
+ * Devuelve los AÑOS NATURALES completos que toca la ventana, más un día por cada lado, no la
+ * ventana recortada. Dos motivos, y ninguno es la comodidad: (1) los vecinos del primer y del
+ * último día deciden si son puente y caen fuera (§3.4); (2) el validador necesita poder
+ * distinguir «este año no está cargado» de «este tramo del año no tiene festivos», y eso solo se
+ * puede preguntar si ve el año entero — la ventana cruza siempre dos años naturales y la carga
+ * es por año (V-17a), así que «uno sí y otro no» es el estado intermedio normal. Son ~30 filas
+ * de más en el peor caso, y son inertes: `bridgesOfMonth` solo mira las fechas que le tocan.
+ */
+export function yearCloseFestivosRange(residentes, mes, anio) {
+  const desde = yearCloseHistoryStart(residentes, mes, anio);
+  if (!desde) return null;
+  const monthDays = datesOfMonth(anio, mes);
+  const primerAnio = Number(desde.slice(0, 4));
+  const ultimoAnio = Number(monthDays[monthDays.length - 1].slice(0, 4));
+  return { desde: toISO(primerAnio - 1, 12, 31), hasta: toISO(ultimoAnio + 1, 1, 1) };
 }
 
 // --- Cierre de TRIMESTRE (INV-3 trimestral, P-8 / decisión V-13) ---------------------------
@@ -180,6 +270,7 @@ export function validateQuarterClose(ctx) {
     // compara sobre la parte que le tocaba, no sobre el trimestre entero.
     const presente = intersect(win, { start: r.fechaInicio, end: r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1) });
     if (!presente) continue;
+    const diasPresente = daysInclusive(presente.start, presente.end);
     const disponibles = availableDays(presente, bloqueos.filter((b) => b.residenteId === r.id && b.motivo === "BAJA"));
     const f = disponibles / quarterDays;
     if (f < MIN_DISPONIBILIDAD) continue;
@@ -187,7 +278,10 @@ export function validateQuarterClose(ctx) {
     const total = tally(asignaciones.filter((a) => a.residenteId === r.id), { start: win.start, end: win.end }).total;
     const cohorte = cohortOf(r);
     if (!byCohort.has(cohorte)) byCohort.set(cohorte, []);
-    byCohort.get(cohorte).push({ id: r.id, v: total / f, ajustado: f < 1 });
+    // `ajustado` se separa en sus DOS causas: la baja de la nota [a] y el simple hecho de no
+    // haber estado el trimestre entero (alta a mitad, o R4 que termina). Antes las dos colgaban
+    // el mismo texto y el aviso afirmaba una baja que no existía ni en la tabla de bloqueos.
+    byCohort.get(cohorte).push({ id: r.id, v: total / f, porBaja: disponibles < diasPresente, parcial: diasPresente < quarterDays });
   }
 
   for (const [, grupo] of byCohort) {
@@ -195,7 +289,10 @@ export function validateQuarterClose(ctx) {
     const maxEntry = grupo.reduce((a, b) => (b.v > a.v ? b : a));
     const minEntry = grupo.reduce((a, b) => (b.v < a.v ? b : a));
     if (maxEntry.v - minEntry.v > 1 + EPS) {
-      const ajuste = maxEntry.ajustado || minEntry.ajustado ? " — cifras ajustadas proporcionalmente por baja (nota [a])" : "";
+      const porBaja = maxEntry.porBaja || minEntry.porBaja;
+      const parcial = maxEntry.parcial || minEntry.parcial;
+      const causa = porBaja ? "por baja (nota [a])" : "por el tramo del trimestre que le correspondía";
+      const ajuste = porBaja || parcial ? ` — cifras ajustadas proporcionalmente ${causa}` : "";
       violations.push(warn(
         `Totales al cierre del trimestre ${win.trimestre} (${win.start}→${win.end}): ${maxEntry.id}=${round(maxEntry.v)} vs ${minEntry.id}=${round(minEntry.v)} (diferencia > 1)${ajuste}`,
         { fecha: win.end, residenteId: maxEntry.id }
@@ -242,22 +339,22 @@ function intersect(a, b) {
   return compareISO(start, end) <= 0 ? { start, end } : null;
 }
 
+/**
+ * Un puente es un DÍA suelto (§3.4), no un fin de semana largo: «puentes libres» son, literal,
+ * los «días puente en los que el residente no hace guardia» (§4). Una guardia la víspera, o el
+ * fin de semana contiguo, no le quita el puente: eso sería medir el descanso largo, que es
+ * justamente el modelo de puntos ponderados de P-1 —propuesto y no vigente, y en contra de la
+ * normativa según §8—, no el recuento entero que exige «diferencia máxima de 1».
+ */
 function residentIsFreeOnBridge(id, asignaciones, puente, win) {
-  const dias = daysOfRange(puente.desde, puente.hasta).filter((d) => inRange(d, win.start, win.end));
-  if (!dias.length) return false; // el puente no cae en la ventana → no cuenta como libre
-  const set = new Set(dias);
-  return !asignaciones.some((a) => a.residenteId === id && ["G", "GF", "GP"].includes(a.codigo) && set.has(a.fecha));
+  if (!inRange(puente, win.start, win.end)) return false; // fuera de su ventana → no es suyo
+  return !asignaciones.some((a) => a.residenteId === id && GUARDIA.includes(a.codigo) && a.fecha === puente);
 }
 
 function daysInclusive(a, b) {
   let n = 0;
   for (let d = a; compareISO(d, b) <= 0; d = addDays(d, 1)) n++;
   return n;
-}
-function daysOfRange(a, b) {
-  const out = [];
-  for (let d = a; compareISO(d, b) <= 0; d = addDays(d, 1)) out.push(d);
-  return out;
 }
 const round = (x) => (Number.isInteger(x) ? x : Math.round(x * 100) / 100);
 function labelDim(dim) {

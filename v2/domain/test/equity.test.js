@@ -7,8 +7,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   validateResidencyYearClose, validateQuarterClose, quarterCloseWindow,
-  yearCloseHistoryStart, buildYearCloseContext,
+  yearCloseHistoryStart, yearCloseFestivosRange, buildYearCloseContext,
 } from "../equity.js";
+
+// Festivos reales del tramo 2026-2027. El 8-dic-2026 es martes y el 6-dic domingo → el lunes 7
+// es puente (§3.4). Cae en el año natural anterior al del cierre de mayo-2027: es justo el caso
+// que obliga a que la lista abarque DOS años (fase 3 de V-17).
+const FESTIVOS = ["2026-12-06", "2026-12-08", "2026-12-25", "2027-01-01", "2027-01-06"];
 
 const R = (id, fechaInicio, fechaFin) => ({ id, fechaInicio, fechaFin });
 const acc = (total, findes = 0, festivos = 0, puentesLibres = 0, dobletes = 0, prefestivos = 0) => ({ total, findes, festivos, puentesLibres, dobletes, prefestivos });
@@ -365,7 +370,7 @@ test("buildYearCloseContext: acumula el año en curso y traduce finde→findes",
   });
   assert.equal(ctx.acumulados.r3a.total, 3); // las 2 del mes NO entran en el acumulado
   assert.equal(ctx.acumulados.r3a.findes, 2);
-  assert.equal(ctx.acumulados.r3a.puentesLibres, 0);
+  assert.equal(ctx.acumulados.r3a.puentesLibres, 0); // sin festivos no hay puentes que derivar
   assert.deepEqual(ctx.asignaciones, [g("r3a", "2027-05-04"), g("r3a", "2027-05-11")]);
   assert.deepEqual(ctx.puentesDelMes, []);
 });
@@ -387,8 +392,129 @@ test("buildYearCloseContext: el ctx que produce es el que consume validateReside
     // Todo en días de semana a propósito: así el único eje desequilibrado es `total`.
     historicas: [...nGuardias("r3a", "2026-06", [2, 9, 16]), ...nGuardias("r3b", "2026-06", [1, 8, 15])],
     asignacionesDelMes,
+    festivos: FESTIVOS, // ninguno de los dos hace guardia en el puente → ese eje empata
   }));
   const e = inv3(v);
   assert.equal(e.length, 1); // 6 vs 3 en totales
   assert.match(e[0].detalle, /r3a=6.*r3b=3/);
+});
+
+// --- Eje `puentesLibres` (fase 3 de V-17) ---------------------------------------------------
+// Hasta aquí este eje comparaba ceros: `buildYearCloseContext` lo fijaba a 0 y no derivaba
+// ningún puente. Lo que estos tests fijan es que ahora sale de la tabla `festivos` y cubre la
+// ventana ENTERA del año de residencia, no solo el mes que se valida.
+
+test("buildYearCloseContext: los puentes salen de los festivos, y la ventana cruza dos años naturales", () => {
+  const ctx = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A], // ventana 2026-05-27→2027-05-26
+    historicas: [],
+    asignacionesDelMes: [],
+    festivos: FESTIVOS,
+  });
+  // El puente del 7-dic-2026 está en el año natural ANTERIOR al del mes validado.
+  assert.equal(ctx.acumulados.r3a.puentesLibres, 1);
+  assert.deepEqual(ctx.puentesDelMes, []); // mayo-2027 no tiene ninguno con estos festivos
+});
+
+test("buildYearCloseContext: una guardia EN el puente se lo quita a quien la hace", () => {
+  const ctx = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, B],
+    historicas: [g("r3a", "2026-12-07")], // A está de guardia justo el puente
+    asignacionesDelMes: [],
+    festivos: FESTIVOS,
+  });
+  assert.equal(ctx.acumulados.r3a.puentesLibres, 0);
+  assert.equal(ctx.acumulados.r3b.puentesLibres, 1);
+});
+
+test("buildYearCloseContext: un 3P en el puente NO se lo quita (es voluntario, INV-4)", () => {
+  const ctx = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A],
+    historicas: [g("r3a", "2026-12-07", "3P")],
+    asignacionesDelMes: [], festivos: FESTIVOS,
+  });
+  assert.equal(ctx.acumulados.r3a.puentesLibres, 1);
+});
+
+test("puentesDelMes sale del mes validado y respeta la fecha de cierre", () => {
+  // R2A cierra el 2027-05-25. Con el 27-may festivo (jueves) el viernes 28 es puente, pero cae
+  // DESPUÉS de su aniversario: pertenece a su año siguiente, no al que se está cerrando.
+  const ctx = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [R2A, R2B],
+    historicas: [], asignacionesDelMes: [], festivos: [...FESTIVOS, "2027-05-27"],
+  });
+  assert.deepEqual(ctx.puentesDelMes, ["2027-05-28"]);
+  const v = validateResidencyYearClose({ ...ctx, asignaciones: [g("r2a", "2027-05-28")] });
+  assert.equal(inv3(v).length, 0, "un puente posterior al cierre no cuenta para ninguno de los dos");
+});
+
+test("INV-3: el eje de puentes libres avisa de punta a punta desde los festivos", () => {
+  const v = validateResidencyYearClose(buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, B],
+    // Dos puentes en la ventana (7-dic-2026 y 3-may-2027); A hace guardia en los dos.
+    historicas: [g("r3a", "2026-12-07")],
+    asignacionesDelMes: [g("r3a", "2027-05-03")],
+    festivos: [...FESTIVOS, "2027-04-30", "2027-05-04"],
+  }));
+  const puentes = inv3(v).filter((x) => /puentes libres/i.test(x.detalle));
+  assert.equal(puentes.length, 1);
+  assert.equal(puentes[0].severidad, "aviso"); // la equidad nunca bloquea (V-14)
+  assert.match(puentes[0].detalle, /r3b=2.*r3a=0/);
+});
+
+test("INV-3: sin ningún festivo se avisa de que el eje no se ha podido comprobar, y de qué años faltan", () => {
+  const v = validateResidencyYearClose(buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, B], historicas: [], asignacionesDelMes: [], festivos: [],
+  }));
+  const e = inv3(v);
+  assert.equal(e.length, 1);
+  assert.equal(e[0].severidad, "aviso");
+  assert.match(e[0].detalle, /no hay ningún festivo cargado de 2026 ni de 2027/);
+  assert.match(e[0].detalle, /2026-05-27→2027-05-26/);
+});
+
+test("INV-3: con MEDIO calendario cargado también avisa, y nombra el año que falta", () => {
+  // El estado intermedio normal del sistema: `crearFestivos` carga un año de golpe (V-17a) y la
+  // ventana del cierre cruza dos. Preguntar «¿hay algún festivo en la ventana?» daría por
+  // comprobados los puentes de 2027 con solo tener cargado 2026 — y los de 2027 no existirían.
+  const v = validateResidencyYearClose(buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, B], historicas: [], asignacionesDelMes: [],
+    festivos: ["2026-12-06", "2026-12-08", "2026-12-25"], // 2026 sí, 2027 no
+  }));
+  const e = inv3(v);
+  assert.equal(e.length, 1);
+  assert.match(e[0].detalle, /no hay ningún festivo cargado de 2027\b/);
+  assert.doesNotMatch(e[0].detalle, /de 2026/);
+});
+
+test("INV-3: con los dos años cargados no se avisa de calendario, aunque un tramo no tenga festivos", () => {
+  const v = validateResidencyYearClose(buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, B], historicas: [], asignacionesDelMes: [],
+    festivos: ["2026-12-08", "2027-01-06"],
+  }));
+  assert.equal(inv3(v).length, 0);
+});
+
+test("INV-3: si quien cierra está solo en su cohorte no se avisa de nada (no hay con quién comparar)", () => {
+  const SOLO = R("r9", "2024-05-27", "2028-05-26");
+  const v = validateResidencyYearClose(buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [SOLO], historicas: [], asignacionesDelMes: [], festivos: [],
+  }));
+  assert.equal(inv3(v).length, 0);
+});
+
+test("INV-3: el validador a secas NO inventa ese aviso (sin `festivos` no pretende comprobar puentes)", () => {
+  // Los tests que inyectan `acumulados` a mano no pasan `festivos`: no deben ver el aviso nuevo.
+  const v = validateResidencyYearClose({
+    mes: 5, anio: 2027, residentes: [A, B],
+    acumulados: { r3a: acc(54), r3b: acc(54) }, asignaciones: [],
+  });
+  assert.equal(inv3(v).length, 0);
+});
+
+test("yearCloseFestivosRange: años naturales COMPLETOS con un día de margen, y null si nadie cierra", () => {
+  // No la ventana recortada (2026-05-27→2027-05-26): el validador tiene que poder distinguir
+  // «2027 no está cargado» de «este tramo de 2027 no tiene festivos», y eso exige ver el año.
+  assert.deepEqual(yearCloseFestivosRange([A, B], 5, 2027), { desde: "2025-12-31", hasta: "2028-01-01" });
+  assert.equal(yearCloseFestivosRange([A, B], 10, 2026), null);
 });
