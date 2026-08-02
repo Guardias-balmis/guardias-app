@@ -309,16 +309,36 @@ Estados: `propuesto` (sin decidir) · `aceptado` (decidido, sin implementar) · 
 | # | Propuesta | Origen | Toca | Respaldo en `normativa.pdf` | Estado |
 |---|---|---|---|---|---|
 | P-1 | Medir la equidad con un **índice de puntos ponderados** (pesos por tipo de día, decimales) en lugar de contadores enteros | `EQUITY_SYSTEM.md`, `reglas-equidad-descanso.md`, `impacto-descanso-pesos-propuestos.md` | INV-3, INV-4 | **En contra.** p.1 y p.2 fijan «diferencia máxima de 1» sobre cada eje por separado, y el umbral 1 solo tiene sentido sobre guardias enteras | `propuesto` |
-| P-2 | Tratar **vacaciones y rotación como bloqueo DURO** que impide asignar guardia | `casos-de-prueba-validador.md` (D1), `paquete-generacion-prompt.md` | INV-5, V-8 | **Ausente.** p.2 hace la rotación «prioritaria sobre las vacaciones» pero nunca prohíbe asignar guardia en esos días | `propuesto` |
+| P-2 | Tratar **vacaciones y rotación como bloqueo DURO** que impide asignar guardia | `casos-de-prueba-validador.md` (D1), `paquete-generacion-prompt.md` | INV-5, V-8 | **Ausente.** p.2 hace la rotación «prioritaria sobre las vacaciones» pero nunca prohíbe asignar guardia en esos días | `rechazado` |
 | P-3 | Redefinir la **«mochila» del R1** como un tercero que cubre al R1 | `reglas-equidad-descanso.md`, `EQUITY_SYSTEM.md`, `GUARD_COMPOSITION_RULES.md`, `paquete-generacion-prompt.md` | INV-8, INV-1 | **En contra.** p.3 es literal: «Los Residentes que hagan tercer puesto siempre deben cubrir primero los días que haya un R1» | `propuesto` |
 | P-4 | Comparar la equidad **fuera de la cohorte** (R4 con R3) | `EQUITY_SYSTEM.md` (§4), `reglas-equidad-descanso.md` | INV-3, V-2 | **En contra.** «del mismo año formativo» / «del mismo año» aparece cinco veces (p.1, p.2, p.3, p.4) | `propuesto` |
 | P-5 | Mochila del R1 activa de **junio a diciembre** | `EQUITY_SYSTEM.md`, `GUARD_COMPOSITION_RULES.md`, `paquete-generacion-prompt.md` | INV-11, INV-2 | **En contra.** p.1: «En junio, julio y agosto, dado que se organizan sin los R1» | `propuesto` |
 | P-6 | Leer INV-7 como **viernes _o_ sábado** en vez de viernes _y_ sábado | `casos-de-prueba-validador.md` (D3) | INV-7 | **Ambiguo en la fuente.** p.2 dice «al menos una de las guardias de viernes y sábado», que admite ambas lecturas | `propuesto` |
 | P-7 | **Un cuadrante independiente por grupo** (Mayores y Pequeños) en vez de uno único mensual | `casos-de-prueba-validador.md` (G3/CO2) | INV-1, V-9, V-10, V-11 | **Solo en apariencia.** p.1 («Los residentes se dividen en 2 grupos […] Cada grupo elaborará un cuadrante provisional») describe la composición de cada guardia y la organización de cada grupo, no dos unidades de datos — ver decisión V-15 | `rechazado` |
 | P-8 | Comprobar la equidad también **al cierre de cada trimestre**, no solo del año de residencia | `EQUITY_SYSTEM.md`; ya previsto como Fase 7.2 | INV-3 | **A favor.** p.2: «una vez cerrado el cuadrante trimestral, la diferencia de número de guardias entre residentes del mismo año no supere 1» | `implementado` |
-| P-9 | Catálogo cerrado de **tipos de guardia y horarios** (`TipoGuardia`, retribución, tramos) | `GUARD_SHIFT_TIME_RULES.md` | T-1, S-4, INV-12 | **Ausente.** La normativa no menciona horarios, tramos ni retribución en ninguna de sus 4 páginas: extensión sin respaldo normativo, decisión libre del autor | `propuesto` |
+| P-9 | Catálogo cerrado de **tipos de guardia y horarios** (`TipoGuardia`, retribución, tramos) | `GUARD_SHIFT_TIME_RULES.md` | T-1, S-4, INV-12 | **Ausente.** La normativa no menciona horarios, tramos ni retribución en ninguna de sus 4 páginas: extensión sin respaldo normativo, decisión libre del autor | `rechazado` |
+| P-10 | Vacación solicitada en fechas de evento (Navidad/despedida) exige **visto bueno de compañeros de guardia + tutoría + Jefe de Servicio** antes de aprobarse | `propuesta-visto-bueno-vacaciones-eventos.md` (lectura directa de `normativa.pdf`, sin documento previo) | Sin invariante existente — ninguna entidad de aprobación modelada hoy en §2 | **A favor.** p.3, «Eventos del servicio»: «En esas fechas no se puede optar a vacaciones sin el visto bueno de los compañeros de puesta de guardias, de tutoría y del Jefe de Servicio (puesto que cae fuera del periodo vacacional contemplado por GVA)» | `propuesto` |
+| P-11 | Modelo de datos concreto para **Imaginaria** (INV-13): entidad `ImaginariaCobertura` append-only, cola derivada por última cobertura, exclusión de R1 y de quien tenga guardia el día anterior/siguiente a la incidencia, sin exigencia de equidad | `imaginaria-modelo-propuesto.md` (lectura de `normativa.pdf` + respuestas del autor sobre la práctica real, no escritas en la normativa) | INV-13 | **Parcial.** p.4 («-Imaginaria») funda las dos listas, el criterio "lista del grupo de la incidencia" y que cesión/compra no descuenta de la imaginaria; el orden de la lista, la exclusión de R1, la exclusión por proximidad de fecha y la ausencia de exigencia de equidad **no están en la normativa** — son respuestas del autor sobre la práctica real, marcadas como tal en el documento | `propuesto` |
 
-### 8.1 La que sigue abierta (y las dos ya cerradas)
+### 8.1 La que sigue abierta (y las cuatro ya cerradas)
+
+**P-9, rechazada el 2026-08-01 por decisión directa del autor** (no
+había normativa que evaluar: la propia fila ya decía "extensión sin
+respaldo normativo, decisión libre del autor"). Horario explícito por
+guardia: rechazado — "los residentes ya conocen el horario de memoria,
+y no aporta nada que la app no resuelva ya". Retribución (NORMAL/DOBLE):
+rechazado — se gestiona fuera de la app (RRHH/nómina), no algo que la
+app deba calcular ni exportar.
+
+**P-2, cerrada el 2026-08-01 (no tenía su propia fecha de cierre —
+detectada obsoleta al revisar la cola completa).** Proponía tratar
+vacaciones y rotación como bloqueo DURO. `V-8` (§6, ya implementada en
+Fase 5.x) decidió exactamente lo contrario: BAJA sigue bloqueando
+(INV-5 sin cambios), pero VACACIONES y ROTACION dejaron de bloquear la
+asignación — la fila de la cola seguía marcada `propuesto` sin que
+nadie la hubiera actualizado tras esa decisión. Marcada `rechazado`
+porque el comportamiento implementado es el contrario al que propone,
+no porque se haya evaluado de nuevo contra la normativa.
 
 **P-6 (ambigüedad real de la fuente).** Es el único punto donde la ambigüedad está en la normativa y
 no en su lectura. El código exige conjunción (una de viernes **y** una de sábado), que es la lectura
