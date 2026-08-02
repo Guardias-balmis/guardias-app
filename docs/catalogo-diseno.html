@@ -1,0 +1,482 @@
+<title>Catálogo de diseño · Guardias Dr. Balmis</title>
+<style>
+:root{
+  --ground:#F0F4F8; --surface:#fff; --ink:#1a1a2e; --muted:#6B7280;
+  --line:#E0E7EF; --accent:#1F4E79; --accent-soft:#EBF3FB;
+  --shadow:0 2px 12px rgba(31,78,121,0.10); --radius:12px; --radius-sm:8px;
+  --ok:#1B7F4B; --no:#C00000; --ok-bg:#E4F3EA; --no-bg:#FCE4D6;
+}
+/* El tema oscuro es del CATÁLOGO, no de la app (que es de un solo tema): los grises van sesgados
+   hacia el azul del sistema para que no se lean como un gris cualquiera. Las MUESTRAS nunca se
+   adaptan — un swatch que cambia de color con el tema deja de ser una muestra. */
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#0F1A24; --surface:#17242F; --ink:#E6EDF4; --muted:#93A4B5;
+    --line:#263847; --accent:#7FB3DC; --accent-soft:#1B2E3E;
+    --shadow:0 2px 12px rgba(0,0,0,.45);
+    --ok:#5FCB92; --no:#FF8A80; --ok-bg:#12312150; --no-bg:#3A181850;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0F1A24; --surface:#17242F; --ink:#E6EDF4; --muted:#93A4B5;
+  --line:#263847; --accent:#7FB3DC; --accent-soft:#1B2E3E;
+  --shadow:0 2px 12px rgba(0,0,0,.45);
+  --ok:#5FCB92; --no:#FF8A80; --ok-bg:#12312150; --no-bg:#3A181850;
+}
+:root[data-theme="light"]{
+  --ground:#F0F4F8; --surface:#fff; --ink:#1a1a2e; --muted:#6B7280;
+  --line:#E0E7EF; --accent:#1F4E79; --accent-soft:#EBF3FB;
+  --shadow:0 2px 12px rgba(31,78,121,0.10);
+  --ok:#1B7F4B; --no:#C00000; --ok-bg:#E4F3EA; --no-bg:#FCE4D6;
+}
+
+/* La misma pila de fuentes que index.html: el catálogo tiene que verse con la tipografía real. */
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  line-height:1.55; -webkit-font-smoothing:antialiased;
+}
+code,.num{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:940px;margin:0 auto;padding:40px 20px 80px;display:flex;flex-direction:column;gap:44px}
+
+header h1{font-size:clamp(26px,4.5vw,38px);line-height:1.15;margin:0 0 6px;letter-spacing:-.02em;text-wrap:balance}
+header .sub{color:var(--muted);max-width:62ch;margin:0}
+.origen{
+  margin-top:18px;padding:12px 14px;border-radius:var(--radius-sm);
+  background:var(--accent-soft);border-left:4px solid var(--accent);
+  font-size:13.5px;color:var(--ink);max-width:70ch;
+}
+.origen code{font-size:12.5px}
+
+h2{
+  font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--muted);margin:0 0 16px;padding-bottom:8px;border-bottom:1px solid var(--line);
+}
+h3{font-size:15px;margin:0 0 4px}
+.nota{font-size:13px;color:var(--muted);margin:0 0 12px;max-width:68ch}
+.grupo{margin-bottom:26px}
+.grupo:last-child{margin-bottom:0}
+
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:12px}
+.sw{margin:0}
+.sw-color{height:56px;border-radius:var(--radius-sm);border:1px solid var(--line)}
+.sw figcaption{display:flex;flex-direction:column;gap:1px;margin-top:6px;font-size:12px}
+.sw-name{font-weight:600}
+.sw code,.sombra code{color:var(--muted);font-size:11.5px}
+
+.tabla-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:520px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+thead th{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:700}
+tbody th{font-weight:600;white-space:nowrap}
+td.num{text-align:right;white-space:nowrap}
+.chip{display:inline-block;padding:3px 10px;border-radius:var(--radius-sm);font-weight:700;font-size:12px;white-space:nowrap}
+.verdict{font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.verdict.ok{color:var(--ok);background:var(--ok-bg)}
+.verdict.no{color:var(--no);background:var(--no-bg)}
+.resumen{margin:0 0 14px;font-size:13.5px;color:var(--muted);max-width:70ch}
+
+.sombras{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:20px}
+.sombra{margin:0}
+.sombra-caja{height:60px;background:var(--surface);border:1px solid var(--line)}
+.sombra figcaption{margin-top:10px;font-size:12px;display:flex;flex-direction:column;gap:1px;word-break:break-all}
+
+.comps{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+.comp{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.comp-demo{display:flex;align-items:center;min-height:40px}
+.comp-name{font-size:12px;color:var(--muted)}
+
+.codigos{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+.codigo{display:flex;align-items:center;gap:10px;font-size:12.5px}
+.codigo-celda{width:42px;flex:0 0 42px;text-align:center;padding:6px 0;border-radius:var(--radius-sm);border:1px solid var(--line);font-weight:700}
+.codigo code{color:var(--muted);font-size:11.5px}
+
+.rejilla{border-collapse:collapse;min-width:0;width:auto;background:var(--surface)}
+.rejilla th,.rejilla td{border-bottom:0}
+.pills{display:flex;flex-wrap:wrap;gap:8px}
+.dia{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:7px 12px;font-size:13px}
+.dia b{color:var(--accent)}
+
+footer{color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);padding-top:18px;max-width:70ch}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Catálogo de diseño</h1>
+    <p class="sub">Los tokens visuales de <b>Guardias · Dr. Balmis</b>: colores, sombras, radios y estilos de componente tal y como los usa la aplicación.</p>
+    <div class="origen">
+      <b>Esta página se genera, no se escribe.</b> Su única fuente es
+      <code>client/lib/design-tokens.js</code>; la produce <code>build/build-catalogo.mjs</code>
+      (<code>npm run catalogo</code>) y un test de la suite falla si deja de estar al día. Si algo
+      de aquí no te cuadra, el sitio donde cambiarlo es el módulo de tokens: cámbialo ahí y esta
+      página lo reflejará sola.
+    </div>
+  </header>
+
+  <section>
+    <h2>Color</h2>
+    
+<section class="grupo">
+  <h3>Azules</h3>
+  <p class="nota">La identidad. <code>blueDark</code> es la cabecera y el texto de titular; <code>bluePale</code>, el fondo de todo lo seleccionable.</p>
+  <div class="swatches"><figure class="sw">
+  <div class="sw-color" style="background:#1F4E79"></div>
+  <figcaption><span class="sw-name">blueDark</span><code>#1F4E79</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#2E75B6"></div>
+  <figcaption><span class="sw-name">blue</span><code>#2E75B6</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#5BA3D0"></div>
+  <figcaption><span class="sw-name">blueLight</span><code>#5BA3D0</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#EBF3FB"></div>
+  <figcaption><span class="sw-name">bluePale</span><code>#EBF3FB</code></figcaption>
+</figure></div>
+</section>
+<section class="grupo">
+  <h3>Verdes</h3>
+  <p class="nota">Validar y publicar: lo que ha salido bien.</p>
+  <div class="swatches"><figure class="sw">
+  <div class="sw-color" style="background:#375623"></div>
+  <figcaption><span class="sw-name">green</span><code>#375623</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#70AD47"></div>
+  <figcaption><span class="sw-name">greenMid</span><code>#70AD47</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#E2EFDA"></div>
+  <figcaption><span class="sw-name">greenLight</span><code>#E2EFDA</code></figcaption>
+</figure></div>
+</section>
+<section class="grupo">
+  <h3>Naranjas y rojos</h3>
+  <p class="nota">Aviso y error. Ojo: <code>redLight</code> y <code>orangeLight</code> son el MISMO hex, así que el fondo no distingue una baja de unas vacaciones — la distinción real es el borde.</p>
+  <div class="swatches"><figure class="sw">
+  <div class="sw-color" style="background:#C55A11"></div>
+  <figcaption><span class="sw-name">orange</span><code>#C55A11</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#FCE4D6"></div>
+  <figcaption><span class="sw-name">orangeLight</span><code>#FCE4D6</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#C00000"></div>
+  <figcaption><span class="sw-name">red</span><code>#C00000</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#FCE4D6"></div>
+  <figcaption><span class="sw-name">redLight</span><code>#FCE4D6</code></figcaption>
+</figure></div>
+</section>
+<section class="grupo">
+  <h3>Amarillos</h3>
+  <p class="nota">Vacaciones en la rejilla.</p>
+  <div class="swatches"><figure class="sw">
+  <div class="sw-color" style="background:#FFE699"></div>
+  <figcaption><span class="sw-name">yellow</span><code>#FFE699</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#FFFDE7"></div>
+  <figcaption><span class="sw-name">yellowLight</span><code>#FFFDE7</code></figcaption>
+</figure></div>
+</section>
+<section class="grupo">
+  <h3>Grises y base</h3>
+  <p class="nota">El suelo de la interfaz. <code>bodyBg</code> es el fondo de la app; <code>grayDark</code>, todo el texto secundario.</p>
+  <div class="swatches"><figure class="sw">
+  <div class="sw-color" style="background:#F5F7FA"></div>
+  <figcaption><span class="sw-name">gray</span><code>#F5F7FA</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#E0E7EF"></div>
+  <figcaption><span class="sw-name">grayMid</span><code>#E0E7EF</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#6B7280"></div>
+  <figcaption><span class="sw-name">grayDark</span><code>#6B7280</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#F0F4F8"></div>
+  <figcaption><span class="sw-name">bodyBg</span><code>#F0F4F8</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#1a1a2e"></div>
+  <figcaption><span class="sw-name">bodyText</span><code>#1a1a2e</code></figcaption>
+</figure></div>
+</section>
+<section class="grupo">
+  <h3>Rejilla</h3>
+  <p class="nota">Solo la tabla del cuadrante.</p>
+  <div class="swatches"><figure class="sw">
+  <div class="sw-color" style="background:#C0CCD8"></div>
+  <figcaption><span class="sw-name">scrollThumb</span><code>#C0CCD8</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#E0E7EF"></div>
+  <figcaption><span class="sw-name">cellBorder</span><code>#E0E7EF</code></figcaption>
+</figure><figure class="sw">
+  <div class="sw-color" style="background:#333"></div>
+  <figcaption><span class="sw-name">cellText</span><code>#333</code></figcaption>
+</figure></div>
+</section>
+  </section>
+
+  <section>
+    <h2>Contraste de las parejas que la app usa</h2>
+    <p class="resumen">
+      No son combinaciones inventadas para el catálogo: son las tres que la interfaz pinta de
+      verdad — la insignia de nivel, el estado del cuadrante y la celda de la rejilla. Se mide con
+      la fórmula de WCAG 2.1 contra el mínimo AA de texto normal (4,5:1); todos estos textos van
+      en negrita y por debajo de 14px, así que no les vale el umbral de texto grande.
+      <b>4 de 14</b> parejas se quedan por debajo.
+    </p>
+    <div class="tabla-wrap">
+      <table>
+        <thead><tr><th scope="col">Uso</th><th scope="col">Cómo se ve</th><th scope="col">Texto / fondo</th><th scope="col">Ratio</th><th scope="col">AA</th></tr></thead>
+        <tbody>
+<tr>
+  <th scope="row">Nivel R4</th>
+  <td><span class="chip" style="background:#1F4E79;color:#fff">R4</span></td>
+  <td><code>#fff</code> sobre <code>#1F4E79</code></td>
+  <td class="num">8.7:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
+</tr>
+<tr>
+  <th scope="row">Nivel R3</th>
+  <td><span class="chip" style="background:#2E75B6;color:#fff">R3</span></td>
+  <td><code>#fff</code> sobre <code>#2E75B6</code></td>
+  <td class="num">4.8:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
+</tr>
+<tr>
+  <th scope="row">Nivel R2</th>
+  <td><span class="chip" style="background:#5BA3D0;color:#fff">R2</span></td>
+  <td><code>#fff</code> sobre <code>#5BA3D0</code></td>
+  <td class="num">2.8:1</td>
+  <td><span class="verdict no">bajo (AA pide 4.5)</span></td>
+</tr>
+<tr>
+  <th scope="row">Nivel R1</th>
+  <td><span class="chip" style="background:#9DC3E6;color:#1F4E79">R1</span></td>
+  <td><code>#1F4E79</code> sobre <code>#9DC3E6</code></td>
+  <td class="num">4.7:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
+</tr>
+<tr>
+  <th scope="row">Estado BORRADOR</th>
+  <td><span class="chip" style="background:#E0E7EF;color:#6B7280">📝 Borrador</span></td>
+  <td><code>#6B7280</code> sobre <code>#E0E7EF</code></td>
+  <td class="num">3.9:1</td>
+  <td><span class="verdict no">bajo (AA pide 4.5)</span></td>
+</tr>
+<tr>
+  <th scope="row">Estado VALIDADO</th>
+  <td><span class="chip" style="background:#EBF3FB;color:#2E75B6">✅ Validado</span></td>
+  <td><code>#2E75B6</code> sobre <code>#EBF3FB</code></td>
+  <td class="num">4.3:1</td>
+  <td><span class="verdict no">bajo (AA pide 4.5)</span></td>
+</tr>
+<tr>
+  <th scope="row">Estado PUBLICADO</th>
+  <td><span class="chip" style="background:#E2EFDA;color:#70AD47">📢 Publicado</span></td>
+  <td><code>#70AD47</code> sobre <code>#E2EFDA</code></td>
+  <td class="num">2.3:1</td>
+  <td><span class="verdict no">bajo (AA pide 4.5)</span></td>
+</tr>
+<tr>
+  <th scope="row">Código G</th>
+  <td><span class="chip" style="background:#C6EFCE;color:#333">G</span></td>
+  <td><code>#333</code> sobre <code>#C6EFCE</code></td>
+  <td class="num">10:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
+</tr>
+<tr>
+  <th scope="row">Código GF</th>
+  <td><span class="chip" style="background:#FCE4D6;color:#333">GF</span></td>
+  <td><code>#333</code> sobre <code>#FCE4D6</code></td>
+  <td class="num">10.4:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
+</tr>
+<tr>
+  <th scope="row">Código GP</th>
+  <td><span class="chip" style="background:#FCE4D6;color:#333">GP</span></td>
+  <td><code>#333</code> sobre <code>#FCE4D6</code></td>
+  <td class="num">10.4:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
+</tr>
+<tr>
+  <th scope="row">Código 3P</th>
+  <td><span class="chip" style="background:#DEEAF1;color:#333">3P</span></td>
+  <td><code>#333</code> sobre <code>#DEEAF1</code></td>
+  <td class="num">10.3:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
+</tr>
+<tr>
+  <th scope="row">Código V</th>
+  <td><span class="chip" style="background:#FFE699;color:#333">V</span></td>
+  <td><code>#333</code> sobre <code>#FFE699</code></td>
+  <td class="num">10.2:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
+</tr>
+<tr>
+  <th scope="row">Código R</th>
+  <td><span class="chip" style="background:#E2EFDA;color:#333">R</span></td>
+  <td><code>#333</code> sobre <code>#E2EFDA</code></td>
+  <td class="num">10.6:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
+</tr>
+<tr>
+  <th scope="row">Código B</th>
+  <td><span class="chip" style="background:#D9D9D9;color:#333">B</span></td>
+  <td><code>#333</code> sobre <code>#D9D9D9</code></td>
+  <td class="num">9:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
+</tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Códigos de guardia</h2>
+    <p class="nota">El vocabulario del servicio. No se traducen ni se renombran nunca: son los mismos en la interfaz, en el dominio y en la hoja de cálculo.</p>
+    <div class="codigos">
+<div class="codigo">
+  <span class="codigo-celda" style="background:#C6EFCE;color:#333">G</span>
+  <div><b>Guardia</b><br><code>#C6EFCE</code></div>
+</div>
+<div class="codigo">
+  <span class="codigo-celda" style="background:#FCE4D6;color:#333">GF</span>
+  <div><b>G. Festiva</b><br><code>#FCE4D6</code></div>
+</div>
+<div class="codigo">
+  <span class="codigo-celda" style="background:#FCE4D6;color:#333">GP</span>
+  <div><b>G. Prefestivo</b><br><code>#FCE4D6</code></div>
+</div>
+<div class="codigo">
+  <span class="codigo-celda" style="background:#DEEAF1;color:#333">3P</span>
+  <div><b>3.º Puesto</b><br><code>#DEEAF1</code></div>
+</div>
+<div class="codigo">
+  <span class="codigo-celda" style="background:#FFE699;color:#333">V</span>
+  <div><b>Vacaciones</b><br><code>#FFE699</code></div>
+</div>
+<div class="codigo">
+  <span class="codigo-celda" style="background:#E2EFDA;color:#333">R</span>
+  <div><b>Rotación</b><br><code>#E2EFDA</code></div>
+</div>
+<div class="codigo">
+  <span class="codigo-celda" style="background:#D9D9D9;color:#333">B</span>
+  <div><b>Baja</b><br><code>#D9D9D9</code></div>
+</div></div>
+    <p class="nota" style="margin-top:14px">Orden del ciclo al tocar una celda: <code>G</code> → <code>GF</code> → <code>GP</code> → <code>3P</code> → <code>V</code> → <code>R</code> → <code>B</code> → <code>(vacío)</code></p>
+  </section>
+
+  <section>
+    <h2>Nivel de residencia</h2>
+    <p class="nota">Más oscuro, más veterano. El nivel nunca se almacena: se deriva de las fechas de cada residente.</p>
+    <div class="pills">
+      <span class="chip" style="background:#1F4E79;color:#fff;padding:6px 14px">R4</span><span class="chip" style="background:#2E75B6;color:#fff;padding:6px 14px">R3</span><span class="chip" style="background:#5BA3D0;color:#fff;padding:6px 14px">R2</span><span class="chip" style="background:#9DC3E6;color:#1F4E79;padding:6px 14px">R1</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Estado del cuadrante</h2>
+    <p class="nota">Un solo mapa por estado (color, fondo y etiqueta juntos), para que no puedan desincronizarse entre sí.</p>
+    <div class="pills">
+      <span class="chip" style="background:#E0E7EF;color:#6B7280;padding:6px 14px" title="BORRADOR">📝 Borrador</span><span class="chip" style="background:#EBF3FB;color:#2E75B6;padding:6px 14px" title="VALIDADO">✅ Validado</span><span class="chip" style="background:#E2EFDA;color:#70AD47;padding:6px 14px" title="PUBLICADO">📢 Publicado</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Elevación y radios</h2>
+    <p class="nota">Radios: <code>md 12px</code> para tarjetas, <code>sm 8px</code> para controles.</p>
+    <div class="sombras">
+<figure class="sombra">
+  <div class="sombra-caja" style="box-shadow:0 2px 12px rgba(31,78,121,0.10);border-radius:12px"></div>
+  <figcaption><span class="sw-name">card</span><code>0 2px 12px rgba(31,78,121,0.10)</code></figcaption>
+</figure>
+<figure class="sombra">
+  <div class="sombra-caja" style="box-shadow:0 8px 32px rgba(31,78,121,0.16);border-radius:12px"></div>
+  <figcaption><span class="sw-name">elevated</span><code>0 8px 32px rgba(31,78,121,0.16)</code></figcaption>
+</figure>
+<figure class="sombra">
+  <div class="sombra-caja" style="box-shadow:0 2px 8px rgba(0,0,0,0.2);border-radius:12px"></div>
+  <figcaption><span class="sw-name">header</span><code>0 2px 8px rgba(0,0,0,0.2)</code></figcaption>
+</figure>
+<figure class="sombra">
+  <div class="sombra-caja" style="box-shadow:0 -2px 12px rgba(0,0,0,0.08);border-radius:12px"></div>
+  <figcaption><span class="sw-name">bottomNav</span><code>0 -2px 12px rgba(0,0,0,0.08)</code></figcaption>
+</figure>
+<figure class="sombra">
+  <div class="sombra-caja" style="box-shadow:0 2px 8px rgba(0,0,0,0.06);border-radius:12px"></div>
+  <figcaption><span class="sw-name">googleBtn</span><code>0 2px 8px rgba(0,0,0,0.06)</code></figcaption>
+</figure>
+<figure class="sombra">
+  <div class="sombra-caja" style="box-shadow:0 1px 4px rgba(0,0,0,0.1);border-radius:12px"></div>
+  <figcaption><span class="sw-name">subTabActive</span><code>0 1px 4px rgba(0,0,0,0.1)</code></figcaption>
+</figure>
+<figure class="sombra">
+  <div class="sombra-caja" style="box-shadow:0 1px 4px rgba(0,0,0,0.2);border-radius:12px"></div>
+  <figcaption><span class="sw-name">toggleKnob</span><code>0 1px 4px rgba(0,0,0,0.2)</code></figcaption>
+</figure></div>
+  </section>
+
+  <section>
+    <h2>Estilos de componente</h2>
+    <p class="nota">Elementos reales con los estilos de <code>S</code> aplicados: lo que se ve aquí es exactamente lo que renderiza la app.</p>
+    <div class="comps">
+<div class="comp">
+  <div class="comp-demo"><input value="Texto de ejemplo" style="padding:10px 12px;border-radius:8px;border:1.5px solid #E0E7EF;font-size:14px;outline:none;background:#fff;-webkit--appearance:none"></div>
+  <code class="comp-name">S.input</code>
+</div>
+<div class="comp">
+  <div class="comp-demo"><span style="font-size:12px;font-weight:600;color:#6B7280;text-transform:uppercase;letter-spacing:0.4">Etiqueta de campo</span></div>
+  <code class="comp-name">S.label</code>
+</div>
+<div class="comp">
+  <div class="comp-demo"><button style="padding:6px 10px;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;background:#EBF3FB;color:#2E75B6">Acción</button></div>
+  <code class="comp-name">S.smallBtn</code>
+</div>
+<div class="comp">
+  <div class="comp-demo"><button style="padding:7px 10px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;background:#C55A11;color:#fff;border:none">14</button></div>
+  <code class="comp-name">S.dayToggleBtn</code>
+</div>
+<div class="comp">
+  <div class="comp-demo"><button style="width:36px;height:36px;border-radius:10px;border:1.5px solid #2E75B6;background:#EBF3FB;color:#2E75B6;font-size:20px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center">+</button></div>
+  <code class="comp-name">S.counterBtn</code>
+</div>
+<div class="comp">
+  <div class="comp-demo"><button style="background:#EBF3FB;border:none;border-radius:8px;padding:8px 14px;color:#2E75B6;font-size:16px;font-weight:700;cursor:pointer">▶</button></div>
+  <code class="comp-name">S.navBtn</code>
+</div>
+<div class="comp">
+  <div class="comp-demo"><span style="background:#1F4E79;border:none;border-radius:8px;padding:6px 10px;color:#fff;font-size:18px;cursor:pointer">⚙️</span></div>
+  <code class="comp-name">S.iconBtn</code>
+</div>
+<div class="comp">
+  <div class="comp-demo"><button style="background:#70AD47;color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer">Publicar</button></div>
+  <code class="comp-name">pillBtn(color)</code>
+</div></div>
+
+    <h3 style="margin-top:28px">La rejilla del cuadrante</h3>
+    <p class="nota"><code>S.th</code> y <code>S.td</code> solos no son nada: aquí están donde significan algo, con el color de nivel y los de código encima.</p>
+    <div class="tabla-wrap">
+<table class="rejilla">
+  <thead><tr>
+    <th style="padding:4px 3px;border:1px solid #C0CCD8;text-align:center;white-space:nowrap;position:sticky;top:0px;background:#F5F7FA;color:#1F4E79;font-size:11px">Nivel</th>
+    <th style="padding:4px 3px;border:1px solid #C0CCD8;text-align:center;white-space:nowrap;position:sticky;top:0px;background:#F5F7FA;color:#1F4E79;font-size:11px">Nombre</th>
+    <th style="padding:4px 3px;border:1px solid #C0CCD8;text-align:center;white-space:nowrap;position:sticky;top:0px;background:#F5F7FA;color:#1F4E79;font-size:11px">1</th><th style="padding:4px 3px;border:1px solid #C0CCD8;text-align:center;white-space:nowrap;position:sticky;top:0px;background:#F5F7FA;color:#1F4E79;font-size:11px">2</th><th style="padding:4px 3px;border:1px solid #C0CCD8;text-align:center;white-space:nowrap;position:sticky;top:0px;background:#F5F7FA;color:#1F4E79;font-size:11px">3</th><th style="padding:4px 3px;border:1px solid #C0CCD8;text-align:center;white-space:nowrap;position:sticky;top:0px;background:#F5F7FA;color:#1F4E79;font-size:11px">4</th>
+  </tr></thead>
+  <tbody><tr>
+    <td style="padding:3px 2px;border:1px solid #E0E7EF;background:#2E75B6;color:#fff;text-align:center;font-weight:700;font-size:12px">R3</td>
+    <td style="padding:3px 8px;border:1px solid #E0E7EF;font-size:12px;color:#333">Carlos</td>
+    <td style="padding:3px 2px;border:1px solid #E0E7EF;background:#C6EFCE;color:#333;text-align:center;font-weight:700;font-size:12px">G</td><td style="padding:3px 2px;border:1px solid #E0E7EF;background:transparent;color:#333;text-align:center;font-weight:400;font-size:12px">·</td><td style="padding:3px 2px;border:1px solid #E0E7EF;background:#FCE4D6;color:#333;text-align:center;font-weight:700;font-size:12px">GF</td><td style="padding:3px 2px;border:1px solid #E0E7EF;background:#DEEAF1;color:#333;text-align:center;font-weight:700;font-size:12px">3P</td>
+  </tr></tbody>
+</table></div>
+  </section>
+
+  <section>
+    <h2>Días de la semana</h2>
+    <p class="nota">Notación del servicio, la misma del Excel de referencia.</p>
+    <div class="pills">
+      <span class="dia"><b>L</b> · Lunes</span><span class="dia"><b>M</b> · Martes</span><span class="dia"><b>X</b> · Miércoles</span><span class="dia"><b>J</b> · Jueves</span><span class="dia"><b>V</b> · Viernes</span><span class="dia"><b>S</b> · Sábado</span><span class="dia"><b>D</b> · Domingo</span>
+    </div>
+  </section>
+
+  <footer>
+    Generado desde <code>client/lib/design-tokens.js</code>. Para cambiar cualquier valor, edita ese
+    módulo y ejecuta <code>npm run catalogo</code>.
+  </footer>
+</div>
