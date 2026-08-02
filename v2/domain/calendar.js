@@ -73,6 +73,19 @@ export function addYears(iso, years) {
   return toISO(targetYear, month, clampedDay);
 }
 
+/**
+ * Suma (o resta) meses conservando el día, con el mismo recorte que `addYears` cuando el mes
+ * destino es más corto (31-ene + 1 mes → 28-feb). La usa el compromiso de permanencia del
+ * voluntariado de 3P (INV-8), que se cuenta en meses y no en días.
+ */
+export function addMonths(iso, months) {
+  const { year, month, day } = parseISO(iso);
+  const total = year * 12 + (month - 1) + months;
+  const targetYear = Math.floor(total / 12);
+  const targetMonth = total - targetYear * 12 + 1; // siempre 1-12, también con `months` negativo
+  return toISO(targetYear, targetMonth, Math.min(day, daysInMonth(targetYear, targetMonth)));
+}
+
 /** Días del mes (mes 1-12). */
 export function daysInMonth(year, month) {
   if (!Number.isInteger(month) || month < 1 || month > 12) {

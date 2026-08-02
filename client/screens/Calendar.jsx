@@ -10,6 +10,7 @@ import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/dom
 import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit, equityWarnings } from "./v2/domain/cuadrante.js";
 import { todayISO } from "./client/lib/dates.js";
 import { closeViolations } from "./client/lib/closes.js";
+import { thirdPostViolations } from "./client/lib/thirdpost.js";
 import { violationText } from "./client/lib/violations.js";
 
 const { useState, useEffect } = React;
@@ -42,7 +43,11 @@ function CalendarScreen() {
   // desplegada) tampoco se bloquea: V-14 coherente — si la equidad no impide validar cuando se
   // puede calcular, menos aún cuando no. Se dice en pantalla y se pide la misma confirmación,
   // porque lo que no se sabe no se puede dar por bueno en silencio.
+  // Dos comprobaciones distintas con su propio fallo: los cierres de equidad (INV-3) y el
+  // tercer puesto (INV-8). Un solo estado compartido hacía que una pisara a la otra y que el
+  // cartel atribuyera el fallo a la que no era.
   const [cierresError, setCierresError] = useState(null);
+  const [tercerPuestoError, setTercerPuestoError] = useState(null);
   const [estado, setEstado] = useState("BORRADOR");
   const [cambiandoEstado, setCambiandoEstado] = useState(false);
   // Si estadoCuadrante falla (red, sesión) NO se asume BORRADOR: un mes realmente PUBLICADO
@@ -128,6 +133,7 @@ function CalendarScreen() {
     setViolaciones(null);
     setEquidadPorConfirmar(null);
     setCierresError(null);
+    setTercerPuestoError(null);
   };
 
   const cambios = Object.values(pendientes);
@@ -189,13 +195,23 @@ function CalendarScreen() {
     // servidor en marcarValidado; si falla la carga no se sigue, porque un cierre no
     // comprobado en silencio es peor que dar por bueno lo que no se ha mirado (V-14: ninguno de
     // los dos cierres bloquea, pero la confirmación explícita sí depende de haberlos calculado).
-    const rCierres = await closeViolations({ api: app.api, mes, anio, residentes, asignacionesDelMes });
+    // El tercer puesto (INV-8) va en paralelo: es otra comprobación con su propio rango, y
+    // desde V-18 ninguna de sus cuatro reglas bloquea — pero las cuatro son avisos de equidad,
+    // así que cuentan para la confirmación explícita igual que los cierres.
+    const [rCierres, r3P] = await Promise.all([
+      closeViolations({ api: app.api, mes, anio, residentes, asignacionesDelMes }),
+      thirdPostViolations({ api: app.api, mes, anio, residentes, asignacionesDelMes }),
+    ]);
     if (!rCierres.ok) {
       setCierresError(rCierres.error);
       showToast("No se pudieron comprobar los cierres de equidad: " + rCierres.error, "err");
     }
+    if (!r3P.ok) {
+      setTercerPuestoError(r3P.error);
+      showToast("No se pudo comprobar el tercer puesto (INV-8): " + r3P.error, "err");
+    }
 
-    const v = [...validateMonth(ctx), ...(rCierres.ok ? rCierres.violaciones : [])];
+    const v = [...validateMonth(ctx), ...(rCierres.ok ? rCierres.violaciones : []), ...(r3P.ok ? r3P.violaciones : [])];
     setViolaciones(v);
 
     // Decisión de Fase 6.2 (V-9/V-10): BORRADOR->VALIDADO es automático en cuanto el
@@ -209,7 +225,10 @@ function CalendarScreen() {
     // (forzar=true) es la que valida de verdad. El servidor no necesita saber nada de esto:
     // los avisos nunca le han bloqueado nada, la confirmación es de quien firma el cuadrante.
     const avisosEquidad = equityWarnings(v);
-    if (canValidate(v) && puedeMoverCiclo && estado !== "PUBLICADO" && cambios.length === 0 && (avisosEquidad.length > 0 || !rCierres.ok) && !forzar) {
+    // `!r3P.ok` cuenta igual que `!rCierres.ok`: lo que no se ha podido comprobar tampoco se da
+    // por bueno en silencio, y quien firma el cuadrante tiene que enterarse de que INV-8 quedó
+    // sin mirar antes de que el mes pase a VALIDADO.
+    if (canValidate(v) && puedeMoverCiclo && estado !== "PUBLICADO" && cambios.length === 0 && (avisosEquidad.length > 0 || !rCierres.ok || !r3P.ok) && !forzar) {
       if (avisosEquidad.length > 0) setEquidadPorConfirmar(avisosEquidad.length);
       setValidando(false);
       return;
@@ -347,16 +366,18 @@ function CalendarScreen() {
         <Card title="Resultado de validación">
           {/* Decisión V-14: la equidad nunca bloquea, pero validar incumpliéndola se confirma
               a la vista de los avisos (que están justo debajo), no antes de poder leerlos. */}
-          {(equidadPorConfirmar !== null || cierresError) && (
+          {(equidadPorConfirmar !== null || cierresError || tercerPuestoError) && (
             <div style={{ marginBottom: 12, padding: 10, borderRadius: 8, background: COLOR.orangeLight, border: `1.5px solid ${COLOR.orange}` }}>
+              {/* El cartel nombra lo que de verdad falló: atribuir a los cierres de equidad un
+                  fallo del tercer puesto manda a buscar el problema al sitio equivocado. */}
               <div style={{ fontSize: 13, fontWeight: 700, color: COLOR.orange, marginBottom: 6 }}>
-                {cierresError
-                  ? "⚖️ No se han podido comprobar los cierres de equidad"
+                {cierresError || tercerPuestoError
+                  ? `⚖️ No se ha podido comprobar ${[cierresError && "la equidad del cierre", tercerPuestoError && "el tercer puesto (INV-8)"].filter(Boolean).join(" ni ")}`
                   : `⚖️ El cuadrante incumple los criterios de equidad (${equidadPorConfirmar} ${equidadPorConfirmar === 1 ? "aviso" : "avisos"})`}
               </div>
               <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 8 }}>
-                {cierresError
-                  ? `No se pudo cargar el histórico que hace falta (${cierresError}). El resto del cuadrante sí se ha validado; la equidad del cierre queda sin comprobar.`
+                {cierresError || tercerPuestoError
+                  ? `No se pudo cargar el histórico que hace falta (${cierresError || tercerPuestoError}). El resto del cuadrante sí se ha validado; eso queda sin comprobar.`
                   : "No impide validar: la normativa prevé compensar la diferencia en los meses siguientes. Revisa los avisos de abajo y decide."}
               </div>
               {/* Solo mientras quede algo que confirmar: si el mes ya está VALIDADO, el aviso

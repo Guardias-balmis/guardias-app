@@ -9,6 +9,7 @@ import { handleRequest } from "../src/router.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "../../v2/domain/validate.js";
+import { validateThirdPost, thirdPostHistoryStart, thirdPostCommitmentEnd, canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES } from "../../v2/domain/thirdpost.js";
 import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange, validateQuarterClose, quarterCloseWindow } from "../../v2/domain/equity.js";
 import { groupOnDate } from "../../v2/domain/residents.js";
 import { eligibleCandidates } from "../../v2/domain/responsible.js";
@@ -45,6 +46,7 @@ function makeDeps(overrides = {}) {
     asignaciones: [headerOf(TABLES.asignaciones)],
     cuadrantes: [headerOf(TABLES.cuadrantes)],
     festivos: [headerOf(TABLES.festivos)],
+    voluntarios3P: [headerOf(TABLES.voluntarios3P)],
   });
   const nonces = new Set();
   return {
@@ -61,6 +63,7 @@ function makeDeps(overrides = {}) {
       validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange,
       validateQuarterClose, quarterCloseWindow,
       groupOnDate, eligibleCandidates,
+      validateThirdPost, thirdPostHistoryStart, thirdPostCommitmentEnd, canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES,
       canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, buildMonthSheetRows, buildResumenRows,
     },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
@@ -518,4 +521,89 @@ test("estadoResponsable devuelve también el periodo SIGUIENTE (voluntariado abi
   assert.equal(r.siguiente.mandato, null); // sin decidir
   assert.deepEqual(r.siguiente.voluntarios, []);
   assert.equal(r.siguiente.meHeOfrecido, false);
+});
+
+// INV-8 (tercer puesto) en marcarValidado. Hasta la decisión V-18 estaba implementado y
+// probado en el dominio desde la Fase 3 pero NO lo invocaba nadie, y le faltaba la tabla de
+// voluntarios: con la lista vacía marcaba TODO 3P como no-voluntario, que es lo que impedía
+// cablearlo. Las cuatro reglas son ahora aviso, así que ninguna impide validar.
+test("marcarValidado: un 3P de quien no consta voluntario AVISA y no impide validar (INV-8a, V-18)", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  guardar(deps, session, [{ fecha: "2027-07-14", residenteId: "otro-1", codigo: "3P" }]);
+
+  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, true, "INV-8 no bloquea nunca (V-18)");
+  assert.equal(r.estado, "VALIDADO");
+  const av = r.violaciones.filter((v) => v.invariante === "INV-8");
+  assert.equal(av.length, 1);
+  assert.equal(av[0].severidad, "aviso");
+  assert.match(av[0].detalle, /no consta en la lista de voluntarios/);
+});
+
+test("marcarValidado: con el residente apuntado, ese mismo 3P deja de avisar", () => {
+  const deps = stubClean(makeDeps());
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const suya = loggedInAs(deps, "otro@gmail.com");
+  call({ action: "ofrecerse3P", session: suya, compromisoAceptado: true }, deps);
+  guardar(deps, loggedInAs(deps, "resp@gmail.com"), [{ fecha: "2027-07-14", residenteId: "otro-1", codigo: "3P" }]);
+
+  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.violaciones.filter((v) => v.invariante === "INV-8"), []);
+});
+
+test("marcarValidado: el ciclo de INV-8b arranca en el alta del voluntario y cruza meses", () => {
+  const deps = stubClean(makeDeps({ today: "2027-06-01" }));
+  const suya = loggedInAs(deps, "otro@gmail.com");
+  call({ action: "ofrecerse3P", session: suya, compromisoAceptado: true }, deps);
+  // Dos miércoles: el de junio queda en el histórico y el de julio repite día sin cerrar ciclo.
+  guardar(deps, suya, [
+    { fecha: "2027-06-09", residenteId: "otro-1", codigo: "3P" },
+    { fecha: "2027-07-14", residenteId: "otro-1", codigo: "3P" },
+  ]);
+
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  const av = r.violaciones.filter((v) => v.invariante === "INV-8");
+  assert.equal(av.length, 1, "el 3P de junio tiene que llegar como histórico");
+  assert.match(av[0].detalle, /repite X .* 2027-07-14/);
+});
+
+test("marcarValidado: el 3P del propio mes no se cuenta dos veces (histórico + mes)", () => {
+  const deps = stubClean(makeDeps({ today: "2027-06-01" }));
+  const suya = loggedInAs(deps, "otro@gmail.com");
+  call({ action: "ofrecerse3P", session: suya, compromisoAceptado: true }, deps);
+  // Un ÚNICO 3P, dentro del mes validado: si el histórico lo incluyera también, el ciclo vería
+  // dos miércoles seguidos y avisaría de una repetición que no existe.
+  guardar(deps, suya, [{ fecha: "2027-07-14", residenteId: "otro-1", codigo: "3P" }]);
+
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.deepEqual(r.violaciones.filter((v) => v.invariante === "INV-8"), []);
+});
+
+test("marcarValidado: el ciclo de INV-8b arranca en el alta de CADA uno, no en el mínimo global", () => {
+  // Reproduce el fallo que encontró la revisión adversarial. El histórico se lee desde el alta
+  // MÁS ANTIGUA (hace falta entera para INV-8c), así que el recorte por residente tiene que
+  // hacerlo el validador: sin él, el 3P que Óscar hizo en enero —antes de apuntarse— entraba en
+  // su ciclo nuevo y avisaba de una repetición de lunes que no existe.
+  const deps = stubClean(makeDeps({ today: "2027-01-02" }));
+  const resp = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "ofrecerse3P", session: resp, compromisoAceptado: true }, deps); // alta antigua: 2027-01-02
+
+  const suya = loggedInAs(deps, "otro@gmail.com");
+  guardar(deps, suya, [{ fecha: "2027-01-04", residenteId: "otro-1", codigo: "3P" }]); // lunes, sin estar apuntado
+  deps.today = "2027-06-01";
+  call({ action: "ofrecerse3P", session: suya, compromisoAceptado: true }, deps);
+  guardar(deps, suya, [{ fecha: "2027-07-05", residenteId: "otro-1", codigo: "3P" }]); // otro lunes, ya en su etapa
+
+  deps.today = "2027-07-20";
+  const r = call({ action: "marcarValidado", session: loggedInAs(deps, "resp@gmail.com"), mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  assert.deepEqual(
+    r.violaciones.filter((v) => v.invariante === "INV-8" && /repite/.test(v.detalle)), [],
+    "el 3P de enero es anterior a su alta: no entra en su ciclo"
+  );
 });

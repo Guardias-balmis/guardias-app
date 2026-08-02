@@ -68,6 +68,10 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
     crearFestivos: (festivos) => authed("crearFestivos", { festivos }),
     anularFestivo: (id) => authed("anularFestivo", { id }),
     cancelarBloqueo: (id) => authed("cancelarBloqueo", { id }),
+    /** Tercer puesto (INV-8): autoservicio puro, «será siempre voluntario» (V-18). */
+    estadoVoluntariado3P: () => authed("estadoVoluntariado3P"),
+    ofrecerse3P: (compromisoAceptado) => authed("ofrecerse3P", { compromisoAceptado }),
+    retirarVoluntariado3P: () => authed("retirarVoluntariado3P"),
     estadoResponsable: (anio) => authed("estadoResponsable", { anio }),
     ofrecerseResponsable: (anio) => authed("ofrecerseResponsable", { anio }),
     retirarVoluntariadoResponsable: (anio) => authed("retirarVoluntariadoResponsable", { anio }),

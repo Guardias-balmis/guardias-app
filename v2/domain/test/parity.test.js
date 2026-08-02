@@ -17,7 +17,10 @@ import { weekday, trimesterWindow, bridgesBetween } from "../calendar.js";
 import { levelOn, groupOnDate } from "../residents.js";
 import { tally } from "../tally.js";
 import { validateMonth, buildMonthContext } from "../validate.js";
-import { validateThirdPost } from "../thirdpost.js";
+import {
+  validateThirdPost, thirdPostHistoryStart, thirdPostCommitmentEnd,
+  canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES,
+} from "../thirdpost.js";
 import {
   validateResidencyYearClose, validateQuarterClose, quarterCloseWindow,
   yearCloseHistoryStart, yearCloseFestivosRange, buildYearCloseContext,
@@ -55,6 +58,7 @@ const TP_CTX = {
   voluntarios3P: [], historial3P: {},
   asignaciones: [{ residenteId: "r4-david", fecha: "2026-10-17", codigo: "3P" }],
 };
+const TP_VOLUNTARIOS = [{ residenteId: "r4-david", desde: "2026-08-01" }];
 const EQ_CTX = {
   mes: 5, anio: 2027,
   residentes: [
@@ -92,6 +96,11 @@ function runAll(api) {
     tally: api.tally(TALLY_ASGS, { start: "2026-06-01", end: "2026-06-30" }),
     month: violaciones,
     thirdpost: api.validateThirdPost(TP_CTX),
+    thirdPostHistoryStart: [
+      api.thirdPostHistoryStart(TP_VOLUNTARIOS, TP_CTX.residentes, TP_CTX.mes, TP_CTX.anio),
+      api.thirdPostHistoryStart([], TP_CTX.residentes, TP_CTX.mes, TP_CTX.anio),
+    ],
+    thirdPostCommitment: [api.thirdPostCommitmentEnd("2026-10-31"), api.canWithdrawThirdPost("2026-10-31", "2027-02-27"), api.THIRD_POST_PERMANENCIA_MESES],
     equity: api.validateResidencyYearClose(EQ_CTX),
     trimesterWindow: api.trimesterWindow("2027-01-15"),
     quarterCloseWindow: [api.quarterCloseWindow(11, 2026), api.quarterCloseWindow(10, 2026)],
@@ -114,6 +123,7 @@ function runAll(api) {
 
 const esm = {
   weekday, levelOn, groupOnDate, tally, validateMonth, validateThirdPost, validateResidencyYearClose,
+  thirdPostHistoryStart, thirdPostCommitmentEnd, canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES,
   trimesterWindow, validateQuarterClose, quarterCloseWindow, yearCloseHistoryStart, yearCloseFestivosRange,
   buildYearCloseContext, bridgesBetween,
   buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings,
