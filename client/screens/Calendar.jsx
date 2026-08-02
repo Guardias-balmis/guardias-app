@@ -3,12 +3,11 @@
 // nunca por nombre (bug del v1); datesOfMonth/weekday para todo el cálculo de fechas
 // (nunca `new Date(anio, mes, ...)` a mano, para no reintroducir el desfase de mes).
 import { COLOR, S, ANOS, ANO_COLORS, ANO_TEXT, CODE_COLORS, CODE_LABELS, CODES_CYCLE, ESTADO_CUADRANTE, pillBtn } from "./client/lib/design-tokens.js";
-import { defaultTrainingPeriods, levelOn } from "./v2/domain/residents.js";
-import { datesOfMonth, weekday, isWeekend, addDays, addYears } from "./v2/domain/calendar.js";
+import { levelOn, isActiveOn, periodsOfResident } from "./v2/domain/residents.js";
+import { datesOfMonth, weekday, isWeekend, addDays, compareISO } from "./v2/domain/calendar.js";
 import { tally } from "./v2/domain/tally.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/domain/validate.js";
 import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit, equityWarnings } from "./v2/domain/cuadrante.js";
-import { todayISO } from "./client/lib/dates.js";
 import { closeViolations } from "./client/lib/closes.js";
 import { thirdPostViolations } from "./client/lib/thirdpost.js";
 import { puedeMoverCiclo as reglaCiclo } from "./client/lib/permisos.js";
@@ -17,9 +16,75 @@ import { violationText } from "./client/lib/violations.js";
 const { useState, useEffect } = React;
 const { Card, Btn, Aviso } = window.UI;
 
-function nivelDe(residente) {
-  const fin = residente.fechaFin || addDays(addYears(residente.fechaInicio, 4), -1);
-  return levelOn(defaultTrainingPeriods(residente.fechaInicio, fin), todayISO());
+/**
+ * Filas de la rejilla, ancladas al MES que se dibuja y no a hoy (decisión V-23), con la misma
+ * regla que la pestaña publicada (`projection.js:activeResidents`): sale quien esté activo algún
+ * día del mes, etiquetado por su nivel en su PRIMER día activo dentro de él.
+ *
+ * Los dos anclajes que NO valen, por si alguien los reintroduce:
+ *  - `todayISO()` (lo que había aquí): un FINALIZADO desaparecía de TODOS los meses, incluidos
+ *    los pasados en los que sí hizo guardias, y un mes que cruza un aniversario se agrupaba por
+ *    el nivel de hoy mientras `validateMonth` lo juzga día a día — rejilla y validador
+ *    discrepando sobre el mismo dato.
+ *  - `dias[0]`: escondería al R1 que entra a mitad de mayo, que el día 1 todavía es PENDIENTE.
+ *
+ * `noAsignables` son los que no pueden hacer guardias ningún día del mes pero tienen algo escrito
+ * en la rejilla. Se enseñan aparte y solo para borrar (V-23): sin esa fila, la única celda que
+ * INV-1 señala (el aviso de V-21) sería precisamente la que no se puede ver ni tocar.
+ */
+function filasDelMes(residentes, dias, asignaciones) {
+  const porNivel = { R4: [], R3: [], R2: [], R1: [] };
+  const noAsignables = [];
+  for (const r of residentes) {
+    const periodos = periodsOfResident(r);
+    const primerDiaActivo = dias.find((d) => isActiveOn(periodos, d));
+    if (primerDiaActivo) {
+      const nivel = levelOn(periodos, primerDiaActivo);
+      if (porNivel[nivel]) porNivel[nivel].push(r);
+      continue;
+    }
+    // Solo si hay algo que quitar: la fila no es un recordatorio permanente de que esta persona
+    // existió, es el aviso de que queda una celda por limpiar. Se calcula sobre el estado vivo,
+    // así que al vaciar la última la fila se va sola (el cambio pendiente sigue en el contador
+    // de Guardar, que es lo que lo manda al servidor).
+    if (dias.some((d) => (asignaciones[r.id] || {})[d])) {
+      noAsignables.push({ residente: r, motivo: motivoNoAsignable(periodos, dias[0]) });
+    }
+  }
+  return { porNivel, noAsignables };
+}
+
+/** Por qué no es asignable, con su fecha frontera — mismo diagnóstico que el aviso de INV-1 (V-21). */
+function motivoNoAsignable(periodos, primerDia) {
+  const fin = periodos[periodos.length - 1].end;
+  return compareISO(primerDia, fin) > 0
+    ? { etiqueta: "FIN", texto: `su residencia terminó el ${fin}` }
+    : { etiqueta: "PEN", texto: `su residencia empieza el ${periodos[0].start}` };
+}
+
+/**
+ * Una fila de la rejilla. La comparten los niveles y los no asignables (V-23): lo único que
+ * cambia es la etiqueta, el color y qué hace la celda al pulsarla — en la de un no asignable,
+ * `onCelda` solo borra.
+ */
+function FilaRejilla({ nombre, etiqueta, bg, color, titulo, total, dias, porFecha, pulsable, onCelda }) {
+  return (
+    <tr>
+      <td style={{ ...S.td, textAlign: "center", fontWeight: 700, background: bg, color }} title={titulo}>{etiqueta}</td>
+      <td style={{ ...S.td, whiteSpace: "nowrap", fontWeight: 600, color: COLOR.blueDark }} title={titulo}>{nombre.split(" ")[0]}</td>
+      <td style={{ ...S.td, textAlign: "center", fontWeight: 700, color: COLOR.blue }}>{total}</td>
+      {dias.map((fecha) => {
+        const codigo = porFecha[fecha] || "";
+        return (
+          <td key={fecha} onClick={() => onCelda(fecha, codigo)} style={{
+            ...S.td, textAlign: "center", cursor: pulsable(codigo) ? "pointer" : "default", userSelect: "none",
+            background: CODE_COLORS[codigo] || "transparent",
+            fontWeight: codigo ? 700 : 400, color: COLOR.cellText,
+          }}>{codigo || "·"}</td>
+        );
+      })}
+    </tr>
+  );
 }
 
 function nombreMesDe(anio, mes) {
@@ -105,15 +170,22 @@ function CalendarScreen() {
   const dias = datesOfMonth(anio, mes);
   const monthWindow = { start: dias[0], end: dias[dias.length - 1] };
 
-  const porNivel = { R4: [], R3: [], R2: [], R1: [] };
-  for (const r of residentes) {
-    const n = nivelDe(r);
-    if (porNivel[n]) porNivel[n].push(r);
-  }
+  const { porNivel, noAsignables } = filasDelMes(residentes, dias, asignaciones);
 
   const asignacionesDe = (residenteId) => {
     const porFecha = asignaciones[residenteId] || {};
     return Object.entries(porFecha).map(([fecha, codigo]) => ({ fecha, codigo }));
+  };
+
+  // Escribir una celda invalida siempre el resultado de validación que se esté enseñando: es de
+  // antes del cambio, y dejarlo puesto haría creer que el mes sigue validado contra lo que hay.
+  const aplica = (residenteId, fecha, codigo) => {
+    setAsignaciones((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: codigo } }));
+    setPendientes((prev) => ({ ...prev, [`${residenteId}|${fecha}`]: { fecha, residenteId, codigo } }));
+    setViolaciones(null);
+    setEquidadPorConfirmar(null);
+    setCierresError(null);
+    setTercerPuestoError(null);
   };
 
   const cicla = (residenteId, fecha) => {
@@ -128,13 +200,15 @@ function CalendarScreen() {
     // en guardarAsignaciones, esto solo evita que la celda parezca editable en la UI.
     if (busy || bloqueadoPorPublicado) return;
     const actual = (asignaciones[residenteId] || {})[fecha] || "";
-    const siguiente = CODES_CYCLE[(CODES_CYCLE.indexOf(actual) + 1) % CODES_CYCLE.length];
-    setAsignaciones((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: siguiente } }));
-    setPendientes((prev) => ({ ...prev, [`${residenteId}|${fecha}`]: { fecha, residenteId, codigo: siguiente } }));
-    setViolaciones(null);
-    setEquidadPorConfirmar(null);
-    setCierresError(null);
-    setTercerPuestoError(null);
+    aplica(residenteId, fecha, CODES_CYCLE[(CODES_CYCLE.indexOf(actual) + 1) % CODES_CYCLE.length]);
+  };
+
+  // Celda de la fila de un no asignable (V-23): SOLO borra, nunca asigna. Es el único gesto con
+  // sentido sobre quien ese mes no puede hacer guardias, y es lo que vuelve accionable el aviso
+  // de INV-1 (V-21) — que nombra al residente pero no puede quitar la celda por ti.
+  const quita = (residenteId, fecha, codigo) => {
+    if (busy || bloqueadoPorPublicado || !codigo) return;
+    aplica(residenteId, fecha, "");
   };
 
   const cambios = Object.values(pendientes);
@@ -337,30 +411,40 @@ function CalendarScreen() {
               </tr>
             </thead>
             <tbody>
-              {ANOS.map((nivel) => porNivel[nivel].map((r) => {
-                const porFecha = asignaciones[r.id] || {};
-                const total = tally(asignacionesDe(r.id), monthWindow).total;
-                return (
-                  <tr key={r.id}>
-                    <td style={{ ...S.td, textAlign: "center", fontWeight: 700, background: ANO_COLORS[nivel], color: ANO_TEXT[nivel] }}>{nivel}</td>
-                    <td style={{ ...S.td, whiteSpace: "nowrap", fontWeight: 600, color: COLOR.blueDark }}>{r.nombre.split(" ")[0]}</td>
-                    <td style={{ ...S.td, textAlign: "center", fontWeight: 700, color: COLOR.blue }}>{total}</td>
-                    {dias.map((fecha) => {
-                      const codigo = porFecha[fecha] || "";
-                      return (
-                        <td key={fecha} onClick={() => cicla(r.id, fecha)} style={{
-                          ...S.td, textAlign: "center", cursor: bloqueadoPorPublicado ? "default" : "pointer", userSelect: "none",
-                          background: CODE_COLORS[codigo] || "transparent",
-                          fontWeight: codigo ? 700 : 400, color: COLOR.cellText,
-                        }}>{codigo || "·"}</td>
-                      );
-                    })}
-                  </tr>
-                );
-              }))}
+              {ANOS.map((nivel) => porNivel[nivel].map((r) => (
+                <FilaRejilla
+                  key={r.id}
+                  nombre={r.nombre} etiqueta={nivel} bg={ANO_COLORS[nivel]} color={ANO_TEXT[nivel]}
+                  total={tally(asignacionesDe(r.id), monthWindow).total}
+                  dias={dias} porFecha={asignaciones[r.id] || {}}
+                  pulsable={() => !bloqueadoPorPublicado}
+                  onCelda={(fecha) => cicla(r.id, fecha)}
+                />
+              )))}
+              {/* Decisión V-23: al final, después de R1, porque no es un nivel más — es trabajo
+                  pendiente de limpiar. */}
+              {noAsignables.map(({ residente: r, motivo }) => (
+                <FilaRejilla
+                  key={r.id}
+                  nombre={r.nombre} etiqueta={motivo.etiqueta} bg={COLOR.orange} color="#fff"
+                  titulo={`${r.nombre}: ${motivo.texto}. No es asignable en este mes; sus celdas solo se pueden borrar.`}
+                  total={tally(asignacionesDe(r.id), monthWindow).total}
+                  dias={dias} porFecha={asignaciones[r.id] || {}}
+                  pulsable={(codigo) => !bloqueadoPorPublicado && codigo !== ""}
+                  onCelda={(fecha, codigo) => quita(r.id, fecha, codigo)}
+                />
+              ))}
             </tbody>
           </table>
         </div>
+        {noAsignables.length > 0 && (
+          <div style={{ fontSize: 12, color: COLOR.orange, background: COLOR.orangeLight, borderRadius: 6, padding: "6px 10px", marginTop: 10 }}>
+            ⚠️ {noAsignables.map(({ residente: r, motivo }) => `${r.nombre.split(" ")[0]} (${motivo.texto})`).join("; ")}.
+            {" "}No {noAsignables.length === 1 ? "puede hacer" : "pueden hacer"} guardias ningún día de este mes, pero
+            {" "}{noAsignables.length === 1 ? "tiene" : "tienen"} algo escrito en la rejilla: {noAsignables.length === 1 ? "esa fila" : "esas filas"} solo
+            {" "}<strong>borra</strong>, no asigna. Al vaciarla{noAsignables.length === 1 ? "" : "s"} desaparece{noAsignables.length === 1 ? "" : "n"}.
+          </div>
+        )}
       </Card>
 
       {violaciones !== null && (
