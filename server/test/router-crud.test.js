@@ -157,6 +157,63 @@ test("guardarAsignaciones con código vacío borra la celda (arregla el bug del 
   assert.equal(r.asignaciones.length, 0);
 });
 
+// Listas blancas de `codigo` y `origen`. Sin ellas entraba cualquier cadena (comprobado en la
+// sonda del 2026-08-02: "XYZ", "g" minúscula y origen "CEDIDAA" se guardaron con {ok:true}) y las
+// erratas son MUDAS: una "g" no la reconoce ni `GUARDIA` —INV-1 da el día por descubierto— ni
+// `tally`, y `origen` se evalúa por TRUTHINESS (tally.js:15), así que cualquier errata saca la
+// guardia de los seis ejes de INV-3 y de los totales de la pestaña publicada sin que nada avise.
+// La tabla es append-only: lo que entre mal se queda.
+test("guardarAsignaciones rechaza un código que no está en el enum, incluida la misma letra en minúscula", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  for (const codigo of ["XYZ", "g", "gf", "3p", "GG"]) {
+    const r = call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2026-06-05", residenteId: "uuid-ana", codigo }] }, deps);
+    assert.equal(r.ok, false, `codigo=${JSON.stringify(codigo)} debería rechazarse`);
+    assert.match(r.error, /código de asignación inválido/);
+  }
+  assert.equal(call({ action: "listAsignaciones", session, anio: 2026, mes: 6 }, deps).asignaciones.length, 0);
+});
+
+test("guardarAsignaciones acepta los siete códigos de la rejilla y el vacío (borrado)", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  // El "" NO es un código: es el borrado explícito que usa `readLatest({emptyField:"codigo"})`,
+  // así que la lista blanca tiene que admitirlo o se rompe quitar una asignación.
+  for (const codigo of ["G", "GF", "GP", "3P", "V", "R", "B", ""]) {
+    const r = call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2026-06-05", residenteId: "uuid-ana", codigo }] }, deps);
+    assert.equal(r.ok, true, `codigo=${JSON.stringify(codigo)} debería aceptarse`);
+  }
+  // Un cambio sin `codigo` es también un borrado y no debe romperse con la lista blanca.
+  assert.equal(call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2026-06-06", residenteId: "uuid-ana" }] }, deps).ok, true);
+});
+
+test("guardarAsignaciones rechaza un `origen` fuera de CEDIDA/COMPRADA, y admite que no venga", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  const malo = call({ action: "guardarAsignaciones", session, cambios: [
+    { fecha: "2026-06-05", residenteId: "uuid-ana", codigo: "G", origen: "CEDIDAA" },
+  ] }, deps);
+  assert.equal(malo.ok, false);
+  assert.match(malo.error, /origen inválido/);
+  for (const origen of ["CEDIDA", "COMPRADA", "", undefined]) {
+    const r = call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2026-06-07", residenteId: "uuid-ana", codigo: "G", origen }] }, deps);
+    assert.equal(r.ok, true, `origen=${JSON.stringify(origen)} debería aceptarse`);
+  }
+});
+
+test("guardarAsignaciones no aplica NINGÚN cambio del lote si uno es inválido", () => {
+  // El lote es una sola escritura (appendRecords), así que la validación tiene que ir antes de
+  // escribir: si no, medio mes entraría y el estado del cuadrante ya se habría movido.
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  const r = call({ action: "guardarAsignaciones", session, cambios: [
+    { fecha: "2026-06-05", residenteId: "uuid-ana", codigo: "G" },
+    { fecha: "2026-06-06", residenteId: "uuid-ana", codigo: "NOPE" },
+  ] }, deps);
+  assert.equal(r.ok, false);
+  assert.equal(call({ action: "listAsignaciones", session, anio: 2026, mes: 6 }, deps).asignaciones.length, 0);
+});
+
 test("listAsignaciones filtra por mes/año (fecha fuera del mes no aparece)", () => {
   const deps = makeDeps();
   const session = loggedIn(deps);

@@ -15,6 +15,16 @@ const PREF_KEY = (r) => `${r.residenteId}|${r.anio}|${r.mes}`;
 const CUAD_KEY = (r) => `${r.mes}|${r.anio}`;
 const EVENTO_TIPOS = new Set(["NAVIDAD", "DESPEDIDA"]); // los dos eventos del servicio (INV-10)
 const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA"]); // enum de motivos válidos (severidad mixta desde V-8: solo BAJA bloquea la asignación)
+// Códigos de asignación (spec.md §2 + `CODES_CYCLE` del cliente). El "" es el BORRADO explícito:
+// `readLatest("asignaciones", …, { emptyField: "codigo" })` lo usa para quitar una asignación sin
+// borrar la fila, así que la lista blanca tiene que admitirlo. Existe porque sin ella entraba
+// cualquier cadena y las erratas son MUDAS: una "g" minúscula no la reconoce ni `GUARDIA` (INV-1
+// da el día por descubierto) ni `tally` (no cuenta para nada), y nadie avisa.
+const ASIG_CODIGOS = new Set(["G", "GF", "GP", "3P", "V", "R", "B", ""]);
+// `origen` marca la guardia cedida o comprada, que INV-4 excluye de los seis ejes de INV-3.
+// `tally.js:15` lo evalúa por TRUTHINESS, así que una errata cualquiera —no solo un valor de otro
+// enum— saca la guardia del cómputo y de los totales de la pestaña publicada, en silencio.
+const ASIG_ORIGENES = new Set(["CEDIDA", "COMPRADA"]);
 
 /**
  * @param {string} rawBody  cuerpo crudo de la petición (JSON en text/plain)
@@ -46,7 +56,18 @@ export function handleRequest(rawBody, deps) {
 
       case "validar":
         return authed(req, deps, () => {
-          const violaciones = deps.domain.validateMonth(req.cuadrante);
+          // Mismo tratamiento que en `marcarValidado` (V-22): aquí los bloqueos los manda el
+          // cliente, que los saca de `listBloqueos` — y esa acción devuelve también las filas con
+          // fecha ilegible, para que se puedan cancelar. Esta acción no llama a los cierres de
+          // equidad, así que no hay riesgo de excepción; lo que se evita es que INV-5 dé un
+          // veredicto a suerte sobre una fecha que no se puede leer, y lo que se gana es que
+          // `Calendar.jsx` —que valida por aquí— diga qué fila hay que arreglar en vez de callarse.
+          const cuadrante = req.cuadrante || {};
+          const { usables, corruptas } = partitionBloqueos(deps, cuadrante.bloqueos || []);
+          const violaciones = [
+            ...bloqueoCorruptoViolations(corruptas),
+            ...deps.domain.validateMonth({ ...cuadrante, bloqueos: usables }),
+          ];
           return { ok: true, violaciones, bloqueantes: violaciones.filter((v) => v.severidad === "error").length };
         });
 
@@ -66,7 +87,8 @@ export function handleRequest(rawBody, deps) {
       // aunque empiece en un mes anterior) y para el contaje acumulado del generador (§4).
       case "listAsignacionesRango":
         return authed(req, deps, () => {
-          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+          const rango = validRango(req, deps);
+          if (rango.ok === false) return rango;
           const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
           return { ok: true, asignaciones: all.filter((a) => a.fecha >= req.desde && a.fecha <= req.hasta) };
         });
@@ -83,6 +105,13 @@ export function handleRequest(rawBody, deps) {
           } catch (e) {
             return { ok: false, error: "cambio con fecha inválida: " + e.message };
           }
+          // Listas blancas de `codigo` y `origen`: la tabla es append-only y el Sheet se edita a
+          // mano, así que lo que entre mal se queda para siempre y encima no se nota (ver el
+          // comentario de ASIG_CODIGOS/ASIG_ORIGENES).
+          const malCodigo = req.cambios.find((c) => !ASIG_CODIGOS.has(c.codigo || ""));
+          if (malCodigo) return { ok: false, error: `código de asignación inválido: ${JSON.stringify(malCodigo.codigo)} (válidos: ${[...ASIG_CODIGOS].filter(Boolean).join(", ")})` };
+          const malOrigen = req.cambios.find((c) => c.origen !== undefined && c.origen !== "" && !ASIG_ORIGENES.has(c.origen));
+          if (malOrigen) return { ok: false, error: `origen inválido: ${JSON.stringify(malOrigen.origen)} (válidos: ${[...ASIG_ORIGENES].join(", ")})` };
           const meses = [...new Map(fechas.map((f) => [`${f.year}-${f.month}`, f])).values()]
             .map((f) => ({ mes: f.month, anio: f.year, estado: currentCuadranteEstado(deps, f.month, f.year) }));
           const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
@@ -135,7 +164,8 @@ export function handleRequest(rawBody, deps) {
       case "crearBloqueo":
         return authed(req, deps, (session) => {
           if (!BLOQ_MOTIVOS.has(req.motivo)) return { ok: false, error: "motivo inválido" };
-          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+          const rango = validRango(req, deps);
+          if (rango.ok === false) return rango;
 
           let residenteId = session.sub;
           if (req.residenteId && req.residenteId !== session.sub) {
@@ -148,7 +178,7 @@ export function handleRequest(rawBody, deps) {
           }
 
           const id = deps.store.appendRecord("bloqueos", {
-            residenteId, desde: req.desde, hasta: req.hasta, motivo: req.motivo,
+            residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo,
             provincia: req.provincia, guardiasEnCentroExterno: req.guardiasEnCentroExterno, activo: true,
           });
           return { ok: true, id, residenteId };
@@ -169,8 +199,9 @@ export function handleRequest(rawBody, deps) {
       // las que solapan el mes que se está validando.
       case "listBloqueosRango":
         return authed(req, deps, () => {
-          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
-          return { ok: true, bloqueos: bloqueosInRange(deps, allBloqueos(deps), req.desde, req.hasta) };
+          const rango = validRango(req, deps);
+          if (rango.ok === false) return rango;
+          return { ok: true, bloqueos: bloqueosInRange(deps, allBloqueos(deps), rango.desde, rango.hasta) };
         });
 
       // FESTIVOS (S-4: datos de entrada, nunca derivados). Lectura por RANGO y abierta a cualquier
@@ -490,6 +521,7 @@ export function handleRequest(rawBody, deps) {
           // tercer puesto).
           const snap = monthSnapshot(deps);
           const violaciones = [
+            ...bloqueoCorruptoViolations(snap.bloqueosCorruptos),
             ...deps.domain.validateMonth(buildCuadranteCtx(deps, req.mes, req.anio, snap)),
             ...closeViolations(deps, req.mes, req.anio, snap),
             ...deps.domain.validateThirdPost(buildThirdPostCtx(deps, req.mes, req.anio, snap)),
@@ -597,7 +629,20 @@ function monthPrefix(anio, mes) {
   return `${anio}-${String(mes).padStart(2, "0")}`;
 }
 
-/** Rango [desde,hasta] validado como ISO de verdad, no por orden lexicográfico. */
+/**
+ * Rango [desde,hasta] validado como ISO de verdad, no por orden lexicográfico. Devuelve
+ * `{desde,hasta}` si está bien, o el propio `{ok:false,error}` que debe devolver la acción.
+ *
+ * Es el ÚNICO sitio donde se valida un rango de fechas de entrada: lo comparten `crearBloqueo`,
+ * `listBloqueosRango`, `listAsignacionesRango` y `listFestivosRango`/`listEventosRango`. Las tres
+ * primeras tenían su propio `!desde || !hasta || desde > hasta` en línea, que es una comparación
+ * LEXICOGRÁFICA de lo que mandara el cliente y colaba cualquier cosa cuyo primer carácter ordenase
+ * por debajo: `"30/02/2027"`, `"2027-13-45"`, `"9999"` y hasta un objeto entraron en la sonda del
+ * 2026-08-02. En una tabla append-only sobre un Sheet editable a mano eso no es un detalle: una
+ * fila BAJA con `desde` no-ISO se descarta sola del rango de `absences` —que compara cadenas a
+ * propósito, V-19— y **desactiva INV-5 en silencio**. Medido: con `desde` válida, validar el mes
+ * emitía 31 violaciones de INV-5 sobre la baja; con `desde="30/02/2026"`, cero.
+ */
 function validRango(req, deps) {
   if (!req.desde || !req.hasta) return { ok: false, error: "rango de fechas inválido" };
   try {
@@ -636,6 +681,55 @@ function allBloqueos(deps) {
 }
 
 /**
+ * Parte las ausencias ACTIVAS en las que se pueden usar y las que tienen una fecha que no es ISO.
+ *
+ * `crearBloqueo` ya no deja entrar una fecha mala, pero el Sheet es datastore y entregable a la
+ * vez —se edita a mano— y las tablas son append-only, así que una fila corrupta puede estar ya
+ * escrita y no se va a borrar nunca. Sin partirla, el problema NO es que el validador reviente
+ * (`validateMonth` solo compara cadenas y nunca lanza por esto): es que **el veredicto de INV-5
+ * sale a suerte**, según por dónde ordene la basura. Medido el 2026-08-02 con una guardia
+ * asignada encima de la baja:
+ *  - `hasta="no-es-fecha"` o `hasta="30/02/2028"` → INV-5 emite, pero por casualidad: la cadena
+ *    basura ordena por encima del día, así que el rango "contiene" la fecha de puro accidente;
+ *  - `desde="30/02/2027"` → INV-5 emite CERO. `absences` descarta la fila del rango —compara
+ *    cadenas a propósito, V-19— y la baja médica deja de proteger EN SILENCIO.
+ * Y los cierres de equidad de INV-3, que sí hacen aritmética de fechas, hacían que
+ * `marcarValidado` respondiera «Fecha ISO inválida: "…"» sin decir de qué tabla, de quién ni cuál.
+ *
+ * La política (decisión V-22): apartarla del contexto —para que ningún invariante la juzgue con
+ * una fecha inventada— y emitir un `error` que la nombre. Es `error` y no `aviso` porque no es una regla nueva que
+ * bloquea: es INV-5 diciendo que no puede comprobarse, ya bloqueaba antes con un mensaje ciego, y
+ * SÍ tiene salida dentro de la herramienta —cancelar la fila y recrearla, y desde V-19 eso vale
+ * también para la ausencia de otro—. Por eso las lecturas de UI la siguen mostrando (ver
+ * `activeBloqueosInMonth`): apartarla también de ahí la volvería incancelable.
+ */
+function partitionBloqueos(deps, bloqueos) {
+  const usables = [];
+  const corruptas = [];
+  for (const b of deps.domain.absences(bloqueos)) { // solo activas: una cancelada ya no molesta
+    try {
+      deps.domain.parseISO(b.desde);
+      deps.domain.parseISO(b.hasta);
+      usables.push(b);
+    } catch (e) {
+      corruptas.push({ bloqueo: b, motivo: e.message });
+    }
+  }
+  return { usables, corruptas };
+}
+
+/** Un `error` por ausencia con fecha ilegible, nombrando la fila para que se pueda cancelar. */
+function bloqueoCorruptoViolations(corruptas) {
+  return corruptas.map(({ bloqueo, motivo }) => ({
+    invariante: "INV-5",
+    severidad: "error",
+    residenteId: bloqueo.residenteId,
+    detalle: `Ausencia ${bloqueo.motivo || "(sin motivo)"} con fecha ilegible (${bloqueo.desde} → ${bloqueo.hasta}): ${motivo}. `
+      + `Mientras siga así no se puede comprobar si hay guardias asignadas sobre ella; cancélala (id ${bloqueo.id}) y vuelve a crearla.`,
+  }));
+}
+
+/**
  * Bloqueos activos que solapan [desde,hasta]. El filtro no vive aquí: lo hace el lector único
  * del dominio (`absences`), que es también quien descarta las filas canceladas. Antes el
  * `activo === true` de esta función era la ÚNICA defensa contra que un bloqueo cancelado
@@ -645,11 +739,17 @@ function bloqueosInRange(deps, bloqueos, desde, hasta) {
   return deps.domain.absences(bloqueos, { desde, hasta });
 }
 
-/** Bloqueos activos (de cualquier residente) que solapan el mes dado. */
+/**
+ * Bloqueos activos (de cualquier residente) que solapan el mes dado, MÁS las filas con fecha
+ * ilegible. Las corruptas se añaden en todos los meses a propósito: con la fecha ilegible no se
+ * puede saber en cuál caen, y esconderlas las volvería incancelables desde la UI, que es la única
+ * salida que tiene quien se las encuentre (ver `partitionBloqueos`).
+ */
 function activeBloqueosInMonth(deps, anio, mes) {
   const prefix = monthPrefix(anio, mes);
+  const { usables, corruptas } = partitionBloqueos(deps, allBloqueos(deps));
   // Tope superior lexicográfico holgado: "-31" existe en ISO aunque el mes tenga 28/30 días.
-  return bloqueosInRange(deps, allBloqueos(deps), `${prefix}-01`, `${prefix}-31`);
+  return [...bloqueosInRange(deps, usables, `${prefix}-01`, `${prefix}-31`), ...corruptas.map((c) => c.bloqueo)];
 }
 
 /**
@@ -659,10 +759,16 @@ function activeBloqueosInMonth(deps, anio, mes) {
  * dos veces, y en Apps Script cada lectura es una llamada real a Sheets.
  */
 function monthSnapshot(deps) {
+  // Las ausencias con fecha ilegible se apartan aquí y viajan en `bloqueosCorruptos`: si entraran
+  // en el contexto, INV-5 las juzgaría por comparación de cadenas (veredicto a suerte) y los
+  // cierres de equidad tumbarían la petición con un «Fecha ISO inválida» que no dice de qué fila
+  // habla (decisión V-22, ver `partitionBloqueos`).
+  const { usables, corruptas } = partitionBloqueos(deps, allBloqueos(deps));
   return {
     residentes: deps.store.readRecords("residentes"),
     asignaciones: deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }),
-    bloqueos: allBloqueos(deps),
+    bloqueos: usables,
+    bloqueosCorruptos: corruptas,
     festivos: allFestivos(deps).filter((f) => f.activo === true),
     eventos: activeEventos(deps),
   };

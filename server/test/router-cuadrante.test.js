@@ -40,7 +40,7 @@ function fakeSS(rows = {}) {
 const RESP = { id: "resp-1", nombre: "Rita", email: "resp@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
 const OTRO = { id: "otro-1", nombre: "Oscar", email: "otro@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
 
-function makeDeps(overrides = {}) {
+function makeDeps(overrides = {}, extraSheets = {}) {
   const ss = fakeSS({
     residentes: [headerOf(TABLES.residentes), ...[RESP, OTRO].map((r) => recordToRow(TABLES.residentes, r))],
     responsables: [headerOf(TABLES.responsables), recordToRow(TABLES.responsables, { id: "m1", periodoInicio: "2027-01-01", periodoFin: "2028-01-01", residenteId: "resp-1", metodo: "VOLUNTARIO" })],
@@ -48,6 +48,7 @@ function makeDeps(overrides = {}) {
     cuadrantes: [headerOf(TABLES.cuadrantes)],
     festivos: [headerOf(TABLES.festivos)],
     voluntarios3P: [headerOf(TABLES.voluntarios3P)],
+    ...extraSheets,
   });
   const nonces = new Set();
   return {
@@ -608,4 +609,83 @@ test("marcarValidado: el ciclo de INV-8b arranca en el alta de CADA uno, no en e
     r.violaciones.filter((v) => v.invariante === "INV-8" && /repite/.test(v.detalle)), [],
     "el 3P de enero es anterior a su alta: no entra en su ciclo"
   );
+});
+
+// ── Ausencia con fecha ilegible ya escrita en el Sheet (decisión V-22) ──
+// `crearBloqueo` ya no la deja entrar, pero el Sheet se edita a mano y las tablas son append-only:
+// la fila puede estar ya ahí y no se va a borrar. Medido el 2026-08-02, antes de V-22, hacía una de
+// dos cosas según por dónde ordenase la fecha mala, y las dos son peores que un error con nombre:
+// desaparecer del rango de `absences` —que compara cadenas a propósito (V-19)— dejando INV-5 sin
+// proteger EN SILENCIO, o tumbar `marcarValidado` con «Fecha ISO inválida» sin decir de qué fila.
+const bloqueoRaw = (b) => [headerOf(TABLES.bloqueos), recordToRow(TABLES.bloqueos, b)];
+
+test("una ausencia con fecha ilegible da un error INV-5 que la nombra, en vez de tumbar la validación", () => {
+  const mala = { id: "b-mala", residenteId: "otro-1", desde: "2027-07-01", hasta: "30/02/2028", motivo: "BAJA", activo: true };
+  const deps = stubClean(makeDeps({}, { bloqueos: bloqueoRaw(mala) }));
+  const r = call({ action: "marcarValidado", session: loggedInAs(deps, "resp@gmail.com"), mes: 7, anio: 2027 }, deps);
+
+  assert.equal(r.ok, false, "no se puede validar mientras la baja no se pueda comprobar");
+  assert.equal(r.error, "el cuadrante tiene errores, no se puede validar");
+  const v = r.violaciones.find((x) => /fecha ilegible/.test(x.detalle));
+  assert.ok(v, `debía nombrar la fila; violaciones: ${JSON.stringify(r.violaciones)}`);
+  assert.equal(v.invariante, "INV-5");
+  assert.equal(v.severidad, "error");
+  assert.equal(v.residenteId, "otro-1", "sin residenteId, violations.js no puede traducirlo a un nombre");
+  assert.match(v.detalle, /BAJA/);          // de qué ausencia habla
+  assert.match(v.detalle, /30\/02\/2028/);  // qué fecha está mal
+  assert.match(v.detalle, /b-mala/);        // y el id, que es lo que hace falta para cancelarla
+});
+
+test("la fecha ilegible que ordena POR ENCIMA ya no desaparece: antes INV-5 no emitía nada", () => {
+  // `desde="30/02/2027"` empieza por "3", así que `absences` la descartaba por `b.desde > hasta` y
+  // la baja se volvía invisible: con guardias asignadas encima, INV-5 emitía CERO violaciones.
+  const invisible = { id: "b-inv", residenteId: "otro-1", desde: "30/02/2027", hasta: "2027-07-31", motivo: "BAJA", activo: true };
+  const deps = stubClean(makeDeps({}, { bloqueos: bloqueoRaw(invisible) }));
+  const session = loggedInAs(deps, "resp@gmail.com");
+  guardar(deps, session, [{ fecha: "2027-07-10", residenteId: "otro-1", codigo: "G" }]); // guardia sobre la baja
+
+  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, false);
+  assert.equal(r.violaciones.filter((v) => v.invariante === "INV-5").length, 1);
+
+  // Y sigue siendo visible en la lista, que es la única forma de cancelarla desde la app. Aparece
+  // en CUALQUIER mes a propósito: con la fecha ilegible no se sabe en cuál cae.
+  for (const mes of [7, 11]) {
+    const lista = call({ action: "listBloqueos", session, anio: 2027, mes }, deps).bloqueos;
+    assert.ok(lista.some((b) => b.id === "b-inv"), `debía verse en el mes ${mes} para poder cancelarla`);
+  }
+});
+
+test("cancelar la ausencia ilegible desbloquea la validación (la salida existe dentro de la app)", () => {
+  const mala = { id: "b-mala", residenteId: "otro-1", desde: "2027-07-01", hasta: "30/02/2028", motivo: "BAJA", activo: true };
+  const deps = stubClean(makeDeps({}, { bloqueos: bloqueoRaw(mala) }));
+  const session = loggedInAs(deps, "resp@gmail.com");
+  assert.equal(call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps).ok, false);
+
+  // Desde V-19 el permiso del ciclo alcanza a cancelar la ausencia de otro, así que esto lo puede
+  // hacer quien valida — sin eso, el error sería un bloqueo sin salida y no podría ser `error`.
+  assert.equal(call({ action: "cancelarBloqueo", session, id: "b-mala" }, deps).ok, true);
+  assert.equal(call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps).ok, true);
+});
+
+test("la acción `validar` cambia el veredicto-a-suerte de INV-5 por el error que nombra la fila", () => {
+  // `validateMonth` NO lanza por una fecha de bloqueo ilegible: todas sus comparaciones son de
+  // cadenas. Lo que hacía era peor de explicar: con `hasta="no-es-fecha"` INV-5 emitía su
+  // «Asignación G … sobre bloqueo BAJA» de puro accidente ("2" ordena antes que "n"), y con
+  // `desde="30/02/…"` no emitía nada. Aquí se comprueba que ya no juzga la fila ilegible y que en
+  // su lugar dice qué arreglar — que es lo que ve quien valida desde Calendar.jsx.
+  const deps = makeDeps(); // validateMonth REAL, sin stub
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = call({ action: "validar", session, cuadrante: {
+    mes: 7, anio: 2027, residentes: [OTRO],
+    asignaciones: [{ residenteId: "otro-1", fecha: "2027-07-10", codigo: "G" }],
+    bloqueos: [{ id: "b-x", residenteId: "otro-1", desde: "2027-07-01", hasta: "no-es-fecha", motivo: "BAJA", activo: true }],
+  } }, deps);
+
+  assert.equal(r.ok, true);
+  const i5 = r.violaciones.filter((v) => v.invariante === "INV-5");
+  assert.equal(i5.length, 1, `una sola violación de INV-5, la de la fila ilegible: ${JSON.stringify(i5)}`);
+  assert.match(i5[0].detalle, /fecha ilegible/);
+  assert.doesNotMatch(i5[0].detalle, /sobre bloqueo/, "no debe juzgar la asignación con una fecha que no se puede leer");
+  assert.ok(r.bloqueantes >= 1);
 });
