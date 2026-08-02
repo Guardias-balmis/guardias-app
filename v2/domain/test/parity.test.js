@@ -14,6 +14,7 @@ import { buildBundle, buildServerBundle, transformModule } from "../../../build/
 
 // Fuente ESM
 import { weekday, trimesterWindow, bridgesBetween } from "../calendar.js";
+import { absences, isNearbyRotation, BLOQUEA_ASIGNACION, AUSENCIA_SIMULTANEA } from "../absences.js";
 import { levelOn, groupOnDate } from "../residents.js";
 import { tally } from "../tally.js";
 import { validateMonth, buildMonthContext } from "../validate.js";
@@ -59,6 +60,13 @@ const TP_CTX = {
   asignaciones: [{ residenteId: "r4-david", fecha: "2026-10-17", codigo: "3P" }],
 };
 const TP_VOLUNTARIOS = [{ residenteId: "r4-david", desde: "2026-08-01" }];
+// Incluye una fila CANCELADA a propósito: que el bundle también la descarte es lo que garantiza
+// que un bloqueo anulado no vuelva a bloquear asignaciones solo en Apps Script.
+const ABS_BLOQUEOS = [
+  { residenteId: "ANA", desde: "2026-07-01", hasta: "2026-07-31", motivo: "BAJA" },
+  { residenteId: "IVAN", desde: "2026-07-10", hasta: "2026-07-20", motivo: "ROTACION", provincia: "Valencia" },
+  { residenteId: "ANA", desde: "2026-07-05", hasta: "2026-07-09", motivo: "VACACIONES", activo: false },
+];
 const EQ_CTX = {
   mes: 5, anio: 2027,
   residentes: [
@@ -110,6 +118,12 @@ function runAll(api) {
     yearCloseFestivosRange: [api.yearCloseFestivosRange(EQ_CTX.residentes, 5, 2027), api.yearCloseFestivosRange(EQ_CTX.residentes, 10, 2026)],
     bridgesBetween: api.bridgesBetween("2026-05-27", "2027-05-26", EQ_FESTIVOS),
     monthContext: ctx,
+    absences: [
+      api.absences(ABS_BLOQUEOS, { motivos: api.BLOQUEA_ASIGNACION, fecha: "2026-07-15" }),
+      api.absences(ABS_BLOQUEOS, { motivos: api.AUSENCIA_SIMULTANEA, desde: "2026-07-01", hasta: "2026-07-31" }),
+      api.absences(ABS_BLOQUEOS, { residenteId: "ANA" }),
+    ],
+    isNearbyRotation: ABS_BLOQUEOS.map(api.isNearbyRotation),
     canValidate: [api.canValidate([]), api.canValidate(violaciones)],
     equityWarnings: api.equityWarnings([...violaciones, ...api.validateQuarterClose(QC_CTX)]),
     canPublish: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canPublish),
@@ -128,6 +142,7 @@ const esm = {
   buildYearCloseContext, bridgesBetween,
   buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings,
   buildMonthSheetRows, buildResumenRows,
+  absences, isNearbyRotation, BLOQUEA_ASIGNACION, AUSENCIA_SIMULTANEA,
 };
 
 // Carga el bundle en un ámbito global único, como hace Apps Script al concatenar los .gs.

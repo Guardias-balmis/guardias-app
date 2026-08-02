@@ -24,6 +24,7 @@ import { headerOf, TABLES, recordToRow } from "./src/sheets-schema.js";
 import * as Calendar from "../v2/domain/calendar.js";
 import * as Residents from "../v2/domain/residents.js";
 import * as Tally from "../v2/domain/tally.js";
+import * as Absences from "../v2/domain/absences.js";
 import * as Accumulate from "../v2/domain/accumulate.js";
 import * as Thirdpost from "../v2/domain/thirdpost.js";
 import * as Equity from "../v2/domain/equity.js";
@@ -31,7 +32,11 @@ import * as Validate from "../v2/domain/validate.js";
 import * as Responsible from "../v2/domain/responsible.js";
 import * as CuadranteEstados from "../v2/domain/cuadrante.js";
 import * as Projection from "../v2/domain/projection.js";
-const DOMAIN = Object.assign({}, Calendar, Residents, Tally, Accumulate, Thirdpost, Equity, Validate, Responsible, CuadranteEstados, Projection);
+// OJO: esta lista se mantiene A MANO y `Code.gs` no —allí `deps.domain` es el `Domain` entero
+// del bundle—, así que un módulo nuevo del dominio funciona en producción y revienta AQUÍ. Ya
+// pasó con buildMonthSheetRows/buildResumenRows (Fase 7.2) y con `absences`. Si añades un
+// módulo a build/build-gas.mjs:DOMAIN_MODULES, añádelo también aquí.
+const DOMAIN = Object.assign({}, Calendar, Residents, Tally, Absences, Accumulate, Thirdpost, Equity, Validate, Responsible, CuadranteEstados, Projection);
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = Number(process.argv[2] || 8787);

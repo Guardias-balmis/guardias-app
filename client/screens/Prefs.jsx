@@ -8,6 +8,7 @@
 // (informativo, no bloquea).
 import { COLOR, SHADOW, S } from "./client/lib/design-tokens.js";
 import { datesOfMonth, weekday, compareISO, addDays } from "./v2/domain/calendar.js";
+import { puedeMoverCiclo } from "./client/lib/permisos.js";
 
 const { useState, useEffect } = React;
 const { Card, SectionTitle, Btn, Aviso } = window.UI;
@@ -87,28 +88,53 @@ function DateGrid({ anio, mes, selected, onToggle, color, bloqueadas }) {
 }
 
 /** Formulario de alta de un Bloqueo (vacaciones/rotación/baja) — spec.md V-6/V-8, INV-2/5/6/7. */
-function NuevoBloqueo({ anio, mes, onCreated, showToast, api }) {
+function NuevoBloqueo({ anio, mes, onCreated, showToast, api, paraOtros, residentes, miId }) {
   const primerDia = datesOfMonth(anio, mes)[0];
   const [motivo, setMotivo] = useState("VACACIONES");
   const [desde, setDesde] = useState(primerDia);
   const [hasta, setHasta] = useState(primerDia);
   const [provincia, setProvincia] = useState("");
+  const [residenteId, setResidenteId] = useState("");
   const [saving, setSaving] = useState(false);
 
   const valido = desde && hasta && compareISO(desde, hasta) <= 0;
+  const ajena = paraOtros && residenteId && residenteId !== miId;
 
   const crear = async () => {
     if (!valido) { showToast("El rango de fechas no es válido", "err"); return; }
     setSaving(true);
     const extra = motivo === "ROTACION" && provincia ? { provincia } : {};
+    if (ajena) extra.residenteId = residenteId;
     const r = await api.crearBloqueo(desde, hasta, motivo, extra);
     setSaving(false);
-    if (r.ok) { showToast("Bloqueo añadido ✓"); onCreated(); }
+    if (r.ok) { showToast(ajena ? "Ausencia registrada ✓" : "Bloqueo añadido ✓"); onCreated(); }
     else showToast("Error añadiendo el bloqueo: " + r.error, "err");
   };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 10, borderTop: `1px solid ${COLOR.grayMid}` }}>
+      {/* Registrar la ausencia de OTRO: es la única vía por la que una baja no declarada entra
+          en la tabla que leen los invariantes. Pintar «B» en la rejilla no sirve — es un código
+          de asignación, y INV-5 seguiría dejando asignarle guardias. Solo se ofrece a quien
+          tiene el permiso del ciclo; el servidor lo vuelve a comprobar de todos modos. */}
+      {paraOtros && (
+        <div>
+          <label style={S.label}>¿De quién es esta ausencia?</label>
+          <select value={residenteId} onChange={(e) => setResidenteId(e.target.value)}
+            style={{ ...S.input, width: "100%", marginTop: 4, boxSizing: "border-box" }}>
+            <option value="">Mía</option>
+            {residentes.filter((r) => r.id !== miId).map((r) => (
+              <option key={r.id} value={r.id}>{r.nombre}</option>
+            ))}
+          </select>
+          {ajena && (
+            <div style={{ fontSize: 12, color: COLOR.orange, marginTop: 6, lineHeight: 1.4 }}>
+              La estás registrando por otra persona. Quedará como suya y, si es una baja, impedirá
+              que se le asignen guardias esos días.
+            </div>
+          )}
+        </div>
+      )}
       <div>
         <label style={S.label}>Motivo</label>
         <select value={motivo} onChange={(e) => setMotivo(e.target.value)}
@@ -252,10 +278,23 @@ function PrefsScreen() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [showNuevoBloqueo, setShowNuevoBloqueo] = useState(false);
+  // Mismo criterio que Calendar.jsx, y de la misma fuente: `sinResponsable` lo dice el servidor
+  // en estadoCuadrante (releído del store), nunca el `rol` del token, que se firmó en el login.
+  const [sinResponsable, setSinResponsable] = useState(false);
+  const [ajenas, setAjenas] = useState([]);
+  const puedoRegistrarAjenas = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
 
   const cargarBloqueos = async () => {
     const r = await api.misBloqueos(anio, mes);
     if (r.ok) setBloqueos(r.bloqueos);
+  };
+  // Las ajenas solo las ve quien puede registrarlas: si no, esta pantalla pasaría de ser "mis
+  // preferencias" a un tablón de las ausencias de todo el equipo. Y sin esta lista, quien
+  // registra la baja de otro no vería nunca el resultado ni podría corregir una equivocación.
+  const cargarAjenas = async () => {
+    if (!puedoRegistrarAjenas) { setAjenas([]); return; }
+    const r = await api.listBloqueos(anio, mes);
+    if (r.ok) setAjenas(r.bloqueos.filter((b) => b.residenteId !== myResidente?.id));
   };
 
   useEffect(() => {
@@ -263,14 +302,19 @@ function PrefsScreen() {
     let cancelled = false;
     (async () => {
       app.setLoading(true);
-      const [rPrefs] = await Promise.all([api.misPreferencias(anio, mes), cargarBloqueos()]);
+      const [rPrefs, , rEstado] = await Promise.all([api.misPreferencias(anio, mes), cargarBloqueos(), api.estadoCuadrante(anio, mes)]);
       if (cancelled) return;
+      // Un fallo aquí solo esconde el selector de ausencia ajena: no se asume el permiso.
+      setSinResponsable(rEstado.ok ? rEstado.sinResponsable === true : false);
       if (rPrefs.ok) setPrefs(rPrefs.prefs ? { ...DEFAULT_PREFS, ...rPrefs.prefs } : { ...DEFAULT_PREFS });
       else showToast("Error cargando preferencias: " + rPrefs.error, "err");
       app.setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [anio, mes, myResidente?.id]);
+
+  // Aparte del efecto de carga: el permiso se conoce DESPUÉS de que responda estadoCuadrante.
+  useEffect(() => { cargarAjenas(); }, [anio, mes, puedoRegistrarAjenas]);
 
   if (!myResidente) {
     return (
@@ -311,7 +355,7 @@ function PrefsScreen() {
 
   const cancelarBloqueo = async (id) => {
     const r = await api.cancelarBloqueo(id);
-    if (r.ok) { showToast("Bloqueo cancelado"); cargarBloqueos(); }
+    if (r.ok) { showToast("Bloqueo cancelado"); cargarBloqueos(); cargarAjenas(); }
     else showToast("Error cancelando: " + r.error, "err");
   };
 
@@ -373,9 +417,37 @@ function PrefsScreen() {
             })}
           </div>
         )}
+        {puedoRegistrarAjenas && ajenas.length > 0 && (
+          <div style={{ marginTop: 4, marginBottom: 10, paddingTop: 10, borderTop: `1px solid ${COLOR.grayMid}` }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: COLOR.grayDark, marginBottom: 6 }}>
+              REGISTRADAS POR TI O POR EL RESPONSABLE
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {ajenas.map((b) => {
+                const quien = app.residentes.find((r) => r.id === b.residenteId);
+                const esBaja = b.motivo === "BAJA";
+                const color = esBaja ? COLOR.red : COLOR.orange;
+                return (
+                  <div key={b.id} style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    background: esBaja ? COLOR.redLight : COLOR.gray,
+                    borderLeft: `4px solid ${color}`, borderRadius: 8, padding: "8px 10px",
+                  }}>
+                    <div style={{ fontSize: 13, color }}>
+                      <b>{quien ? quien.nombre : b.residenteId}</b> · {MOTIVO_LABEL[b.motivo] || b.motivo} ·{" "}
+                      {fechaEs(b.desde)} – {fechaEs(b.hasta)}
+                    </div>
+                    <button onClick={() => cancelarBloqueo(b.id)} style={{ ...S.smallBtn, background: "#fff", color }}>Cancelar</button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
         {showNuevoBloqueo ? (
           <NuevoBloqueo anio={anio} mes={mes} api={api} showToast={showToast}
-            onCreated={() => { setShowNuevoBloqueo(false); cargarBloqueos(); }} />
+            paraOtros={puedoRegistrarAjenas} residentes={app.residentes} miId={myResidente.id}
+            onCreated={() => { setShowNuevoBloqueo(false); cargarBloqueos(); cargarAjenas(); }} />
         ) : (
           <Btn onClick={() => setShowNuevoBloqueo(true)} color={COLOR.gray} textColor={COLOR.blueDark}>+ Añadir</Btn>
         )}

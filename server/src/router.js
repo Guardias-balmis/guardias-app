@@ -123,15 +123,34 @@ export function handleRequest(rawBody, deps) {
           return { ok: true };
         });
 
+      // `residenteId` es OPCIONAL y solo lo admite quien tiene el permiso del ciclo (V-16): sin
+      // él, la ausencia es siempre la de quien la pide (session.sub, como hasta ahora).
+      //
+      // La ausencia ajena existe porque la tabla `bloqueos` es la que mandan los invariantes y
+      // hasta ahora nadie podía escribir en ella por otro: ante una baja que el residente no ha
+      // declarado —y que precisamente por estar de baja puede no poder declarar—, el único gesto
+      // posible era pintar una «B» en la rejilla, que es un código de asignación y no lo lee
+      // NINGÚN invariante. Es decir: INV-5 seguía dejando asignarle guardias.
       case "crearBloqueo":
         return authed(req, deps, (session) => {
           if (!BLOQ_MOTIVOS.has(req.motivo)) return { ok: false, error: "motivo inválido" };
           if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+
+          let residenteId = session.sub;
+          if (req.residenteId && req.residenteId !== session.sub) {
+            const denegado = requireCicloPermiso(deps, session, "registrar la ausencia de otro residente");
+            if (denegado) return denegado;
+            if (!deps.store.readRecords("residentes").some((r) => r.id === req.residenteId)) {
+              return { ok: false, error: "el residente no existe" };
+            }
+            residenteId = req.residenteId;
+          }
+
           const id = deps.store.appendRecord("bloqueos", {
-            residenteId: session.sub, desde: req.desde, hasta: req.hasta, motivo: req.motivo,
+            residenteId, desde: req.desde, hasta: req.hasta, motivo: req.motivo,
             provincia: req.provincia, guardiasEnCentroExterno: req.guardiasEnCentroExterno, activo: true,
           });
-          return { ok: true, id };
+          return { ok: true, id, residenteId };
         });
 
       case "misBloqueos":
@@ -150,7 +169,7 @@ export function handleRequest(rawBody, deps) {
       case "listBloqueosRango":
         return authed(req, deps, () => {
           if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
-          return { ok: true, bloqueos: bloqueosInRange(allBloqueos(deps), req.desde, req.hasta) };
+          return { ok: true, bloqueos: bloqueosInRange(deps, allBloqueos(deps), req.desde, req.hasta) };
         });
 
       // FESTIVOS (S-4: datos de entrada, nunca derivados). Lectura por RANGO y abierta a cualquier
@@ -195,12 +214,20 @@ export function handleRequest(rawBody, deps) {
           return { ok: true };
         });
 
+      // Simétrica de `crearBloqueo`: quien puede registrar la ausencia de otro tiene que poder
+      // corregirla. Sin esto, una baja registrada por error en el residente equivocado sería
+      // irreversible —la tabla es append-only y el afectado no la creó, así que tampoco podía
+      // cancelarla él—, y quedaría bloqueándole las asignaciones para siempre (INV-5).
       case "cancelarBloqueo":
         return authed(req, deps, (session) => {
           const actuales = deps.store.readLatest("bloqueos", (r) => r.id);
-          const propio = actuales.find((b) => b.id === req.id && b.residenteId === session.sub);
-          if (!propio) return { ok: false, error: "bloqueo no encontrado o ajeno" };
-          deps.store.appendRecord("bloqueos", { ...propio, activo: false });
+          const bloqueo = actuales.find((b) => b.id === req.id);
+          if (!bloqueo) return { ok: false, error: "bloqueo no encontrado" };
+          if (bloqueo.residenteId !== session.sub) {
+            const denegado = requireCicloPermiso(deps, session, "cancelar la ausencia de otro residente");
+            if (denegado) return denegado;
+          }
+          deps.store.appendRecord("bloqueos", { ...bloqueo, activo: false });
           return { ok: true };
         });
 
@@ -485,16 +512,21 @@ function allBloqueos(deps) {
   return deps.store.readLatest("bloqueos", (r) => r.id);
 }
 
-/** Bloqueos activos que solapan [desde,hasta]. Puro: filtra una lista ya leída. */
-function bloqueosInRange(bloqueos, desde, hasta) {
-  return bloqueos.filter((b) => b.activo === true && b.desde <= hasta && b.hasta >= desde);
+/**
+ * Bloqueos activos que solapan [desde,hasta]. El filtro no vive aquí: lo hace el lector único
+ * del dominio (`absences`), que es también quien descarta las filas canceladas. Antes el
+ * `activo === true` de esta función era la ÚNICA defensa contra que un bloqueo cancelado
+ * volviera a bloquear asignaciones, y bastaba con que un invocador nuevo no pasara por aquí.
+ */
+function bloqueosInRange(deps, bloqueos, desde, hasta) {
+  return deps.domain.absences(bloqueos, { desde, hasta });
 }
 
 /** Bloqueos activos (de cualquier residente) que solapan el mes dado. */
 function activeBloqueosInMonth(deps, anio, mes) {
   const prefix = monthPrefix(anio, mes);
   // Tope superior lexicográfico holgado: "-31" existe en ISO aunque el mes tenga 28/30 días.
-  return bloqueosInRange(allBloqueos(deps), `${prefix}-01`, `${prefix}-31`);
+  return bloqueosInRange(deps, allBloqueos(deps), `${prefix}-01`, `${prefix}-31`);
 }
 
 /**
@@ -572,7 +604,7 @@ function closeViolations(deps, mes, anio, snap) {
     violaciones.push(...deps.domain.validateQuarterClose({
       mes, anio, residentes: snap.residentes,
       asignaciones: snap.asignaciones.filter((a) => a.fecha >= trimestre.start && a.fecha <= trimestre.end),
-      bloqueos: bloqueosInRange(snap.bloqueos, trimestre.start, trimestre.end),
+      bloqueos: bloqueosInRange(deps, snap.bloqueos, trimestre.start, trimestre.end),
     }));
   }
 
@@ -585,7 +617,7 @@ function closeViolations(deps, mes, anio, snap) {
       mes, anio, residentes: snap.residentes,
       historicas: snap.asignaciones.filter((a) => a.fecha >= desdeAnual && a.fecha < monthStart),
       asignacionesDelMes: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
-      bloqueos: bloqueosInRange(snap.bloqueos, desdeAnual, monthEnd),
+      bloqueos: bloqueosInRange(deps, snap.bloqueos, desdeAnual, monthEnd),
       festivos: (snap.festivos || []).filter((f) => f.fecha >= rangoFestivos.desde && f.fecha <= rangoFestivos.hasta),
     })));
   }
@@ -662,7 +694,7 @@ function requireCicloPermiso(deps, session, accion) {
 function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps)) {
   const prefix = monthPrefix(anio, mes);
   const monthStart = `${prefix}-01`;
-  const bloqueos = bloqueosInRange(snap.bloqueos, monthStart, `${prefix}-31`);
+  const bloqueos = bloqueosInRange(deps, snap.bloqueos, monthStart, `${prefix}-31`);
   const asignacionesDelMes = snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
   const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
   const historicas = desdeRotacion ? snap.asignaciones.filter((a) => a.fecha >= desdeRotacion && a.fecha < monthStart) : [];

@@ -11,6 +11,7 @@ import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit, equityW
 import { todayISO } from "./client/lib/dates.js";
 import { closeViolations } from "./client/lib/closes.js";
 import { thirdPostViolations } from "./client/lib/thirdpost.js";
+import { puedeMoverCiclo as reglaCiclo } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 
 const { useState, useEffect } = React;
@@ -63,7 +64,7 @@ function CalendarScreen() {
   // Mismo criterio que el servidor: el Responsable, o —si el mandato está sin decidir— cualquier
   // Mayor. Aquí solo decide qué botones se ven; quien manda es requireCicloPermiso en el router.
   const soyMayor = grupo === "MAYOR";
-  const puedeMoverCiclo = isResponsable || (sinResponsable && soyMayor);
+  const puedeMoverCiclo = reglaCiclo({ isResponsable, grupo, sinResponsable });
   const bloqueadoPorPublicado = !canEdit(estado) || estadoError;
 
   useEffect(() => {

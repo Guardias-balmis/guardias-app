@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import nodeCrypto from "node:crypto";
 import { handleRequest } from "../src/router.js";
+import { absences } from "../../v2/domain/absences.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
@@ -41,7 +42,7 @@ function makeDeps(overrides = {}) {
     now: 1_000_000, today: "2027-07-16",
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
-    domain: { canEdit, stateAfterEdit, parseISO },
+    domain: { absences, canEdit, stateAfterEdit, parseISO },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
     fetchTokeninfo: () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "ana@gmail.com", email_verified: "true", sub: "g-1", exp: String(2_000_000), nonce: [...nonces][0] }),

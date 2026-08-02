@@ -23,17 +23,15 @@
 import { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays, isHoliday } from "./calendar.js";
 import { defaultTrainingPeriods, levelOn, groupOf } from "./residents.js";
 import { tally } from "./tally.js";
+import { absences, isNearbyRotation, BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA } from "./absences.js";
 
 const GUARDIA = new Set(["G", "GF", "GP"]);          // ocupan puesto obligatorio
 const ASIGNACION = new Set(["G", "GF", "GP", "3P"]); // cualquier asignación (INV-5, INV-7)
-const PROVINCIAS_CERCANAS = new Set(["alicante", "valencia", "murcia", "albacete"]);
-// Decisión V-8 (Fase 5.x): solo BAJA bloquea la asignación — no se puede exigir una guardia
-// a alguien de baja médica/embarazo, por seguridad/legalidad. VACACIONES y ROTACION dejaron
-// de bloquear (antes ambas asignaciones aquí también contaban por igual): son informativas
-// para el generador, igual que una preferencia BLANDA — pero sus fechas SIGUEN alimentando
-// INV-2 (exención del mínimo mensual), INV-6 (ausencias simultáneas) e INV-7 (cobertura
-// viernes/sábado en rotación cercana), que las leen de `bloqueos` directamente, no de este set.
-const DURO = new Set(["BAJA"]);
+// Qué motivo de `bloqueos` cuenta para qué invariante vive en `absences.js`, no aquí: eran
+// cinco criterios escritos a mano en cinco sitios. Decisión V-8 (Fase 5.x): solo BAJA bloquea
+// la asignación —no se puede exigir una guardia a alguien de baja médica/embarazo—, mientras
+// VACACIONES y ROTACION son informativas para el generador pero SIGUEN alimentando INV-2
+// (exención del mínimo), INV-6 (ausencias simultáneas) e INV-7 (rotación cercana).
 
 const err = (invariante, detalle, extra = {}) => ({ invariante, severidad: "error", detalle, ...extra });
 const aviso = (invariante, detalle, extra = {}) => ({ invariante, severidad: "aviso", detalle, ...extra });
@@ -63,8 +61,8 @@ function inRange(fecha, desde, hasta) {
  *          asignaciones del propio mes basta (ninguna rotación cercana lo cruza)
  */
 export function rotationHistoryStart(bloqueos, monthStart) {
-  const desdes = bloqueos
-    .filter((b) => b.motivo === "ROTACION" && b.provincia && PROVINCIAS_CERCANAS.has(b.provincia.toLowerCase()) && b.desde < monthStart)
+  const desdes = absences(bloqueos)
+    .filter((b) => isNearbyRotation(b) && b.desde < monthStart)
     .map((b) => b.desde);
   return desdes.length === 0 ? null : desdes.reduce((min, d) => (d < min ? d : min));
 }
@@ -161,7 +159,7 @@ export function validateMonth(ctx) {
   // ── INV-5: asignación sobre bloqueo BAJA (único motivo DURO — decisión V-8) ──
   for (const a of asignaciones) {
     if (!dayset.has(a.fecha) || !ASIGNACION.has(a.codigo)) continue;
-    const hit = bloqueos.find((b) => b.residenteId === a.residenteId && DURO.has(b.motivo) && inRange(a.fecha, b.desde, b.hasta));
+    const hit = absences(bloqueos, { residenteId: a.residenteId, motivos: BLOQUEA_ASIGNACION, fecha: a.fecha })[0];
     if (hit) violations.push(err("INV-5", `Asignación ${a.codigo} el ${a.fecha} sobre bloqueo ${hit.motivo}`, { fecha: a.fecha, residenteId: a.residenteId }));
   }
 
@@ -179,7 +177,7 @@ export function validateMonth(ctx) {
       violations.push(aviso("INV-2", `${r.id}: ${total} guardias computables > máximo 6`, { residenteId: r.id }));
     } else if (total < 4) {
       const esFebrero = mes === 2;
-      const tieneVoB = bloqueos.some((b) => b.residenteId === r.id && (b.motivo === "VACACIONES" || b.motivo === "BAJA") && rangeIntersectsMonth(b, days));
+      const tieneVoB = absences(bloqueos, { residenteId: r.id, motivos: EXIME_DEL_MINIMO, desde: days[0], hasta: days[days.length - 1] }).length > 0;
       const nivelMedio = levelOnDay(r.id, days[Math.floor(days.length / 2)]);
       const r1Verano = nivelMedio === "R1" && (mes === 6 || mes === 7 || mes === 8);
       if (!esFebrero && !tieneVoB && !r1Verano) {
@@ -198,8 +196,8 @@ export function validateMonth(ctx) {
   validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, violations);
 
   // ── INV-7: presencia mínima en rotación cercana (solo en el mes de fin) ──
-  for (const b of bloqueos) {
-    if (b.motivo !== "ROTACION" || !b.provincia || !PROVINCIAS_CERCANAS.has(b.provincia.toLowerCase())) continue;
+  for (const b of absences(bloqueos)) {
+    if (!isNearbyRotation(b)) continue;
     const finEnEsteMes = Number(b.hasta.slice(0, 4)) === anio && Number(b.hasta.slice(5, 7)) === mes;
     if (!finEnEsteMes) continue;
     const period = eachDate(b.desde, b.hasta);
@@ -290,13 +288,11 @@ function rangeIntersectsMonth(b, days) {
 
 function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, violations) {
   const cohortOfId = new Map(residentes.map((r) => [r.id, cohortOf(r)]));
-  const AUS = new Set(["ROTACION", "VACACIONES"]); // la baja no computa
   const emittedRun = new Map(); // cohorte → estaba en exceso el día anterior
 
   for (const fecha of days) {
     const cohorts = new Map(); // cohorte → [{id, motivo}]
-    for (const b of bloqueos) {
-      if (!AUS.has(b.motivo) || !inRange(fecha, b.desde, b.hasta)) continue;
+    for (const b of absences(bloqueos, { motivos: AUSENCIA_SIMULTANEA, fecha })) {
       const c = cohortOfId.get(b.residenteId);
       if (c === undefined) continue;
       if (!cohorts.has(c)) cohorts.set(c, []);

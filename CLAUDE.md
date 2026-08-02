@@ -40,7 +40,18 @@ Dates are always ISO `"YYYY-MM-DD"` strings, validated strictly by `calendar.js:
 
 `Bloqueo` (motivo BAJA | VACACIONES | ROTACION) is deliberately split from `Preferencias.fechasEvitar`: only `motivo=BAJA` is DURO (hard) and blocks assignment (INV-5); VACACIONES/ROTACION are informative — they never block by themselves but still feed INV-2/6/7 and equity's availability discount. `fechasEvitar` is pure soft preference and is never enforced by the validator. Don't collapse these into one table.
 
-The ten modules split cleanly by responsibility: date/weekday/UTC arithmetic and academic-year derivation (`calendar.js`); training periods, level, and group derivation (`residents.js`); a deliberately dumb per-resident shift counter that never sees holiday data (`tally.js`); the month-scope invariant validator, `validateMonth` (`validate.js` — "la IA propone, el validador dispone"); third-post rules, `validateThirdPost`/INV-8 (`thirdpost.js`); equity at the two closes INV-3 defines — `validateResidencyYearClose` (residency year, all six axes) and `validateQuarterClose` (quarter, `total` only; P-8/V-13), both `aviso`-only — plus INV-4 (`equity.js`); the responsable lottery, INV-14 (`responsible.js`); cuadrante state-transition rules only, no persistence (`cuadrante.js`); Sheets-ready row projection that writes nothing itself (`projection.js`); and the accumulated per-resident tally, `accumulatedTally` (`accumulate.js`).
+**Toda lectura de `bloqueos` pasa por `v2/domain/absences.js` (decisión V-19).** Los criterios de
+cada invariante son distintos a propósito y están nombrados allí (`BLOQUEA_ASIGNACION` para INV-5,
+`EXIME_DEL_MINIMO` para INV-2, `AUSENCIA_SIMULTANEA` para INV-6, `DESCUENTA_DISPONIBILIDAD` para el
+descuento de INV-3, `isNearbyRotation` para INV-7): no escribas un `filter` nuevo sobre `motivo`,
+usa el conjunto que corresponda. El descarte de las filas canceladas (`activo=false`) vive ahí y
+solo ahí — cuando vivía en el router, bastaba un invocador que no pasara por él para que un bloqueo
+cancelado volviera a bloquear asignaciones. Y recuerda que **una «B» en la rejilla no es una
+ausencia**: es un código de asignación que no lee ningún invariante. La ausencia real es una fila de
+`bloqueos`, que desde V-19 el Responsable (o cualquier Mayor si no hay mandato) puede crear y
+cancelar también por otro residente.
+
+The twelve modules split cleanly by responsibility: date/weekday/UTC arithmetic and academic-year derivation (`calendar.js`); training periods, level, and group derivation (`residents.js`); a deliberately dumb per-resident shift counter that never sees holiday data (`tally.js`); the single reader of the `bloqueos` table, `absences` (`absences.js`, V-19); the month-scope invariant validator, `validateMonth` (`validate.js` — "la IA propone, el validador dispone"); third-post rules, `validateThirdPost`/INV-8 (`thirdpost.js`); equity at the two closes INV-3 defines — `validateResidencyYearClose` (residency year, all six axes) and `validateQuarterClose` (quarter, `total` only; P-8/V-13), both `aviso`-only — plus INV-4 (`equity.js`); the responsable lottery, INV-14 (`responsible.js`); cuadrante state-transition rules only, no persistence (`cuadrante.js`); Sheets-ready row projection that writes nothing itself (`projection.js`); and the accumulated per-resident tally, `accumulatedTally` (`accumulate.js`).
 
 Load-bearing contracts, easy to silently break:
 - **C-1 (lookahead):** any monthly `dobletes` computation that gets summed across months (Sheets projection, equity accumulation) must feed `tally()` the target month's assignments **plus** the first ~2 days of the next month, or a Friday-31→Sunday doblete silently vanishes — this is the exact bug already fixed once (S-5). `projection.js`'s per-tab rows deliberately do *not* do this lookahead (documented, matches the legacy `.xlsm`) — don't "fix" that without re-reading its header comment.

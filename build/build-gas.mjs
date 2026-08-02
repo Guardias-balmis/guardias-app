@@ -20,7 +20,9 @@ import { fileURLToPath } from "node:url";
 // su propia IIFE y las lee del global ya creado). `accumulate` entra en el bundle desde P-8:
 // el cierre anual de equidad (INV-3) se comprueba también en el servidor, y su ensamblado
 // (`equity.buildYearCloseContext`) necesita el contaje acumulado.
-const DOMAIN_MODULES = ["calendar", "residents", "tally", "accumulate", "thirdpost", "equity", "validate", "responsible", "cuadrante", "projection"];
+// El orden importa: el bundler concatena IIFEs y cada módulo lee los anteriores por su
+// global, así que un módulo va SIEMPRE después de aquellos de los que importa.
+const DOMAIN_MODULES = ["calendar", "residents", "tally", "absences", "accumulate", "thirdpost", "equity", "validate", "responsible", "cuadrante", "projection"];
 const SERVER_MODULES = ["sheets-schema", "sheets-store", "session", "verify-token", "router"];
 
 const DOMAIN_DIR = fileURLToPath(new URL("../v2/domain/", import.meta.url));

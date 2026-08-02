@@ -16,6 +16,7 @@
 
 import { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow, bridgesOfMonth, bridgesBetween } from "./calendar.js";
 import { tally } from "./tally.js";
+import { absences, DESCUENTA_DISPONIBILIDAD } from "./absences.js";
 import { accumulatedTally } from "./accumulate.js";
 
 const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "dobletes"];
@@ -78,7 +79,7 @@ export function validateResidencyYearClose(ctx) {
       dobletes: acc.dobletes + t.dobletes,
       puentesLibres: acc.puentesLibres + puentesLibresMes,
     };
-    const f = availabilityFraction(win, bloqueos.filter((b) => b.residenteId === r.id && b.motivo === "BAJA"));
+    const f = availabilityFraction(win, absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD }));
 
     const cohorte = cohortOf(r);
     if (!byCohort.has(cohorte)) byCohort.set(cohorte, []);
@@ -271,7 +272,7 @@ export function validateQuarterClose(ctx) {
     const presente = intersect(win, { start: r.fechaInicio, end: r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1) });
     if (!presente) continue;
     const diasPresente = daysInclusive(presente.start, presente.end);
-    const disponibles = availableDays(presente, bloqueos.filter((b) => b.residenteId === r.id && b.motivo === "BAJA"));
+    const disponibles = availableDays(presente, absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD }));
     const f = disponibles / quarterDays;
     if (f < MIN_DISPONIBILIDAD) continue;
 

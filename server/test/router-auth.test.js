@@ -12,6 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import nodeCrypto from "node:crypto";
 import { handleRequest } from "../src/router.js";
+import { absences } from "../../v2/domain/absences.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { parseISO } from "../../v2/domain/calendar.js";
@@ -58,7 +59,7 @@ function makeDeps(overrides = {}) {
     now: 1_000_000, today: "2027-07-16",
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto, ss, emails,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
-    domain: { parseISO, canEdit, stateAfterEdit, groupOnDate, eligibleCandidates, resolveMethod, drawResponsible, validateResponsible },
+    domain: { absences, parseISO, canEdit, stateAfterEdit, groupOnDate, eligibleCandidates, resolveMethod, drawResponsible, validateResponsible },
     newSeed: () => "semilla-fija", // el sorteo es puro dado (candidatos, semilla): fijarla lo hace reproducible
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),

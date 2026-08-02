@@ -6,6 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import nodeCrypto from "node:crypto";
 import { handleRequest } from "../src/router.js";
+import { absences } from "../../v2/domain/absences.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "../../v2/domain/validate.js";
@@ -59,6 +60,7 @@ function makeDeps(overrides = {}) {
     // función del dominio que el router llame tiene que estar aquí o la acción falla por
     // TypeError — que es justo el fallo que este harness sirve para detectar antes que producción.
     domain: {
+      absences,
       validateMonth, buildMonthContext, rotationHistoryStart, parseISO,
       validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange,
       validateQuarterClose, quarterCloseWindow,

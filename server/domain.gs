@@ -450,6 +450,91 @@ function tallyByResident(asignaciones, window) {
   return { tally, tallyByResident };
 })();
 
+// ── absences.js ──
+var Absences = (function () {
+// Lectura ÚNICA de la tabla `bloqueos` (spec.md §2, decisiones V-6 y V-8). Manda esta tabla:
+// una «B» pintada en la rejilla es un código de asignación y no la lee ningún invariante — la
+// ausencia real es una fila de `bloqueos`.
+//
+// Existe porque el mismo dato se filtraba en cinco sitios con criterios escritos a mano y
+// distintos entre sí (INV-5, INV-2, INV-6, INV-7 y el descuento de disponibilidad de INV-3),
+// más el rango del router. Las diferencias entre esos criterios son REALES —cada invariante
+// mira motivos distintos a propósito— así que este módulo no las colapsa: les pone nombre. La
+// constante dice para qué invariante vale cada conjunto de motivos, y el filtro es uno solo.
+//
+// Lo que sí unifica de verdad es `activo`: una fila cancelada (reinsertada con activo=false,
+// nunca borrada) se descarta AQUÍ. Antes eso dependía de que cada invocador se acordara de
+// filtrarla antes de llamar al dominio; el día que uno no lo hiciera, un bloqueo cancelado
+// habría vuelto a bloquear asignaciones sin que ningún test lo notara.
+
+/**
+ * Motivos por invariante. Cada lista es una decisión, no un detalle: cambiarla cambia
+ * comportamiento, y por eso está aquí y no repetida en cinco `filter` en línea.
+ */
+// INV-5 (decisión V-8): solo la baja médica impide asignar. No se puede exigir una guardia a
+// quien está de baja o de permiso de embarazo/paternidad; vacaciones y rotación NO bloquean.
+const BLOQUEA_ASIGNACION = ["BAJA"];
+// INV-2: exime del mínimo de 4 guardias/mes (spec.md §5: «febrero/vacaciones/baja/R1-verano»).
+// La rotación NO exime: se sigue haciendo guardia en el hospital de origen.
+const EXIME_DEL_MINIMO = ["VACACIONES", "BAJA"];
+// INV-6: cuentan como «ausente» para el máximo de 2 por promoción. La baja NO computa — no es
+// una ausencia que nadie haya concedido ni que se pueda repartir.
+const AUSENCIA_SIMULTANEA = ["ROTACION", "VACACIONES"];
+// INV-3, nota [a] de p.2: «se descontará de forma proporcional». Solo la baja.
+const DESCUENTA_DISPONIBILIDAD = ["BAJA"];
+
+// INV-7: la rotación «cercana» que obliga a cubrir viernes y sábado del periodo. La lista de
+// provincias vivía duplicada en `rotationHistoryStart` y en el propio INV-7.
+const PROVINCIAS_CERCANAS = new Set(["alicante", "valencia", "murcia", "albacete"]);
+
+/** ¿Es una rotación externa lo bastante cerca como para que aplique INV-7? */
+function isNearbyRotation(bloqueo) {
+  return bloqueo.motivo === "ROTACION"
+    && !!bloqueo.provincia
+    && PROVINCIAS_CERCANAS.has(bloqueo.provincia.toLowerCase());
+}
+
+/**
+ * Una fila cancelada se reinserta con `activo=false` y la original se queda (append-only): lo
+ * que cuenta es el proyectado. `undefined` se toma como activa a propósito — los tests del
+ * dominio y los contextos armados a mano no arrastran la columna, y exigirla convertiría en
+ * "sin ausencias" justo lo que se quiere comprobar.
+ */
+const estaActiva = (b) => b.activo !== false;
+
+/**
+ * El lector. Todos los criterios son opcionales y se combinan con AND; sin ninguno, devuelve
+ * las ausencias activas tal cual.
+ *
+ * @param {{residenteId?:string, desde:string, hasta:string, motivo:string, activo?:boolean}[]} bloqueos
+ * @param {object} [criterios]
+ *   - residenteId: solo las de ese residente
+ *   - motivos: string[] — uno de los conjuntos exportados arriba, nunca una lista suelta
+ *   - fecha: ISO; solo las que CUBREN ese día
+ *   - desde/hasta: ISO; solo las que SOLAPAN ese rango (no las contenidas: una baja de todo el
+ *     trimestre tiene que aparecer al preguntar por un mes de dentro)
+ * @returns las filas originales (no copias): quien las lea sigue viendo `provincia`, `id`, etc.
+ *
+ * Compara cadenas y no llama a `parseISO`: esto filtra datos que un humano puede haber editado
+ * a mano en el Sheet, y una fila con la fecha mal escrita no debe tumbar la validación entera.
+ * En ISO estricto el orden lexicográfico y el cronológico coinciden, así que no se pierde nada.
+ */
+function absences(bloqueos = [], criterios = {}) {
+  const { residenteId, motivos, fecha, desde, hasta } = criterios;
+  return bloqueos.filter((b) => {
+    if (!b || !estaActiva(b)) return false;
+    if (residenteId !== undefined && b.residenteId !== residenteId) return false;
+    if (motivos && !motivos.includes(b.motivo)) return false;
+    if (fecha !== undefined && !(fecha >= b.desde && fecha <= b.hasta)) return false;
+    if (desde !== undefined && b.hasta < desde) return false;
+    if (hasta !== undefined && b.desde > hasta) return false;
+    return true;
+  });
+}
+
+  return { BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA, DESCUENTA_DISPONIBILIDAD, PROVINCIAS_CERCANAS, isNearbyRotation, absences };
+})();
+
 // ── accumulate.js ──
 var Accumulate = (function () {
 // Contaje acumulado por residente para el generador «prompt portátil» (Fase 6.1).
@@ -717,6 +802,7 @@ var Equity = (function () {
 
   const { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow, bridgesOfMonth, bridgesBetween } = Calendar;
   const { tally } = Tally;
+  const { absences, DESCUENTA_DISPONIBILIDAD } = Absences;
   const { accumulatedTally } = Accumulate;
 
 const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "dobletes"];
@@ -779,7 +865,7 @@ function validateResidencyYearClose(ctx) {
       dobletes: acc.dobletes + t.dobletes,
       puentesLibres: acc.puentesLibres + puentesLibresMes,
     };
-    const f = availabilityFraction(win, bloqueos.filter((b) => b.residenteId === r.id && b.motivo === "BAJA"));
+    const f = availabilityFraction(win, absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD }));
 
     const cohorte = cohortOf(r);
     if (!byCohort.has(cohorte)) byCohort.set(cohorte, []);
@@ -972,7 +1058,7 @@ function validateQuarterClose(ctx) {
     const presente = intersect(win, { start: r.fechaInicio, end: r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1) });
     if (!presente) continue;
     const diasPresente = daysInclusive(presente.start, presente.end);
-    const disponibles = availableDays(presente, bloqueos.filter((b) => b.residenteId === r.id && b.motivo === "BAJA"));
+    const disponibles = availableDays(presente, absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD }));
     const f = disponibles / quarterDays;
     if (f < MIN_DISPONIBILIDAD) continue;
 
@@ -1092,17 +1178,15 @@ var Validate = (function () {
   const { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays, isHoliday } = Calendar;
   const { defaultTrainingPeriods, levelOn, groupOf } = Residents;
   const { tally } = Tally;
+  const { absences, isNearbyRotation, BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA } = Absences;
 
 const GUARDIA = new Set(["G", "GF", "GP"]);          // ocupan puesto obligatorio
 const ASIGNACION = new Set(["G", "GF", "GP", "3P"]); // cualquier asignación (INV-5, INV-7)
-const PROVINCIAS_CERCANAS = new Set(["alicante", "valencia", "murcia", "albacete"]);
-// Decisión V-8 (Fase 5.x): solo BAJA bloquea la asignación — no se puede exigir una guardia
-// a alguien de baja médica/embarazo, por seguridad/legalidad. VACACIONES y ROTACION dejaron
-// de bloquear (antes ambas asignaciones aquí también contaban por igual): son informativas
-// para el generador, igual que una preferencia BLANDA — pero sus fechas SIGUEN alimentando
-// INV-2 (exención del mínimo mensual), INV-6 (ausencias simultáneas) e INV-7 (cobertura
-// viernes/sábado en rotación cercana), que las leen de `bloqueos` directamente, no de este set.
-const DURO = new Set(["BAJA"]);
+// Qué motivo de `bloqueos` cuenta para qué invariante vive en `absences.js`, no aquí: eran
+// cinco criterios escritos a mano en cinco sitios. Decisión V-8 (Fase 5.x): solo BAJA bloquea
+// la asignación —no se puede exigir una guardia a alguien de baja médica/embarazo—, mientras
+// VACACIONES y ROTACION son informativas para el generador pero SIGUEN alimentando INV-2
+// (exención del mínimo), INV-6 (ausencias simultáneas) e INV-7 (rotación cercana).
 
 const err = (invariante, detalle, extra = {}) => ({ invariante, severidad: "error", detalle, ...extra });
 const aviso = (invariante, detalle, extra = {}) => ({ invariante, severidad: "aviso", detalle, ...extra });
@@ -1132,8 +1216,8 @@ function inRange(fecha, desde, hasta) {
  *          asignaciones del propio mes basta (ninguna rotación cercana lo cruza)
  */
 function rotationHistoryStart(bloqueos, monthStart) {
-  const desdes = bloqueos
-    .filter((b) => b.motivo === "ROTACION" && b.provincia && PROVINCIAS_CERCANAS.has(b.provincia.toLowerCase()) && b.desde < monthStart)
+  const desdes = absences(bloqueos)
+    .filter((b) => isNearbyRotation(b) && b.desde < monthStart)
     .map((b) => b.desde);
   return desdes.length === 0 ? null : desdes.reduce((min, d) => (d < min ? d : min));
 }
@@ -1230,7 +1314,7 @@ function validateMonth(ctx) {
   // ── INV-5: asignación sobre bloqueo BAJA (único motivo DURO — decisión V-8) ──
   for (const a of asignaciones) {
     if (!dayset.has(a.fecha) || !ASIGNACION.has(a.codigo)) continue;
-    const hit = bloqueos.find((b) => b.residenteId === a.residenteId && DURO.has(b.motivo) && inRange(a.fecha, b.desde, b.hasta));
+    const hit = absences(bloqueos, { residenteId: a.residenteId, motivos: BLOQUEA_ASIGNACION, fecha: a.fecha })[0];
     if (hit) violations.push(err("INV-5", `Asignación ${a.codigo} el ${a.fecha} sobre bloqueo ${hit.motivo}`, { fecha: a.fecha, residenteId: a.residenteId }));
   }
 
@@ -1248,7 +1332,7 @@ function validateMonth(ctx) {
       violations.push(aviso("INV-2", `${r.id}: ${total} guardias computables > máximo 6`, { residenteId: r.id }));
     } else if (total < 4) {
       const esFebrero = mes === 2;
-      const tieneVoB = bloqueos.some((b) => b.residenteId === r.id && (b.motivo === "VACACIONES" || b.motivo === "BAJA") && rangeIntersectsMonth(b, days));
+      const tieneVoB = absences(bloqueos, { residenteId: r.id, motivos: EXIME_DEL_MINIMO, desde: days[0], hasta: days[days.length - 1] }).length > 0;
       const nivelMedio = levelOnDay(r.id, days[Math.floor(days.length / 2)]);
       const r1Verano = nivelMedio === "R1" && (mes === 6 || mes === 7 || mes === 8);
       if (!esFebrero && !tieneVoB && !r1Verano) {
@@ -1267,8 +1351,8 @@ function validateMonth(ctx) {
   validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, violations);
 
   // ── INV-7: presencia mínima en rotación cercana (solo en el mes de fin) ──
-  for (const b of bloqueos) {
-    if (b.motivo !== "ROTACION" || !b.provincia || !PROVINCIAS_CERCANAS.has(b.provincia.toLowerCase())) continue;
+  for (const b of absences(bloqueos)) {
+    if (!isNearbyRotation(b)) continue;
     const finEnEsteMes = Number(b.hasta.slice(0, 4)) === anio && Number(b.hasta.slice(5, 7)) === mes;
     if (!finEnEsteMes) continue;
     const period = eachDate(b.desde, b.hasta);
@@ -1359,13 +1443,11 @@ function rangeIntersectsMonth(b, days) {
 
 function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, violations) {
   const cohortOfId = new Map(residentes.map((r) => [r.id, cohortOf(r)]));
-  const AUS = new Set(["ROTACION", "VACACIONES"]); // la baja no computa
   const emittedRun = new Map(); // cohorte → estaba en exceso el día anterior
 
   for (const fecha of days) {
     const cohorts = new Map(); // cohorte → [{id, motivo}]
-    for (const b of bloqueos) {
-      if (!AUS.has(b.motivo) || !inRange(fecha, b.desde, b.hasta)) continue;
+    for (const b of absences(bloqueos, { motivos: AUSENCIA_SIMULTANEA, fecha })) {
       const c = cohortOfId.get(b.residenteId);
       if (c === undefined) continue;
       if (!cohorts.has(c)) cohorts.set(c, []);
@@ -1841,4 +1923,4 @@ function buildResumenRows({ residentes, publishedMonths }) {
 })();
 
 // ── API pública ──
-var Domain = Object.assign({}, Calendar, Residents, Tally, Accumulate, Thirdpost, Equity, Validate, Responsible, Cuadrante, Projection);
+var Domain = Object.assign({}, Calendar, Residents, Tally, Absences, Accumulate, Thirdpost, Equity, Validate, Responsible, Cuadrante, Projection);
