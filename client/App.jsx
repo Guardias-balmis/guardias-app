@@ -73,7 +73,8 @@ function App() {
             tab === "calendar" ? React.createElement(window.Screens.Calendar) :
             tab === "generator" ? React.createElement(window.Screens.Generator) :
             tab === "settings" ? React.createElement(window.Screens.Settings) :
-            tab === "responsable" ? React.createElement(window.Screens.Responsable) : null}
+            tab === "responsable" ? React.createElement(window.Screens.Responsable) :
+            tab === "datos-servicio" ? React.createElement(window.Screens.DatosServicio) : null}
         </div>
         {auth && <BottomNav />}
         {toast && <window.UI.Toast msg={toast.msg} type={toast.type} />}

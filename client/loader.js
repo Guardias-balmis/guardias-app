@@ -27,6 +27,7 @@ const JSX_FILES = [
   "client/screens/Generator.jsx",
   "client/screens/Settings.jsx",
   "client/screens/Responsable.jsx",
+  "client/screens/DatosServicio.jsx",
   "client/App.jsx", // siempre el último: usa window.Screens.* de todos los anteriores
 ];
 
