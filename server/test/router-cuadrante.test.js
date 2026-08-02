@@ -14,9 +14,9 @@ import { validateThirdPost, thirdPostHistoryStart, thirdPostCommitmentEnd, canWi
 import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange, validateQuarterClose, quarterCloseWindow } from "../../v2/domain/equity.js";
 import { groupOnDate } from "../../v2/domain/residents.js";
 import { eligibleCandidates } from "../../v2/domain/responsible.js";
-import { parseISO } from "../../v2/domain/calendar.js";
+import { parseISO, academicYearOf, toISO } from "../../v2/domain/calendar.js";
 import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
-import { buildMonthSheetRows, buildResumenRows } from "../../v2/domain/projection.js";
+import { buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows } from "../../v2/domain/projection.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -67,7 +67,9 @@ function makeDeps(overrides = {}, extraSheets = {}) {
       validateQuarterClose, quarterCloseWindow,
       groupOnDate, eligibleCandidates,
       validateThirdPost, thirdPostHistoryStart, thirdPostCommitmentEnd, canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES,
-      canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, buildMonthSheetRows, buildResumenRows,
+      canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit,
+      // La proyección son TRES hojas desde la Fase 7.2, y las dos agregadas necesitan el curso.
+      buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows, academicYearOf, toISO,
     },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
@@ -163,14 +165,15 @@ test("publicarCuadrante: el Responsable pasa un cuadrante VALIDADO a PUBLICADO",
   assert.equal(r.estado, "PUBLICADO");
 });
 
-test("publicarCuadrante: proyecta de verdad la pestaña mensual y la hoja Resumen al Sheet (Fase 7.1, V-11a)", () => {
+test("publicarCuadrante: proyecta de verdad las TRES hojas al Sheet (Fase 7.1/7.2, V-11a y V-23)", () => {
   const deps = stubClean(makeDeps());
   const session = loggedInAs(deps, "resp@gmail.com");
   call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-05", residenteId: "resp-1", codigo: "G" }] }, deps);
   call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
   const r = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
   assert.equal(r.ok, true);
-  assert.deepEqual(r.proyeccion, { mensual: "2027-07", resumen: "Resumen" });
+  // Las dos agregadas llevan el CURSO en el nombre (V-23): julio-2027 es del curso 2027-28.
+  assert.deepEqual(r.proyeccion, { mensual: "2027-07", resumen: "Resumen 2027-28", contaje: "Contaje Trimestral 2027-28" });
 
   const mensual = deps.ss.read("2027-07");
   assert.equal(mensual[0][0], "Residente");
@@ -178,9 +181,14 @@ test("publicarCuadrante: proyecta de verdad la pestaña mensual y la hoja Resume
   assert.ok(filaRita, "la pestaña mensual debe incluir a Rita (RESP, activa en julio-2027)");
   assert.equal(filaRita.slice(9)[4], "G"); // día 5 (índice 4 tras las 9 columnas fijas): el código real cae en la columna correcta
 
-  const resumen = deps.ss.read("Resumen");
+  const resumen = deps.ss.read("Resumen 2027-28");
   assert.equal(resumen[0][0], "Residente");
   assert.ok(resumen.some((row) => row[0] === "Rita"));
+
+  const contaje = deps.ss.read("Contaje Trimestral 2027-28");
+  assert.equal(contaje[0][0], "Residente");
+  assert.equal(contaje[0][2], "T1 jun-ago", "julio cae en T1 y la cabecera nombra los cuatro trimestres");
+  assert.ok(contaje.some((row) => row[0] === "Rita"));
 });
 
 test("publicarCuadrante: una asignación de OTRO mes no se cuela en la pestaña publicada", () => {
@@ -208,10 +216,15 @@ test("publicarCuadrante: publicar un segundo mes actualiza Resumen para incluir 
 
   assert.ok(deps.ss.exists("2027-07"));
   assert.ok(deps.ss.exists("2027-08"));
-  const resumen = deps.ss.read("Resumen");
+  const resumen = deps.ss.read("Resumen 2027-28");
   const filaResp = resumen.find((row) => row[0] === "Rita");
   assert.match(filaResp[2], /'2027-07'!/); // el Total de Resumen referencia AMBAS pestañas publicadas
   assert.match(filaResp[2], /'2027-08'!/);
+  // Y las dos caen en T1 (jun-ago), así que la columna T1 del Contaje también las referencia.
+  const filaContaje = deps.ss.read("Contaje Trimestral 2027-28").find((row) => row[0] === "Rita");
+  assert.match(filaContaje[2], /'2027-07'!/);
+  assert.match(filaContaje[2], /'2027-08'!/);
+  assert.equal(filaContaje[3], 0, "T2 (sep-nov) no tiene ningún mes publicado todavía");
 });
 
 test("publicarCuadrante: si la proyección al Sheet falla, el cuadrante queda intacto en VALIDADO (nunca un PUBLICADO fantasma)", () => {
@@ -232,7 +245,7 @@ test("publicarCuadrante: si falla la escritura de Resumen TRAS haber escrito ya 
   call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
   const rebuildSheetReal = deps.store.rebuildSheet;
   deps.store.rebuildSheet = (name, rows) => {
-    if (name === "Resumen") throw new Error("fallo simulado al escribir Resumen");
+    if (name.startsWith("Resumen")) throw new Error("fallo simulado al escribir Resumen");
     return rebuildSheetReal(name, rows);
   };
   const r = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
@@ -240,7 +253,8 @@ test("publicarCuadrante: si falla la escritura de Resumen TRAS haber escrito ya 
   assert.match(r.error, /fallo simulado al escribir Resumen/);
   assert.equal(call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "VALIDADO");
   assert.ok(deps.ss.exists("2027-07")); // ventana de desincronización aceptada: ver comentario de projectCuadranteToSheets
-  assert.ok(!deps.ss.exists("Resumen"));
+  assert.ok(!deps.ss.exists("Resumen 2027-28"));
+  assert.ok(!deps.ss.exists("Contaje Trimestral 2027-28"), "el Contaje va DESPUÉS de Resumen: si Resumen falla, no se llega a escribir");
 });
 
 test("publicarCuadrante: tras un fallo parcial, reintentar Publicar sana del todo (ambas pestañas completas, sin residuo _tmp_)", () => {
@@ -250,7 +264,7 @@ test("publicarCuadrante: tras un fallo parcial, reintentar Publicar sana del tod
   const rebuildSheetReal = deps.store.rebuildSheet;
   let falla = true;
   deps.store.rebuildSheet = (name, rows) => {
-    if (falla && name === "Resumen") throw new Error("fallo simulado");
+    if (falla && name.startsWith("Resumen")) throw new Error("fallo simulado");
     return rebuildSheetReal(name, rows);
   };
   const primero = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
@@ -260,7 +274,8 @@ test("publicarCuadrante: tras un fallo parcial, reintentar Publicar sana del tod
   assert.equal(segundo.ok, true);
   assert.equal(segundo.estado, "PUBLICADO");
   assert.ok(deps.ss.exists("2027-07"));
-  assert.ok(deps.ss.exists("Resumen"));
+  assert.ok(deps.ss.exists("Resumen 2027-28"));
+  assert.ok(deps.ss.exists("Contaje Trimestral 2027-28"), "el reintento tiene que sanar las TRES hojas, no solo las dos primeras");
   assert.ok(!deps.ss.listSheets().some((n) => n.startsWith("_tmp_")));
 });
 

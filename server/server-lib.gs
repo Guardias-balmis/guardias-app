@@ -903,9 +903,13 @@ function handleRequest(rawBody, deps) {
           return { ok: true, estado: "VALIDADO", violaciones };
         });
 
-      // Fase 7.1 (decisión V-11a): publicar proyecta de verdad al Sheet legible (pestaña
-      // mensual + Resumen) en el MISMO paso — "publicar" pasa a significar publicar de
-      // verdad. La proyección ocurre ANTES de escribir el estado: ver projectCuadranteToSheets.
+      // Fase 7.1 (decisión V-11a): publicar proyecta de verdad al Sheet legible en el MISMO paso
+      // — "publicar" pasa a significar publicar de verdad. Desde la Fase 7.2 son TRES hojas
+      // (mensual + Resumen del curso + Contaje Trimestral del curso), así que la ventana en la que
+      // el Sheet puede quedar a medias es de tres `rebuildSheet` y no de dos. Sigue sin ser una
+      // transacción a propósito: cada uno es idempotente (shadow-swap) y volver a pulsar Publicar
+      // lo sana, que es lo único que puede hacer alguien sin administrador. La proyección ocurre
+      // ANTES de escribir el estado: ver projectCuadranteToSheets.
       case "publicarCuadrante":
         return authed(req, deps, (session) => {
           const denegado = requireCicloPermiso(deps, session, "publicar el cuadrante");
@@ -1340,10 +1344,18 @@ function projectCuadranteToSheets(deps, mes, anio) {
 
   const otrosPublicados = deps.store.readLatest("cuadrantes", CUAD_KEY).filter((r) => r.estado === "PUBLICADO");
   const publishedMonths = [...otrosPublicados.map((r) => ({ mes: r.mes, anio: r.anio })), { mes, anio }];
-  const resumen = deps.domain.buildResumenRows({ residentes, publishedMonths });
+
+  // Las dos hojas agregadas son del CURSO académico del mes que se publica (decisión V-23), y lo
+  // llevan en el nombre: publicar una corrección de un curso anterior republica LA HOJA DE ESE
+  // CURSO, sin tocar la del actual. Con un nombre fijo se habrían pisado.
+  const curso = deps.domain.academicYearOf(deps.domain.toISO(anio, mes, 1));
+  const resumen = deps.domain.buildResumenRows({ residentes, publishedMonths, curso });
   deps.store.rebuildSheet(resumen.sheetName, resumen.rows);
 
-  return { mensual: mensual.sheetName, resumen: resumen.sheetName };
+  const contaje = deps.domain.buildContajeTrimestralRows({ residentes, publishedMonths, curso });
+  deps.store.rebuildSheet(contaje.sheetName, contaje.rows);
+
+  return { mensual: mensual.sheetName, resumen: resumen.sheetName, contaje: contaje.sheetName };
 }
 
 /**
