@@ -83,6 +83,69 @@ test("INV-1: día sin nadie de guardia (0 personas) sigue siendo error duro, no 
   assert.equal(i1[0].severidad, "error");
 });
 
+// ── INV-1: residentes NO asignables (decisión V-21) ──
+// Antes, un día cubierto solo por alguien no asignable producía el objeto byte a byte idéntico
+// al de un día vacío («sin cubrir, mayores=0, pequeños=0»), sin `residenteId`: un error duro con
+// un diagnóstico falso y sin pista de la causa. El disparador no es exótico — el R4 que acaba a
+// mediados de mayo mientras se dibuja julio, o una `fechaFin` mal teclada.
+const ZOE_FIN = R("ZOE", "2022-05-22", "2026-05-21");    // FINALIZADO en julio-2026
+const NOA_FUT = R("NOA", "2027-05-22", "2031-05-21");    // PENDIENTE en julio-2026
+
+test("INV-1: día cubierto SOLO por un FINALIZADO es aviso, nombra la causa y el residenteId", () => {
+  const asgs = coverMonth(7, 2026, 31, [asg("ZOE", "2026-07-01", "G")]);
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA, ZOE_FIN], asignaciones: asgs });
+  const i1 = only(v, "INV-1");
+  assert.equal(i1.length, 2); // el aviso de la persona + el del día que se queda sin nadie
+  assert.ok(i1.every((x) => x.severidad === "aviso"), "V-21: no bloquea, la causa está en las fechas del residente");
+
+  const porPersona = i1.find((x) => x.residenteId === "ZOE");
+  assert.ok(porPersona, "la violación debe traer residenteId para que violations.js pueda traducirla");
+  assert.match(porPersona.detalle, /terminó el 2026-05-21/);
+
+  const porDia = i1.find((x) => !x.residenteId);
+  assert.match(porDia.detalle, /sin nadie asignable/);
+  assert.doesNotMatch(porDia.detalle, /sin cubrir/, "no debe reusar el mensaje del día vacío: hay un nombre escrito en la rejilla");
+});
+
+test("INV-1: un id que no está en `residentes` se nombra como tal, no como día vacío", () => {
+  const asgs = coverMonth(7, 2026, 31, [asg("FANTASMA", "2026-07-01", "G")]);
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA], asignaciones: asgs });
+  const porPersona = only(v, "INV-1").find((x) => x.residenteId === "FANTASMA");
+  assert.equal(porPersona.severidad, "aviso");
+  assert.match(porPersona.detalle, /no figura en la lista de residentes/);
+});
+
+test("INV-1: un PENDIENTE (residencia sin empezar) da la fecha de inicio", () => {
+  const asgs = coverMonth(7, 2026, 31, [asg("NOA", "2026-07-01", "G")]);
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA, NOA_FUT], asignaciones: asgs });
+  const porPersona = only(v, "INV-1").find((x) => x.residenteId === "NOA");
+  assert.match(porPersona.detalle, /empieza el 2027-05-22/);
+});
+
+test("INV-1: 1 válido + 1 no asignable avisa de LAS DOS cosas (antes la asignación inválida era muda)", () => {
+  // Este caso llegaba a VALIDADO, a PUBLICADO y a la pestaña proyectada sin una sola violación
+  // por la asignación inválida: solo salía el aviso de infra-cobertura de V-12.
+  const asgs = coverMonth(7, 2026, 31, [asg("ANA", "2026-07-01", "G"), asg("ZOE", "2026-07-01", "G")]);
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA, ZOE_FIN], asignaciones: asgs });
+  const i1 = only(v, "INV-1");
+  assert.equal(i1.length, 2);
+  assert.ok(i1.some((x) => x.residenteId === "ZOE"), "la asignación a ZOE ya no es muda");
+  assert.ok(i1.some((x) => /1 sola persona/.test(x.detalle)), "sigue el aviso de infra-cobertura de V-12");
+});
+
+test("INV-1: 2 mayores válidos + 1 no asignable NO degrada el error de composición", () => {
+  // La presencia de un no asignable no puede volver `aviso` un 2×Mayor, que sí se arregla
+  // dentro de la app quitando a uno.
+  const asgs = coverMonth(7, 2026, 31, [
+    asg("ANA", "2026-07-01", "G"), asg("BEA", "2026-07-01", "G"), asg("ZOE", "2026-07-01", "G"),
+  ]);
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, BEA, ELENA, ZOE_FIN], asignaciones: asgs });
+  const i1 = only(v, "INV-1");
+  const dosMayores = i1.find((x) => /mayores/i.test(x.detalle));
+  assert.equal(dosMayores.severidad, "error");
+  assert.ok(i1.some((x) => x.residenteId === "ZOE"));
+});
+
 test("INV-1: febrero de 28 días no inventa violaciones en días fantasma", () => {
   const asgs = coverMonth(2, 2027, 28);
   const v = validateMonth({ mes: 2, anio: 2027, residentes: [ANA, ELENA], asignaciones: asgs });
