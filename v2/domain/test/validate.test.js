@@ -548,11 +548,16 @@ test("INV-10: voluntario único cubre sin sorteo (segundo puesto por sorteo) es 
 });
 
 test("INV-10: designada de Navidad no puede repetir en la despedida", () => {
+  // Los designados de Navidad ya no llegan en un campo suelto: salen de la fila del evento de
+  // Navidad (decisión V-20). `buildMonthContext` empareja los dos eventos por año académico,
+  // que es lo que junta la Navidad de diciembre con la despedida del mayo siguiente.
   const asgs = coverMonth(5, 2027, 31, [asg("ELENA", "2027-05-14", "G"), asg("HUGO", "2027-05-14", "G")]);
   const v = validateMonth({
     mes: 5, anio: 2027, residentes: [ANA, ELENA, HUGO], asignaciones: asgs,
-    designadosNavidad: ["ELENA", "FRAN"],
-    eventos: { despedida: { fecha: "2027-05-14", voluntarios: [], sorteoDocumentado: true, designados: ["ELENA", "HUGO"] } },
+    eventos: {
+      navidad: { fecha: "2026-12-18", voluntarios: [], sorteoDocumentado: true, designados: ["ELENA", "FRAN"] },
+      despedida: { fecha: "2027-05-14", voluntarios: [], sorteoDocumentado: true, designados: ["ELENA", "HUGO"] },
+    },
   });
   const i10 = only(v, "INV-10");
   assert.equal(i10.length, 1);
@@ -824,4 +829,65 @@ test("INV-12 nunca bloquea: un mes lleno de incoherencias sigue siendo validable
   }).filter((x) => x.invariante === "INV-12");
   assert.equal(v.length, 3);
   assert.deepEqual([...new Set(v.map((x) => x.severidad))], ["aviso"]);
+});
+
+// ─────────────── INV-10: de MUDO a en vigor (decisión V-20) ───────────────
+// Hasta V-20, `validateEvents` leía un `ctx.eventos` que `buildMonthContext` ni aceptaba ni
+// propagaba, y no había tabla: con `eventos = {}` no podía emitir ni una violación. Ahora las
+// filas de la tabla entran por `buildMonthContext`, que las moldea.
+
+test("buildMonthContext: las filas de `eventos` llegan moldeadas a validateMonth", () => {
+  const ctx = buildMonthContext({
+    mes: 12, anio: 2026, residentes: [ELENA], asignacionesDelMes: [], bloqueos: [],
+    eventos: [{ tipo: "NAVIDAD", fecha: "2026-12-18", designados: ["ELENA"], voluntarios: [], sorteoId: "s1", activo: true }],
+  });
+  assert.deepEqual(ctx.eventos.navidad, {
+    fecha: "2026-12-18", voluntarios: [], designados: ["ELENA"], sorteoDocumentado: true,
+  });
+});
+
+test("buildMonthContext: `sorteoDocumentado` se DERIVA de que exista una fila de sorteo", () => {
+  // No es un booleano autodeclarado: la normativa pide sorteo para que el reparto no sea a dedo,
+  // así que lo que cuenta es que haya una fila reproducible en la tabla `sorteos`.
+  const sin = buildMonthContext({
+    mes: 12, anio: 2026, residentes: [ELENA], asignacionesDelMes: [], bloqueos: [],
+    eventos: [{ tipo: "NAVIDAD", fecha: "2026-12-18", designados: [], voluntarios: [], activo: true }],
+  });
+  assert.equal(sin.eventos.navidad.sorteoDocumentado, false);
+});
+
+test("buildMonthContext: empareja Navidad y despedida por AÑO ACADÉMICO (dic-2026 con may-2027)", () => {
+  const filas = [
+    { tipo: "NAVIDAD", fecha: "2026-12-18", designados: ["ELENA"], activo: true },
+    { tipo: "DESPEDIDA", fecha: "2027-05-14", designados: [], activo: true },
+    { tipo: "NAVIDAD", fecha: "2027-12-17", designados: ["HUGO"], activo: true }, // otro curso
+  ];
+  // Validando mayo-2027 (curso 2026) tienen que verse la Navidad de dic-2026 y la despedida.
+  const mayo = buildMonthContext({ mes: 5, anio: 2027, residentes: [ELENA], asignacionesDelMes: [], bloqueos: [], eventos: filas });
+  assert.equal(mayo.eventos.navidad.fecha, "2026-12-18");
+  assert.equal(mayo.eventos.despedida.fecha, "2027-05-14");
+  // Y validando diciembre-2027 (curso 2027), la otra Navidad y ninguna despedida.
+  const dic = buildMonthContext({ mes: 12, anio: 2027, residentes: [ELENA], asignacionesDelMes: [], bloqueos: [], eventos: filas });
+  assert.equal(dic.eventos.navidad.fecha, "2027-12-17");
+  assert.equal(dic.eventos.despedida, undefined);
+});
+
+test("buildMonthContext: un evento anulado (activo=false) no llega al validador", () => {
+  const ctx = buildMonthContext({
+    mes: 12, anio: 2026, residentes: [ELENA], asignacionesDelMes: [], bloqueos: [],
+    eventos: [{ tipo: "NAVIDAD", fecha: "2026-12-18", designados: ["ELENA"], activo: false }],
+  });
+  assert.deepEqual(ctx.eventos, {});
+});
+
+test("INV-10 de punta a punta: desde las filas de la tabla, el aviso sale de verdad", () => {
+  const asgs = coverMonth(12, 2026, 31, [asg("ANA", "2026-12-18", "G")]); // Ana es R3, no R2
+  const v = validateMonth(buildMonthContext({
+    mes: 12, anio: 2026, residentes: [ANA, ELENA, HUGO], asignacionesDelMes: asgs, bloqueos: [],
+    eventos: [{ tipo: "NAVIDAD", fecha: "2026-12-18", designados: ["ANA"], voluntarios: [], sorteoId: "s1", activo: true }],
+  }));
+  const i10 = only(v, "INV-10");
+  assert.ok(i10.length >= 1, "el evento ya no es mudo");
+  assert.equal(i10[0].severidad, "aviso"); // V-4: los eventos del servicio nunca bloquean
+  assert.match(i10[0].detalle, /debe cubrirse con 2 R2/);
 });

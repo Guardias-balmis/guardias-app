@@ -74,12 +74,17 @@ export function rotationHistoryStart(bloqueos, monthStart) {
  * la misma forma de objeto de forma independiente en Calendar.jsx, Generator.jsx y el router.
  * @param {object} p { mes, anio, residentes, historicas?, asignacionesDelMes, bloqueos }
  */
-export function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [] }) {
+export function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [], eventos = [] }) {
   return {
     mes, anio,
     residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
     asignaciones: [...historicas, ...asignacionesDelMes],
     bloqueos,
+    // Los eventos llegan como FILAS de la tabla y se moldean aquí, una sola vez. Se quedan los
+    // del año académico del mes validado (jun→may), que es el que empareja la Navidad de
+    // diciembre con la despedida del mayo siguiente — sin eso, validar mayo no encontraría la
+    // Navidad con la que comparar y la regla «los de Navidad libres en la despedida» sería muda.
+    eventos: shapeEventos(eventos, toISO(anio, mes, 1)),
     // Datos de entrada, jamás derivados (S-4). Se piden con un día de margen a cada lado del mes:
     // los vecinos del día 1 y del último día caen fuera y deciden si son puente (§3.4).
     festivos,
@@ -87,12 +92,34 @@ export function buildMonthContext({ mes, anio, residentes, historicas = [], asig
 }
 
 /**
- * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos?, excepciones?,
- *                        eventos?, designadosNavidad? }
+ * Filas de `eventos` → la forma que consume `validateEvents`: `{navidad, despedida}`, solo las
+ * del año académico del mes validado. `sorteoDocumentado` se DERIVA de que exista `sorteoId`
+ * (una fila real en la tabla `sorteos`, reproducible) y no de un booleano autodeclarado: la
+ * normativa pide sorteo justamente para que el reparto no sea a dedo.
+ */
+function shapeEventos(filas, monthStart) {
+  const curso = academicYearOf(monthStart);
+  const out = {};
+  for (const e of filas) {
+    if (!e || e.activo === false || academicYearOf(e.fecha) !== curso) continue;
+    const clave = String(e.tipo || "").toLowerCase();
+    if (clave !== "navidad" && clave !== "despedida") continue;
+    out[clave] = {
+      fecha: e.fecha,
+      voluntarios: e.voluntarios || [],
+      designados: e.designados || [],
+      sorteoDocumentado: Boolean(e.sorteoId),
+    };
+  }
+  return out;
+}
+
+/**
+ * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos?, excepciones?, eventos? }
  * @returns {{invariante:string, severidad:'error'|'aviso', fecha?:string, residenteId?:string, detalle:string}[]}
  */
 export function validateMonth(ctx) {
-  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, designadosNavidad = [], festivos = [] } = ctx;
+  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, festivos = [] } = ctx;
   const byId = new Map(residentes.map((r) => [r.id, r]));
   const periods = new Map(residentes.map((r) => [r.id, periodsOf(r)]));
   const levelOnDay = (id, fecha) => (periods.has(id) ? levelOn(periods.get(id), fecha) : null);
@@ -217,7 +244,7 @@ export function validateMonth(ctx) {
   }
 
   // ── INV-9 adicional / INV-10: eventos del servicio ──
-  validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, violations);
+  validateEvents(eventos, byDay, levelOnDay, dayset, violations);
 
   // ── INV-12: coherencia código↔festivo (aviso siempre, V-4/V-14) ──
   // GF solo en día festivo; G y GP nunca EN festivo (un prefestivo es la víspera, no el día).
@@ -318,7 +345,13 @@ function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, viol
   }
 }
 
-function validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, violations) {
+/**
+ * INV-10. `designadosNavidad` ya no es un parámetro suelto: sale de la fila del evento de
+ * Navidad (decisión V-20, se ALMACENA). Antes había que pasárselo aparte y nadie lo hacía —
+ * ese es medio motivo de que este invariante llevara desde la Fase 3 mudo.
+ */
+function validateEvents(eventos, byDay, levelOnDay, dayset, violations) {
+  const designadosNavidad = (eventos.navidad && eventos.navidad.designados) || [];
   for (const [tipo, ev] of Object.entries(eventos)) {
     if (!ev || !dayset.has(ev.fecha)) continue;
     const guardias = (byDay.get(ev.fecha) || []).filter((a) => GUARDIA.has(a.codigo));

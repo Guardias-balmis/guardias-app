@@ -535,6 +535,108 @@ function absences(bloqueos = [], criterios = {}) {
   return { BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA, DESCUENTA_DISPONIBILIDAD, PROVINCIAS_CERCANAS, isNearbyRotation, absences };
 })();
 
+// ── imaginaria.js ──
+var Imaginaria = (function () {
+// Imaginaria (INV-13, spec.md §5; decisión V-20). Normativa p.4, «-Imaginaria»:
+//
+//   «Se dispone de dos listas de Imaginaria. Una para residentes mayores y otra para residentes
+//    pequeños. En caso de incidencia, se debe intentar suplir la guardia con un residente según
+//    lista del grupo del que crea la incidencia. […] La cesión/compra de guardia de incidencia
+//    NO descuenta de la imaginaria.»
+//
+// Esto es una HERRAMIENTA, no un validador: lo que hace falta a las ocho de la mañana con una
+// baja encima es saber a quién llamar, por orden. No comprueba a posteriori que quien cubrió
+// fuera el que tocaba — una incidencia se resuelve por teléfono en cinco minutos y el registro
+// se hace después, así que ese aviso saltaría a menudo por motivos legítimos que la app no ve
+// (nadie cogía el teléfono, se cambió con otro). Por eso `validateMonth` no llama aquí.
+//
+// La cola NO se almacena: se registra cada cobertura real (tabla `imaginaria`) y el orden se
+// DERIVA de ese historial, igual que el nivel R1-R4 se deriva de fechas (§1). Una fila menos
+// que mantener sincronizada, y el «cesión/compra no descuenta» sale gratis: si nadie de la
+// lista cubrió, no hay fila, y por tanto nadie se mueve.
+
+  const { addDays } = Calendar;
+  const { groupOnDate, levelOn, periodsOfResident } = Residents;
+
+const GUARDIA = new Set(["G", "GF", "GP"]); // el 3P no ocupa puesto obligatorio
+
+/**
+ * ¿Puede este residente entrar en la lista de Imaginaria de `grupo` en esa fecha?
+ *
+ * Un **R1 nunca entra en la lista de Pequeños**, aunque R1 y R2 formen el grupo Pequeño para
+ * todo lo demás (INV-1, INV-11). Es una excepción explícita a la agrupación general, solo para
+ * Imaginaria: **no está en la normativa**, es la práctica real del servicio (P-11, decisión
+ * V-20) — un R1 no puede sostener solo una guardia que aparece sin previo aviso.
+ */
+function isEligibleForImaginaria(residente, grupo, fecha) {
+  if (groupOnDate(residente, fecha) !== grupo) return false;
+  if (grupo === "PEQUENO" && levelOn(periodsOfResident(residente), fecha) === "R1") return false;
+  return true;
+}
+
+/**
+ * La cola de Imaginaria de un grupo para una incidencia concreta, en orden de a quién llamar.
+ *
+ * Orden: quien lleva más tiempo sin cubrir una Imaginaria va primero (quien no ha cubierto
+ * ninguna, el primero de todos), y a igualdad, por id — el desempate tiene que ser determinista
+ * o dos pantallas darían órdenes distintas para la misma incidencia.
+ *
+ * Se aparta a quien tenga guardia el día ANTERIOR (estaría librando) o el SIGUIENTE (para no
+ * comprometer el descanso previo a esa guardia), y a quien tenga guardia la propia noche de la
+ * incidencia. Tampoco está en la normativa: práctica real del servicio (V-20).
+ *
+ * @param {object} p
+ *   - residentes, coberturas: filas de `imaginaria` (solo las activas), asignaciones
+ *   - grupo: "MAYOR" | "PEQUENO" — el del puesto que hay que cubrir
+ *   - fechaIncidencia: ISO
+ * @returns {{residenteId:string, ultimaCobertura:string|null, apartadoPor:string|null}[]}
+ *   TODA la lista elegible, en orden, con el motivo de quien queda apartado — la pantalla
+ *   enseña a quién llamar y también a quién no, que es lo que evita la llamada inútil.
+ */
+function imaginariaQueue({ residentes = [], coberturas = [], asignaciones = [], grupo, fechaIncidencia }) {
+  const vispera = addDays(fechaIncidencia, -1);
+  const siguiente = addDays(fechaIncidencia, 1);
+
+  const ultimaPorResidente = new Map();
+  for (const c of coberturas) {
+    if (c.activo === false) continue;
+    const previa = ultimaPorResidente.get(c.residenteId);
+    if (!previa || c.fechaIncidencia > previa) ultimaPorResidente.set(c.residenteId, c.fechaIncidencia);
+  }
+
+  const guardiaEn = (id, fecha) => asignaciones.some((a) => a.residenteId === id && a.fecha === fecha && GUARDIA.has(a.codigo));
+
+  return residentes
+    .filter((r) => isEligibleForImaginaria(r, grupo, fechaIncidencia))
+    .map((r) => ({
+      residenteId: r.id,
+      ultimaCobertura: ultimaPorResidente.get(r.id) || null,
+      apartadoPor: guardiaEn(r.id, fechaIncidencia) ? "tiene guardia esa misma noche"
+        : guardiaEn(r.id, vispera) ? `tiene guardia el día anterior (${vispera})`
+          : guardiaEn(r.id, siguiente) ? `tiene guardia el día siguiente (${siguiente})`
+            : null,
+    }))
+    .sort((a, b) => {
+      // Los apartados van al final, pero se devuelven: la pantalla dice por qué no se les llama.
+      if (!a.apartadoPor !== !b.apartadoPor) return a.apartadoPor ? 1 : -1;
+      if (a.ultimaCobertura !== b.ultimaCobertura) {
+        if (a.ultimaCobertura === null) return -1;
+        if (b.ultimaCobertura === null) return 1;
+        return a.ultimaCobertura < b.ultimaCobertura ? -1 : 1;
+      }
+      return a.residenteId < b.residenteId ? -1 : 1; // desempate determinista
+    });
+}
+
+/** A quién le toca: el primero no apartado, o `null` si no queda nadie de la lista. */
+function nextForImaginaria(args) {
+  const cola = imaginariaQueue(args).filter((x) => !x.apartadoPor);
+  return cola.length ? cola[0].residenteId : null;
+}
+
+  return { isEligibleForImaginaria, imaginariaQueue, nextForImaginaria };
+})();
+
 // ── accumulate.js ──
 var Accumulate = (function () {
 // Contaje acumulado por residente para el generador «prompt portátil» (Fase 6.1).
@@ -1229,12 +1331,17 @@ function rotationHistoryStart(bloqueos, monthStart) {
  * la misma forma de objeto de forma independiente en Calendar.jsx, Generator.jsx y el router.
  * @param {object} p { mes, anio, residentes, historicas?, asignacionesDelMes, bloqueos }
  */
-function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [] }) {
+function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [], eventos = [] }) {
   return {
     mes, anio,
     residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
     asignaciones: [...historicas, ...asignacionesDelMes],
     bloqueos,
+    // Los eventos llegan como FILAS de la tabla y se moldean aquí, una sola vez. Se quedan los
+    // del año académico del mes validado (jun→may), que es el que empareja la Navidad de
+    // diciembre con la despedida del mayo siguiente — sin eso, validar mayo no encontraría la
+    // Navidad con la que comparar y la regla «los de Navidad libres en la despedida» sería muda.
+    eventos: shapeEventos(eventos, toISO(anio, mes, 1)),
     // Datos de entrada, jamás derivados (S-4). Se piden con un día de margen a cada lado del mes:
     // los vecinos del día 1 y del último día caen fuera y deciden si son puente (§3.4).
     festivos,
@@ -1242,12 +1349,34 @@ function buildMonthContext({ mes, anio, residentes, historicas = [], asignacione
 }
 
 /**
- * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos?, excepciones?,
- *                        eventos?, designadosNavidad? }
+ * Filas de `eventos` → la forma que consume `validateEvents`: `{navidad, despedida}`, solo las
+ * del año académico del mes validado. `sorteoDocumentado` se DERIVA de que exista `sorteoId`
+ * (una fila real en la tabla `sorteos`, reproducible) y no de un booleano autodeclarado: la
+ * normativa pide sorteo justamente para que el reparto no sea a dedo.
+ */
+function shapeEventos(filas, monthStart) {
+  const curso = academicYearOf(monthStart);
+  const out = {};
+  for (const e of filas) {
+    if (!e || e.activo === false || academicYearOf(e.fecha) !== curso) continue;
+    const clave = String(e.tipo || "").toLowerCase();
+    if (clave !== "navidad" && clave !== "despedida") continue;
+    out[clave] = {
+      fecha: e.fecha,
+      voluntarios: e.voluntarios || [],
+      designados: e.designados || [],
+      sorteoDocumentado: Boolean(e.sorteoId),
+    };
+  }
+  return out;
+}
+
+/**
+ * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos?, excepciones?, eventos? }
  * @returns {{invariante:string, severidad:'error'|'aviso', fecha?:string, residenteId?:string, detalle:string}[]}
  */
 function validateMonth(ctx) {
-  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, designadosNavidad = [], festivos = [] } = ctx;
+  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, festivos = [] } = ctx;
   const byId = new Map(residentes.map((r) => [r.id, r]));
   const periods = new Map(residentes.map((r) => [r.id, periodsOf(r)]));
   const levelOnDay = (id, fecha) => (periods.has(id) ? levelOn(periods.get(id), fecha) : null);
@@ -1372,7 +1501,7 @@ function validateMonth(ctx) {
   }
 
   // ── INV-9 adicional / INV-10: eventos del servicio ──
-  validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, violations);
+  validateEvents(eventos, byDay, levelOnDay, dayset, violations);
 
   // ── INV-12: coherencia código↔festivo (aviso siempre, V-4/V-14) ──
   // GF solo en día festivo; G y GP nunca EN festivo (un prefestivo es la víspera, no el día).
@@ -1473,7 +1602,13 @@ function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, viol
   }
 }
 
-function validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, violations) {
+/**
+ * INV-10. `designadosNavidad` ya no es un parámetro suelto: sale de la fila del evento de
+ * Navidad (decisión V-20, se ALMACENA). Antes había que pasárselo aparte y nadie lo hacía —
+ * ese es medio motivo de que este invariante llevara desde la Fase 3 mudo.
+ */
+function validateEvents(eventos, byDay, levelOnDay, dayset, violations) {
+  const designadosNavidad = (eventos.navidad && eventos.navidad.designados) || [];
   for (const [tipo, ev] of Object.entries(eventos)) {
     if (!ev || !dayset.has(ev.fecha)) continue;
     const guardias = (byDay.get(ev.fecha) || []).filter((a) => GUARDIA.has(a.codigo));
@@ -1923,4 +2058,4 @@ function buildResumenRows({ residentes, publishedMonths }) {
 })();
 
 // ── API pública ──
-var Domain = Object.assign({}, Calendar, Residents, Tally, Absences, Accumulate, Thirdpost, Equity, Validate, Responsible, Cuadrante, Projection);
+var Domain = Object.assign({}, Calendar, Residents, Tally, Absences, Imaginaria, Accumulate, Thirdpost, Equity, Validate, Responsible, Cuadrante, Projection);

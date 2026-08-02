@@ -19,6 +19,21 @@ export const TABLES = {
   // informativo: los locales de Alicante son festivos reales y cambian de fecha cada año, así
   // que sin ellos INV-12 avisaría en falso sobre GF correctas.
   festivos: { name: "festivos", columns: [col("id"), col("fecha", "date"), col("nombre"), col("ambito"), col("activo", "bool")] },
+  // Eventos del servicio (INV-10, decisión V-20): comida de Navidad y despedida de R4. Son
+  // DATOS DE ENTRADA como los festivos —la fecha la pone el servicio cada año, no se deriva de
+  // nada— y por eso la tabla se parece a `festivos`: append-only, `activo` para corregir por
+  // reinserción. `designados` se ALMACENA (no se deriva de quién tuviera guardia ese día):
+  // validar la despedida de mayo necesita saber quién cubrió la Navidad del diciembre anterior,
+  // y guardarlo evita que junio tenga que leer las asignaciones de diciembre. La contrapartida,
+  // aceptada: si alguien cambia la guardia del día de Navidad después, esta lista no se entera.
+  // `sorteoId` apunta a la tabla `sorteos` (la misma de INV-14): es lo que hace comprobable el
+  // «a sorteo» de la normativa en vez de un booleano que nadie puede verificar.
+  eventos: { name: "eventos", columns: [col("id"), col("tipo"), col("fecha", "date"), col("voluntarios", "json"), col("designados", "json"), col("sorteoId"), col("activo", "bool")] },
+  // Imaginaria (INV-13, decisión V-20). NO se almacena la cola: se registra cada cobertura real
+  // y la cola se DERIVA de ese historial (§1, «derivar > almacenar»), igual que el nivel R1-R4.
+  // Una guardia de incidencia cedida o comprada no genera fila, y por eso no mueve a nadie en la
+  // cola — literal de la normativa p.4.
+  imaginaria: { name: "imaginaria", columns: [col("id"), col("grupo"), col("fechaIncidencia", "date"), col("residenteId"), col("registradaEn", "date"), col("activo", "bool")] },
   responsables: { name: "responsables", columns: [col("id"), col("periodoInicio", "date"), col("periodoFin", "date"), col("residenteId"), col("metodo"), col("voluntarios", "json"), col("semilla"), col("candidatos", "json"), col("fechaSorteo", "date")] },
   voluntariosResponsable: { name: "voluntariosResponsable", columns: [col("id"), col("residenteId"), col("periodoInicio", "date"), col("activo", "bool")] },
   // Voluntarios del TERCER PUESTO (INV-8a, decisión V-18). Se parece a voluntariosResponsable

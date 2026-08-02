@@ -25,6 +25,7 @@ import * as Calendar from "../v2/domain/calendar.js";
 import * as Residents from "../v2/domain/residents.js";
 import * as Tally from "../v2/domain/tally.js";
 import * as Absences from "../v2/domain/absences.js";
+import * as Imaginaria from "../v2/domain/imaginaria.js";
 import * as Accumulate from "../v2/domain/accumulate.js";
 import * as Thirdpost from "../v2/domain/thirdpost.js";
 import * as Equity from "../v2/domain/equity.js";
@@ -36,7 +37,7 @@ import * as Projection from "../v2/domain/projection.js";
 // del bundle—, así que un módulo nuevo del dominio funciona en producción y revienta AQUÍ. Ya
 // pasó con buildMonthSheetRows/buildResumenRows (Fase 7.2) y con `absences`. Si añades un
 // módulo a build/build-gas.mjs:DOMAIN_MODULES, añádelo también aquí.
-const DOMAIN = Object.assign({}, Calendar, Residents, Tally, Absences, Accumulate, Thirdpost, Equity, Validate, Responsible, CuadranteEstados, Projection);
+const DOMAIN = Object.assign({}, Calendar, Residents, Tally, Absences, Imaginaria, Accumulate, Thirdpost, Equity, Validate, Responsible, CuadranteEstados, Projection);
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = Number(process.argv[2] || 8787);
@@ -76,6 +77,8 @@ const SEED_RESIDENTES = [
 const ss = memorySS({
   residentes: [headerOf(TABLES.residentes), ...SEED_RESIDENTES.map((r) => recordToRow(TABLES.residentes, r))],
   responsables: [headerOf(TABLES.responsables)],
+  eventos: [headerOf(TABLES.eventos)],
+  imaginaria: [headerOf(TABLES.imaginaria)],
   voluntariosResponsable: [headerOf(TABLES.voluntariosResponsable)],
   asignaciones: [headerOf(TABLES.asignaciones)],
   preferencias: [headerOf(TABLES.preferencias)],

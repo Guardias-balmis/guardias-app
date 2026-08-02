@@ -15,6 +15,7 @@ import { buildBundle, buildServerBundle, transformModule } from "../../../build/
 // Fuente ESM
 import { weekday, trimesterWindow, bridgesBetween } from "../calendar.js";
 import { absences, isNearbyRotation, BLOQUEA_ASIGNACION, AUSENCIA_SIMULTANEA } from "../absences.js";
+import { imaginariaQueue, nextForImaginaria } from "../imaginaria.js";
 import { levelOn, groupOnDate } from "../residents.js";
 import { tally } from "../tally.js";
 import { validateMonth, buildMonthContext } from "../validate.js";
@@ -62,6 +63,7 @@ const TP_CTX = {
 const TP_VOLUNTARIOS = [{ residenteId: "r4-david", desde: "2026-08-01" }];
 // Incluye una fila CANCELADA a propósito: que el bundle también la descarte es lo que garantiza
 // que un bloqueo anulado no vuelva a bloquear asignaciones solo en Apps Script.
+const IMG_COB = [{ residenteId: "ANA", grupo: "MAYOR", fechaIncidencia: "2026-06-10" }];
 const ABS_BLOQUEOS = [
   { residenteId: "ANA", desde: "2026-07-01", hasta: "2026-07-31", motivo: "BAJA" },
   { residenteId: "IVAN", desde: "2026-07-10", hasta: "2026-07-20", motivo: "ROTACION", provincia: "Valencia" },
@@ -95,7 +97,11 @@ const QC_CTX = {
 
 // Ejecuta toda la API pública sobre una implementación (ESM namespace o el Domain del bundle).
 function runAll(api) {
-  const ctx = api.buildMonthContext({ mes: MONTH_CTX.mes, anio: MONTH_CTX.anio, residentes: MONTH_CTX.residentes, asignacionesDelMes: MONTH_CTX.asignaciones, bloqueos: [] });
+  const ctx = api.buildMonthContext({
+    mes: MONTH_CTX.mes, anio: MONTH_CTX.anio, residentes: MONTH_CTX.residentes,
+    asignacionesDelMes: MONTH_CTX.asignaciones, bloqueos: [],
+    eventos: [{ tipo: "NAVIDAD", fecha: "2026-12-18", designados: ["ANA"], voluntarios: [], sorteoId: "s1", activo: true }],
+  });
   const violaciones = api.validateMonth(MONTH_CTX);
   return {
     weekday: api.weekday("2026-06-01"),
@@ -124,6 +130,11 @@ function runAll(api) {
       api.absences(ABS_BLOQUEOS, { residenteId: "ANA" }),
     ],
     isNearbyRotation: ABS_BLOQUEOS.map(api.isNearbyRotation),
+    imaginaria: [
+      api.imaginariaQueue({ residentes: MONTH_CTX.residentes, coberturas: IMG_COB, asignaciones: MONTH_CTX.asignaciones, grupo: "MAYOR", fechaIncidencia: "2026-07-16" }),
+      api.imaginariaQueue({ residentes: MONTH_CTX.residentes, coberturas: IMG_COB, asignaciones: [], grupo: "PEQUENO", fechaIncidencia: "2026-07-16" }),
+    ],
+    nextForImaginaria: api.nextForImaginaria({ residentes: MONTH_CTX.residentes, coberturas: IMG_COB, asignaciones: [], grupo: "MAYOR", fechaIncidencia: "2026-07-16" }),
     canValidate: [api.canValidate([]), api.canValidate(violaciones)],
     equityWarnings: api.equityWarnings([...violaciones, ...api.validateQuarterClose(QC_CTX)]),
     canPublish: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canPublish),
@@ -143,6 +154,7 @@ const esm = {
   buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings,
   buildMonthSheetRows, buildResumenRows,
   absences, isNearbyRotation, BLOQUEA_ASIGNACION, AUSENCIA_SIMULTANEA,
+  imaginariaQueue, nextForImaginaria,
 };
 
 // Carga el bundle en un ámbito global único, como hace Apps Script al concatenar los .gs.

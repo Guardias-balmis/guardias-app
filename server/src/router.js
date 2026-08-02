@@ -13,6 +13,7 @@ import { verifyTokeninfo } from "./verify-token.js";
 const ASIG_KEY = (r) => `${r.fecha}|${r.residenteId}`;
 const PREF_KEY = (r) => `${r.residenteId}|${r.anio}|${r.mes}`;
 const CUAD_KEY = (r) => `${r.mes}|${r.anio}`;
+const EVENTO_TIPOS = new Set(["NAVIDAD", "DESPEDIDA"]); // los dos eventos del servicio (INV-10)
 const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA"]); // enum de motivos válidos (severidad mixta desde V-8: solo BAJA bloquea la asignación)
 
 /**
@@ -346,6 +347,118 @@ export function handleRequest(rawBody, deps) {
           return { ok: true };
         });
 
+      // EVENTOS DEL SERVICIO (INV-10, decisión V-20). Dato de entrada como los festivos: la
+      // fecha la pone el servicio cada año. Leerlos está abierto (los necesita el validador);
+      // crearlos y anularlos usa el permiso del ciclo (V-16), porque es dato de todo el equipo.
+      case "listEventos":
+        return authed(req, deps, () => ({ ok: true, eventos: activeEventos(deps) }));
+
+      case "crearEvento":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "registrar un evento del servicio");
+          if (denegado) return denegado;
+          if (!EVENTO_TIPOS.has(req.tipo)) return { ok: false, error: "tipo de evento inválido (NAVIDAD o DESPEDIDA)" };
+          try { deps.domain.parseISO(req.fecha); } catch (e) { return { ok: false, error: "fecha inválida: " + e.message }; }
+          const voluntarios = Array.isArray(req.voluntarios) ? req.voluntarios : [];
+          const id = deps.store.appendRecord("eventos", { tipo: req.tipo, fecha: req.fecha, voluntarios, designados: [], activo: true });
+          return { ok: true, id };
+        });
+
+      case "anularEvento":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "anular un evento del servicio");
+          if (denegado) return denegado;
+          const actual = deps.store.readLatest("eventos", (r) => r.id).find((e) => e.id === req.id);
+          if (!actual) return { ok: false, error: "evento no encontrado" };
+          deps.store.appendRecord("eventos", { ...actual, activo: false });
+          return { ok: true };
+        });
+
+      // El «a sorteo» de la normativa, hecho de verdad y reproducible: misma mecánica que el
+      // sorteo del Responsable (INV-14, decisión V-7a) — semilla generada por la app, sorteo
+      // puro sobre (candidatos, semilla), y la fila queda en `sorteos` para recomputarlo. Un
+      // booleano «hubo sorteo» no prueba nada; esto sí.
+      case "sortearEvento":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "sortear un evento del servicio");
+          if (denegado) return denegado;
+          const evento = activeEventos(deps).find((e) => e.id === req.id);
+          if (!evento) return { ok: false, error: "evento no encontrado" };
+          if (evento.sorteoId) return { ok: false, error: "ese evento ya está sorteado" };
+
+          const residentes = deps.store.readRecords("residentes");
+          const r2 = residentes
+            .filter((r) => deps.domain.levelOn(deps.domain.periodsOfResident(r), evento.fecha) === "R2")
+            .map((r) => r.id);
+          // Si se ofrecen 2 o más voluntarios se sortea SOLO entre ellos, mismo criterio que
+          // V-7(b) para el Responsable: la normativa cubre el sorteo, no el «gana el primero».
+          const ofrecidos = (evento.voluntarios || []).filter((id) => r2.includes(id));
+          const candidatos = ofrecidos.length >= 2 ? ofrecidos : r2;
+          if (candidatos.length < 2) return { ok: false, error: `hacen falta al menos 2 R2 para sortear el evento (hay ${candidatos.length})` };
+
+          const semilla = deps.newSeed();
+          const primero = deps.domain.drawResponsible(candidatos, semilla);
+          const segundo = deps.domain.drawResponsible(candidatos.filter((id) => id !== primero), semilla);
+          const designados = [primero, segundo];
+
+          const sorteoId = deps.store.appendRecord("sorteos", {
+            fecha: deps.today, motivo: `EVENTO_${evento.tipo}_${evento.fecha}`, semilla, candidatos, resultado: designados,
+          });
+          deps.store.appendRecord("eventos", { ...evento, designados, sorteoId });
+          return { ok: true, designados, sorteoId, semilla };
+        });
+
+      // IMAGINARIA (INV-13, decisión V-20). Es una HERRAMIENTA, no un validador: dice a quién
+      // llamar. La cola se DERIVA del historial de coberturas, nunca se almacena.
+      case "colaImaginaria":
+        return authed(req, deps, () => {
+          if (req.grupo !== "MAYOR" && req.grupo !== "PEQUENO") return { ok: false, error: "grupo inválido (MAYOR o PEQUENO)" };
+          try { deps.domain.parseISO(req.fecha); } catch (e) { return { ok: false, error: "fecha inválida: " + e.message }; }
+          // Las asignaciones de la víspera y del día siguiente deciden a quién se aparta, así
+          // que el rango es fecha±1, no el mes: la incidencia puede caer en un día 1 o en un 31.
+          const todas = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
+          const desde = deps.domain.addDays(req.fecha, -1);
+          const hasta = deps.domain.addDays(req.fecha, 1);
+          return {
+            ok: true,
+            cola: deps.domain.imaginariaQueue({
+              residentes: deps.store.readRecords("residentes"),
+              coberturas: activeImaginaria(deps),
+              asignaciones: todas.filter((a) => a.fecha >= desde && a.fecha <= hasta),
+              grupo: req.grupo, fechaIncidencia: req.fecha,
+            }),
+          };
+        });
+
+      case "registrarImaginaria":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "registrar una cobertura de imaginaria");
+          if (denegado) return denegado;
+          if (req.grupo !== "MAYOR" && req.grupo !== "PEQUENO") return { ok: false, error: "grupo inválido (MAYOR o PEQUENO)" };
+          try { deps.domain.parseISO(req.fechaIncidencia); } catch (e) { return { ok: false, error: "fecha inválida: " + e.message }; }
+          if (!deps.store.readRecords("residentes").some((r) => r.id === req.residenteId)) {
+            return { ok: false, error: "el residente no existe" };
+          }
+          // NO se exige que sea el primero de la cola: la incidencia se resuelve por teléfono y
+          // puede haber mil motivos legítimos para saltarse el orden (nadie cogía, se cambió).
+          // Lo que importa es que la cobertura quede registrada, que es lo que mueve la cola.
+          const id = deps.store.appendRecord("imaginaria", {
+            grupo: req.grupo, fechaIncidencia: req.fechaIncidencia, residenteId: req.residenteId,
+            registradaEn: deps.today, activo: true,
+          });
+          return { ok: true, id };
+        });
+
+      case "anularImaginaria":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "anular una cobertura de imaginaria");
+          if (denegado) return denegado;
+          const actual = deps.store.readLatest("imaginaria", (r) => r.id).find((c) => c.id === req.id);
+          if (!actual) return { ok: false, error: "cobertura no encontrada" };
+          deps.store.appendRecord("imaginaria", { ...actual, activo: false });
+          return { ok: true };
+        });
+
       case "listResponsables":
         return authed(req, deps, () => ({
           ok: true,
@@ -507,6 +620,16 @@ function festivosInRange(deps, desde, hasta) {
   return allFestivos(deps).filter((f) => f.activo === true && f.fecha >= desde && f.fecha <= hasta);
 }
 
+/** Eventos del servicio vigentes (última reinserción gana; el sorteo reinserta la fila). */
+function activeEventos(deps) {
+  return deps.store.readLatest("eventos", (r) => r.id).filter((e) => e.activo === true);
+}
+
+/** Coberturas de imaginaria vigentes: son las que mueven la cola derivada. */
+function activeImaginaria(deps) {
+  return deps.store.readLatest("imaginaria", (r) => r.id).filter((c) => c.activo === true);
+}
+
 /** Estado actual de la tabla de bloqueos (última reinserción gana, como cancelarBloqueo). */
 function allBloqueos(deps) {
   return deps.store.readLatest("bloqueos", (r) => r.id);
@@ -541,6 +664,7 @@ function monthSnapshot(deps) {
     asignaciones: deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }),
     bloqueos: allBloqueos(deps),
     festivos: allFestivos(deps).filter((f) => f.activo === true),
+    eventos: activeEventos(deps),
   };
 }
 
@@ -706,7 +830,9 @@ function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps)) {
   const mesAnterior = mes === 1 ? `${anio - 1}-12` : `${anio}-${String(mes - 1).padStart(2, "0")}`;
   const mesSiguiente = mes === 12 ? `${anio + 1}-01` : `${anio}-${String(mes + 1).padStart(2, "0")}`;
   const festivos = (snap.festivos || []).filter((f) => f.fecha >= `${mesAnterior}-01` && f.fecha <= `${mesSiguiente}-01`);
-  return deps.domain.buildMonthContext({ mes, anio, residentes: snap.residentes, historicas, asignacionesDelMes, bloqueos, festivos });
+  // Los eventos van SIN filtrar por mes: `buildMonthContext` se queda con los del año académico,
+  // que es lo que empareja la Navidad de diciembre con la despedida del mayo siguiente.
+  return deps.domain.buildMonthContext({ mes, anio, residentes: snap.residentes, historicas, asignacionesDelMes, bloqueos, festivos, eventos: snap.eventos || [] });
 }
 
 /**

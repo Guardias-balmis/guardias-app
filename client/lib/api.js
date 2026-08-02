@@ -72,6 +72,15 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
     estadoVoluntariado3P: () => authed("estadoVoluntariado3P"),
     ofrecerse3P: (compromisoAceptado) => authed("ofrecerse3P", { compromisoAceptado }),
     retirarVoluntariado3P: () => authed("retirarVoluntariado3P"),
+    /** Eventos del servicio (INV-10, V-20): dato de entrada, como los festivos. */
+    listEventos: () => authed("listEventos"),
+    crearEvento: (tipo, fecha, voluntarios = []) => authed("crearEvento", { tipo, fecha, voluntarios }),
+    anularEvento: (id) => authed("anularEvento", { id }),
+    sortearEvento: (id) => authed("sortearEvento", { id }),
+    /** Imaginaria (INV-13, V-20): la cola se DERIVA, nunca se almacena. */
+    colaImaginaria: (grupo, fecha) => authed("colaImaginaria", { grupo, fecha }),
+    registrarImaginaria: (grupo, fechaIncidencia, residenteId) => authed("registrarImaginaria", { grupo, fechaIncidencia, residenteId }),
+    anularImaginaria: (id) => authed("anularImaginaria", { id }),
     estadoResponsable: (anio) => authed("estadoResponsable", { anio }),
     ofrecerseResponsable: (anio) => authed("ofrecerseResponsable", { anio }),
     retirarVoluntariadoResponsable: (anio) => authed("retirarVoluntariadoResponsable", { anio }),

@@ -51,7 +51,7 @@ ausencia**: es un código de asignación que no lee ningún invariante. La ausen
 `bloqueos`, que desde V-19 el Responsable (o cualquier Mayor si no hay mandato) puede crear y
 cancelar también por otro residente.
 
-The twelve modules split cleanly by responsibility: date/weekday/UTC arithmetic and academic-year derivation (`calendar.js`); training periods, level, and group derivation (`residents.js`); a deliberately dumb per-resident shift counter that never sees holiday data (`tally.js`); the single reader of the `bloqueos` table, `absences` (`absences.js`, V-19); the month-scope invariant validator, `validateMonth` (`validate.js` — "la IA propone, el validador dispone"); third-post rules, `validateThirdPost`/INV-8 (`thirdpost.js`); equity at the two closes INV-3 defines — `validateResidencyYearClose` (residency year, all six axes) and `validateQuarterClose` (quarter, `total` only; P-8/V-13), both `aviso`-only — plus INV-4 (`equity.js`); the responsable lottery, INV-14 (`responsible.js`); cuadrante state-transition rules only, no persistence (`cuadrante.js`); Sheets-ready row projection that writes nothing itself (`projection.js`); and the accumulated per-resident tally, `accumulatedTally` (`accumulate.js`).
+The thirteen modules split cleanly by responsibility: date/weekday/UTC arithmetic and academic-year derivation (`calendar.js`); training periods, level, and group derivation (`residents.js`); a deliberately dumb per-resident shift counter that never sees holiday data (`tally.js`); the single reader of the `bloqueos` table, `absences` (`absences.js`, V-19); the derived Imaginaria queue, `imaginariaQueue` (`imaginaria.js`, V-20 — a tool, never called by `validateMonth`); the month-scope invariant validator, `validateMonth` (`validate.js` — "la IA propone, el validador dispone"); third-post rules, `validateThirdPost`/INV-8 (`thirdpost.js`); equity at the two closes INV-3 defines — `validateResidencyYearClose` (residency year, all six axes) and `validateQuarterClose` (quarter, `total` only; P-8/V-13), both `aviso`-only — plus INV-4 (`equity.js`); the responsable lottery, INV-14 (`responsible.js`); cuadrante state-transition rules only, no persistence (`cuadrante.js`); Sheets-ready row projection that writes nothing itself (`projection.js`); and the accumulated per-resident tally, `accumulatedTally` (`accumulate.js`).
 
 Load-bearing contracts, easy to silently break:
 - **C-1 (lookahead):** any monthly `dobletes` computation that gets summed across months (Sheets projection, equity accumulation) must feed `tally()` the target month's assignments **plus** the first ~2 days of the next month, or a Friday-31→Sunday doblete silently vanishes — this is the exact bug already fixed once (S-5). `projection.js`'s per-tab rows deliberately do *not* do this lookahead (documented, matches the legacy `.xlsm`) — don't "fix" that without re-reading its header comment.
@@ -84,8 +84,13 @@ Load-bearing contracts, easy to silently break:
   volvía a compararse sobre ceros en silencio. El aviso solo se emite cuando el invocador pasa
   `festivos` (los tests que inyectan `acumulados` a mano no lo ven) y cuando alguna cohorte tiene
   ≥2 miembros, que es cuando el eje se compara con alguien.
-- INV-13 (rotación de Imaginaria) es el único invariante **sin implementar**. INV-12 sí lo está
-  desde la decisión V-17 (`validateMonth` cubre la coherencia código↔festivo, siempre como aviso).
+- **Los 14 invariantes están implementados** (INV-12 desde V-17; INV-8 desde V-18; INV-10 e INV-13
+  desde V-20). Dos matices que hay que tener presentes antes de dar algo por comprobado:
+  **INV-13 (Imaginaria) NO lo comprueba `validateMonth`** y es deliberado — es una herramienta que
+  dice a quién llamar (`imaginaria.js:imaginariaQueue`), no una validación a posteriori, porque una
+  incidencia se resuelve por teléfono y el registro se hace después (V-20b). Y **INV-10 e INV-12
+  dependen de tablas que hoy no tiene ninguna pantalla para rellenarse** (`eventos`, `festivos`):
+  están en vigor, pero sin filas cargadas no pueden emitir nada.
 
 Style: identifiers/code in English, comments/JSDoc in Spanish, explaining *why* (spec.md cross-references), never *what*. Never add an npm dependency under `v2/domain`.
 
