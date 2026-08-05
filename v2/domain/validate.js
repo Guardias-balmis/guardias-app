@@ -21,7 +21,7 @@
 // cuadrante. No subir nada a `error` sin revisar V-14 en spec.md §6.
 
 import { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays, isHoliday } from "./calendar.js";
-import { defaultTrainingPeriods, levelOn, groupOf } from "./residents.js";
+import { periodsOfResident, levelOn, groupOf } from "./residents.js";
 import { tally } from "./tally.js";
 import { absences, isNearbyRotation, BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA } from "./absences.js";
 
@@ -36,11 +36,12 @@ const ASIGNACION = new Set(["G", "GF", "GP", "3P"]); // cualquier asignación (I
 const err = (invariante, detalle, extra = {}) => ({ invariante, severidad: "error", detalle, ...extra });
 const aviso = (invariante, detalle, extra = {}) => ({ invariante, severidad: "aviso", detalle, ...extra });
 
-function periodsOf(residente) {
-  if (residente.periodos) return residente.periodos;
-  const fin = residente.fechaFin || addDays(toISO(Number(residente.fechaInicio.slice(0, 4)) + 4, Number(residente.fechaInicio.slice(5, 7)), Number(residente.fechaInicio.slice(8, 10))), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
+// `periodsOfResident` (residents.js) es la ÚNICA derivación de periodos del dominio desde la
+// unificación de V-24: antes cada módulo tenía su propia copia del `fechaFin || addYears(+4)` y
+// tres de ellas —projection, accumulate y el `closingWindowThisMonth` de equity— NO miraban
+// `residente.periodos`, así que con la tabla `periodos` rellena el mismo residente habría tenido
+// dos niveles distintos DENTRO de una misma llamada a `marcarValidado`. Medido antes de unificar:
+// `projection.js` daba R2 el mismo día que `validate.js` daba R1.
 const cohortOf = (residente) => Number(residente.fechaInicio.slice(0, 4)); // promoción = año de inicio
 
 function inRange(fecha, desde, hasta) {
@@ -135,7 +136,7 @@ function shapeEventos(filas, monthStart) {
 export function validateMonth(ctx) {
   const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, festivos = [] } = ctx;
   const byId = new Map(residentes.map((r) => [r.id, r]));
-  const periods = new Map(residentes.map((r) => [r.id, periodsOf(r)]));
+  const periods = new Map(residentes.map((r) => [r.id, periodsOfResident(r)]));
   const levelOnDay = (id, fecha) => (periods.has(id) ? levelOn(periods.get(id), fecha) : null);
 
   const days = datesOfMonth(anio, mes);

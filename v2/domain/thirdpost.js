@@ -15,7 +15,7 @@
 // INV-8 sigue exigiendo la confirmación explícita de la UI.
 
 import { weekday, compareISO, addDays, addMonths, addYears, datesOfMonth } from "./calendar.js";
-import { levelOn, defaultTrainingPeriods } from "./residents.js";
+import { levelOn, periodsOfResident } from "./residents.js";
 
 const aviso = (detalle, extra = {}) => ({ invariante: "INV-8", severidad: "aviso", detalle, ...extra });
 
@@ -38,9 +38,6 @@ export function canWithdrawThirdPost(desde, hoy) {
   return compareISO(hoy, thirdPostCommitmentEnd(desde)) > 0;
 }
 
-function periodsOf(r) {
-  return r.periodos || defaultTrainingPeriods(r.fechaInicio, r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1));
-}
 const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Number(fecha.slice(5, 7)) === mes;
 const inRange = (f, a, b) => compareISO(f, a) >= 0 && compareISO(f, b) <= 0;
 
@@ -106,7 +103,7 @@ export function validateThirdPost(ctx) {
   for (const a of asignaciones) {
     if (!["G", "GF", "GP"].includes(a.codigo)) continue;
     const r = byId.get(a.residenteId);
-    if (r && levelOn(periodsOf(r), a.fecha) === "R1") mochilaDays.add(a.fecha);
+    if (r && levelOn(periodsOfResident(r), a.fecha) === "R1") mochilaDays.add(a.fecha);
   }
   const days3P = new Set(thisMonth3P.map((a) => a.fecha));
   const uncoveredMochila = [...mochilaDays].filter((d) => !days3P.has(d)).sort(compareISO);

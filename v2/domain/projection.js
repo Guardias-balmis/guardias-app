@@ -48,7 +48,7 @@
 //    contaje real, que siguen mirando la fecha exacta vía `tally`/`levelOn` en el dominio.
 
 import { datesOfMonth, weekday, addDays, addYears, academicYearOf, trimesterOf, toISO } from "./calendar.js";
-import { defaultTrainingPeriods, levelOn, isActiveOn } from "./residents.js";
+import { periodsOfResident, levelOn, isActiveOn } from "./residents.js";
 
 const GUARDIA_CODES = new Set(["G", "GF", "GP"]);
 
@@ -115,17 +115,11 @@ export function columnLetter(n) {
   return s;
 }
 
-// Mismo fallback de fechaFin que accumulate.js/validate.js (deuda preexistente conocida,
-// spec.md §6 retro Fase 6.1: duplicado en 7 sitios; no se consolida aquí, fuera de alcance).
-function periodsOf(residente) {
-  const fin = residente.fechaFin || addDays(addYears(residente.fechaInicio, 4), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
 
 /** Residentes activos (R1-R4) en alguna de `dates`, con su primer día activo dentro de ese conjunto. */
 function activeResidents(residentes, dates) {
   return residentes
-    .map((r) => ({ ...r, periods: periodsOf(r) }))
+    .map((r) => ({ ...r, periods: periodsOfResident(r) }))
     .map((r) => ({ ...r, firstActiveDate: dates.find((d) => isActiveOn(r.periods, d)) }))
     .filter((r) => r.firstActiveDate !== undefined);
 }

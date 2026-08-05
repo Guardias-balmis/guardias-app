@@ -645,7 +645,7 @@ var Accumulate = (function () {
 // periodo formativo en curso .. hasta] y delega el contaje.
 
   const { addDays, addYears } = Calendar;
-  const { defaultTrainingPeriods, periodOn } = Residents;
+  const { periodsOfResident, periodOn } = Residents;
   const { tally } = Tally;
 
 const ZERO = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 };
@@ -663,8 +663,7 @@ const ZERO = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, ter
 function accumulatedTally(residentes, asignaciones, hasta) {
   const out = new Map();
   for (const r of residentes) {
-    const fin = r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1);
-    const periods = defaultTrainingPeriods(r.fechaInicio, fin);
+    const periods = periodsOfResident(r);
     // El periodo se busca a `hasta+1` (el primer día del mes que se va a generar), no a
     // `hasta`: así, si el aniversario cae exactamente ese día, ya se usa el periodo NUEVO.
     // Caso límite intencional: cuando eso ocurre, `periodoActual.start` (el aniversario)
@@ -706,7 +705,7 @@ var Thirdpost = (function () {
 // INV-8 sigue exigiendo la confirmación explícita de la UI.
 
   const { weekday, compareISO, addDays, addMonths, addYears, datesOfMonth } = Calendar;
-  const { levelOn, defaultTrainingPeriods } = Residents;
+  const { levelOn, periodsOfResident } = Residents;
 
 const aviso = (detalle, extra = {}) => ({ invariante: "INV-8", severidad: "aviso", detalle, ...extra });
 
@@ -729,9 +728,6 @@ function canWithdrawThirdPost(desde, hoy) {
   return compareISO(hoy, thirdPostCommitmentEnd(desde)) > 0;
 }
 
-function periodsOf(r) {
-  return r.periodos || defaultTrainingPeriods(r.fechaInicio, r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1));
-}
 const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Number(fecha.slice(5, 7)) === mes;
 const inRange = (f, a, b) => compareISO(f, a) >= 0 && compareISO(f, b) <= 0;
 
@@ -797,7 +793,7 @@ function validateThirdPost(ctx) {
   for (const a of asignaciones) {
     if (!["G", "GF", "GP"].includes(a.codigo)) continue;
     const r = byId.get(a.residenteId);
-    if (r && levelOn(periodsOf(r), a.fecha) === "R1") mochilaDays.add(a.fecha);
+    if (r && levelOn(periodsOfResident(r), a.fecha) === "R1") mochilaDays.add(a.fecha);
   }
   const days3P = new Set(thisMonth3P.map((a) => a.fecha));
   const uncoveredMochila = [...mochilaDays].filter((d) => !days3P.has(d)).sort(compareISO);
@@ -906,6 +902,7 @@ var Equity = (function () {
   const { tally } = Tally;
   const { absences, DESCUENTA_DISPONIBILIDAD } = Absences;
   const { accumulatedTally } = Accumulate;
+  const { periodsOfResident } = Residents;
 
 const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "dobletes"];
 // Los tres códigos que ocupan puesto. El 3P queda fuera a propósito (INV-4): es voluntario, así
@@ -1157,7 +1154,10 @@ function validateQuarterClose(ctx) {
   for (const r of residentes) {
     // Un residente que solo estaba parte del trimestre (alta a mitad, o R4 que termina) se
     // compara sobre la parte que le tocaba, no sobre el trimestre entero.
-    const presente = intersect(win, { start: r.fechaInicio, end: r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1) });
+    // El rango de presencia sale de los periodos (V-24), no de reconstruir `fechaInicio +4 años`:
+    // con los periodos editados de la nota [a] el primero y el último son los que mandan.
+    const suyos = periodsOfResident(r);
+    const presente = intersect(win, { start: suyos[0].start, end: suyos[suyos.length - 1].end });
     if (!presente) continue;
     const diasPresente = daysInclusive(presente.start, presente.end);
     const disponibles = availableDays(presente, absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD }));
@@ -1192,12 +1192,20 @@ function validateQuarterClose(ctx) {
   return violations;
 }
 
+/**
+ * La ventana del año de residencia que CIERRA en este mes, o `null` si no cierra ninguno.
+ *
+ * Sale de `periodsOfResident` (unificación de V-24) y no de reconstruir el aniversario a mano.
+ * Antes iteraba `addYears(r.fechaInicio, k)`, lo que ignoraba **las dos** vías por las que un año
+ * de residencia puede no acabar en su aniversario nominal: `fechaFin` y los periodos editados de
+ * la nota [a]. Medido al unificar: con `fechaFin` nominal el resultado es idéntico mes a mes —o
+ * sea, para todos los residentes de hoy no cambia nada—, y donde cambia es donde estaba mal: un
+ * R4 que deja la residencia el 15 de marzo cerraba su año en MAYO, dos meses después de irse, con
+ * una ventana que se extendía más allá de su último día.
+ */
 function closingWindowThisMonth(r, mes, anio) {
-  for (let k = 1; k <= 4; k++) {
-    const cierre = addDays(addYears(r.fechaInicio, k), -1);
-    if (inMonth(cierre, mes, anio)) return { start: addYears(r.fechaInicio, k - 1), end: cierre };
-  }
-  return null;
+  const p = periodsOfResident(r).find((per) => inMonth(per.end, mes, anio));
+  return p ? { start: p.start, end: p.end } : null;
 }
 
 /** Fracción de disponibilidad = (días de la ventana − días de baja) / días de la ventana. */
@@ -1278,7 +1286,7 @@ var Validate = (function () {
 // cuadrante. No subir nada a `error` sin revisar V-14 en spec.md §6.
 
   const { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays, isHoliday } = Calendar;
-  const { defaultTrainingPeriods, levelOn, groupOf } = Residents;
+  const { periodsOfResident, levelOn, groupOf } = Residents;
   const { tally } = Tally;
   const { absences, isNearbyRotation, BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA } = Absences;
 
@@ -1293,11 +1301,12 @@ const ASIGNACION = new Set(["G", "GF", "GP", "3P"]); // cualquier asignación (I
 const err = (invariante, detalle, extra = {}) => ({ invariante, severidad: "error", detalle, ...extra });
 const aviso = (invariante, detalle, extra = {}) => ({ invariante, severidad: "aviso", detalle, ...extra });
 
-function periodsOf(residente) {
-  if (residente.periodos) return residente.periodos;
-  const fin = residente.fechaFin || addDays(toISO(Number(residente.fechaInicio.slice(0, 4)) + 4, Number(residente.fechaInicio.slice(5, 7)), Number(residente.fechaInicio.slice(8, 10))), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
+// `periodsOfResident` (residents.js) es la ÚNICA derivación de periodos del dominio desde la
+// unificación de V-24: antes cada módulo tenía su propia copia del `fechaFin || addYears(+4)` y
+// tres de ellas —projection, accumulate y el `closingWindowThisMonth` de equity— NO miraban
+// `residente.periodos`, así que con la tabla `periodos` rellena el mismo residente habría tenido
+// dos niveles distintos DENTRO de una misma llamada a `marcarValidado`. Medido antes de unificar:
+// `projection.js` daba R2 el mismo día que `validate.js` daba R1.
 const cohortOf = (residente) => Number(residente.fechaInicio.slice(0, 4)); // promoción = año de inicio
 
 function inRange(fecha, desde, hasta) {
@@ -1392,7 +1401,7 @@ function shapeEventos(filas, monthStart) {
 function validateMonth(ctx) {
   const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, festivos = [] } = ctx;
   const byId = new Map(residentes.map((r) => [r.id, r]));
-  const periods = new Map(residentes.map((r) => [r.id, periodsOf(r)]));
+  const periods = new Map(residentes.map((r) => [r.id, periodsOfResident(r)]));
   const levelOnDay = (id, fecha) => (periods.has(id) ? levelOn(periods.get(id), fecha) : null);
 
   const days = datesOfMonth(anio, mes);
@@ -1692,17 +1701,10 @@ var Responsible = (function () {
 //    recomputable/auditable a partir del registro guardado.
 
   const { addDays, toISO } = Calendar;
-  const { defaultTrainingPeriods, levelOn } = Residents;
+  const { periodsOfResident, levelOn } = Residents;
 
 const err = (detalle, extra = {}) => ({ invariante: "INV-14", severidad: "error", detalle, ...extra });
 
-// Mismo patrón que validate.js/periodsOf: usa periodos editados si el residente los trae
-// (bajas, nota [a]), si no los genera por defecto a partir de fechaInicio/fechaFin.
-function periodsOf(residente) {
-  if (residente.periodos) return residente.periodos;
-  const fin = residente.fechaFin || addDays(toISO(Number(residente.fechaInicio.slice(0, 4)) + 4, Number(residente.fechaInicio.slice(5, 7)), Number(residente.fechaInicio.slice(8, 10))), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
 
 /**
  * Residentes con nivel R3 en `periodoInicio` (candidatos naturales al mandato), en orden
@@ -1714,7 +1716,7 @@ function periodsOf(residente) {
  */
 function eligibleCandidates(residentes, periodoInicio) {
   return residentes
-    .filter((r) => levelOn(periodsOf(r), periodoInicio) === "R3")
+    .filter((r) => levelOn(periodsOfResident(r), periodoInicio) === "R3")
     .map((r) => r.id)
     .sort();
 }
@@ -1775,7 +1777,7 @@ function validateResponsible(responsable, ctx) {
     return violations;
   }
 
-  if (levelOn(periodsOf(titular), responsable.periodoInicio) !== "R3") {
+  if (levelOn(periodsOfResident(titular), responsable.periodoInicio) !== "R3") {
     violations.push(err(
       `${responsable.residenteId} no tiene nivel R3 en ${responsable.periodoInicio} (el mandato exige R3 al inicio del periodo)`,
       { residenteId: responsable.residenteId, fecha: responsable.periodoInicio }
@@ -1950,7 +1952,7 @@ var Projection = (function () {
 //    contaje real, que siguen mirando la fecha exacta vía `tally`/`levelOn` en el dominio.
 
   const { datesOfMonth, weekday, addDays, addYears, academicYearOf, trimesterOf, toISO } = Calendar;
-  const { defaultTrainingPeriods, levelOn, isActiveOn } = Residents;
+  const { periodsOfResident, levelOn, isActiveOn } = Residents;
 
 const GUARDIA_CODES = new Set(["G", "GF", "GP"]);
 
@@ -2017,17 +2019,11 @@ function columnLetter(n) {
   return s;
 }
 
-// Mismo fallback de fechaFin que accumulate.js/validate.js (deuda preexistente conocida,
-// spec.md §6 retro Fase 6.1: duplicado en 7 sitios; no se consolida aquí, fuera de alcance).
-function periodsOf(residente) {
-  const fin = residente.fechaFin || addDays(addYears(residente.fechaInicio, 4), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
 
 /** Residentes activos (R1-R4) en alguna de `dates`, con su primer día activo dentro de ese conjunto. */
 function activeResidents(residentes, dates) {
   return residentes
-    .map((r) => ({ ...r, periods: periodsOf(r) }))
+    .map((r) => ({ ...r, periods: periodsOfResident(r) }))
     .map((r) => ({ ...r, firstActiveDate: dates.find((d) => isActiveOn(r.periods, d)) }))
     .filter((r) => r.firstActiveDate !== undefined);
 }
