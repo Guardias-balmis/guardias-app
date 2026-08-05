@@ -20,18 +20,61 @@ export function buildRequestInit(payload) {
 }
 
 /**
+ * Acciones que se pueden REPETIR sin consecuencias, y por tanto reintentar ante un fallo de
+ * transporte. Lista explícita a propósito: lo que no esté aquí NO se reintenta, así que olvidarse
+ * de añadir una lectura solo cuesta un reintento perdido, mientras que colar una escritura
+ * costaría una fila duplicada en una tabla append-only que nadie borra. Ante la duda, fuera.
+ *
+ * `login` entra aunque consuma el nonce: si el POST no llegó a ejecutarse —el caso mayoritario de
+ * este fallo— el reintento resuelve el login, y si sí llegó, el usuario ve «nonce reusado» en vez
+ * de «HTTP 404», que no es peor. `altaResidente` NO entra: escribe un residente.
+ */
+const REINTENTABLES = new Set([
+  "getNonce", "login", "whoami", "validar",
+  "listResidentes", "listAsignaciones", "listAsignacionesRango",
+  "misPreferencias", "misBloqueos", "listBloqueos", "listBloqueosRango",
+  "listFestivosRango", "listEventos", "colaImaginaria",
+  "estadoResponsable", "listResponsables", "estadoCuadrante", "estadoVoluntariado3P",
+]);
+
+const REINTENTOS_MS = [400, 1200]; // dos reintentos: hay una persona esperando delante
+const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
  * Llama al backend. Nunca lanza: cualquier fallo (red, HTTP, JSON) se devuelve como
  * `{ok:false, error}` para que la UI lo trate igual que un rechazo de negocio del servidor.
+ *
+ * Reintenta los fallos de TRANSPORTE de las acciones idempotentes, y esto no es defensa
+ * especulativa: el `/exec` de Apps Script no contesta directo, responde **302 a un enlace temporal
+ * de un solo uso** que el navegador sigue, y cuando ese segundo salto falla —enlace consumido,
+ * caducado, o Google estrangulando la tasa— llega HTML de Google con un 404. Reproducido en
+ * producción el 2026-08-05: dos `login` idénticos y seguidos dieron 404 y 200. El residente veía
+ * «HTTP 404» al entrar, sin nada que hacer salvo insistir a ciegas. El servidor ya tenía esta red
+ * para el mismo tipo de inestabilidad (`fetchTokeninfo_` en Code.gs reintenta 3 veces); el cliente
+ * no la tenía.
+ *
+ * NO se reintenta un `{ok:false}` del servidor: eso es un rechazo de negocio, es determinista y
+ * repetirlo solo gasta tiempo. Solo el `!res.ok` y la excepción de red.
  */
-export async function callBackend(execUrl, payload, { fetchImpl = fetch } = {}) {
-  try {
-    const res = await fetchImpl(execUrl, buildRequestInit(payload));
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-    return await res.json();
-  } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) };
+export async function callBackend(execUrl, payload, { fetchImpl = fetch, esperar = espera } = {}) {
+  const intentos = REINTENTABLES.has(payload && payload.action) ? REINTENTOS_MS.length + 1 : 1;
+  let ultimo = { ok: false, error: "sin respuesta" };
+
+  for (let i = 0; i < intentos; i++) {
+    if (i > 0) await esperar(REINTENTOS_MS[i - 1]);
+    try {
+      const res = await fetchImpl(execUrl, buildRequestInit(payload));
+      if (res.ok) return await res.json();
+      // Se dice que es de Google y no un número pelado: el residente no puede hacer nada con un
+      // «HTTP 404», y este no es culpa suya ni de sus datos.
+      ultimo = { ok: false, error: `el servidor de Google no respondió bien (HTTP ${res.status})` };
+    } catch (e) {
+      ultimo = { ok: false, error: String((e && e.message) || e) };
+    }
   }
+  return ultimo;
 }
+
 
 /**
  * Fábrica de la API tipada. `getSession()` se invoca en cada llamada (no se cachea el

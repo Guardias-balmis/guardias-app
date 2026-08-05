@@ -25,6 +25,21 @@ function fakeFetch(status, jsonBody) {
   return fn;
 }
 
+// `fetch` que devuelve una secuencia de respuestas, una por intento. Sirve para fijar el reintento
+// sin esperar de verdad: `esperar` se inyecta como no-op.
+function fetchSecuencia(...respuestas) {
+  const calls = [];
+  const fn = async (url, init) => {
+    const r = respuestas[calls.length];
+    calls.push({ url, init });
+    if (r instanceof Error) throw r;
+    return { ok: r.status < 400, status: r.status, json: async () => r.body };
+  };
+  fn.calls = calls;
+  return fn;
+}
+const sinEsperar = async () => {};
+
 test("callBackend manda el payload correcto y devuelve el JSON parseado", async () => {
   const fetchImpl = fakeFetch(200, { ok: true, nonce: "n1" });
   const r = await callBackend("https://exec.example/x", { action: "getNonce" }, { fetchImpl });
@@ -138,4 +153,61 @@ test("makeApi: acciones del ciclo de estados del cuadrante mandan anio/mes corre
     "estadoCuadrante", "marcarValidado", "publicarCuadrante", "despublicarCuadrante",
   ]);
   for (const a of acciones) { assert.equal(a.anio, 2027); assert.equal(a.mes, 7); }
+});
+
+// ── Reintento de fallos de TRANSPORTE (2026-08-05) ──
+// El `/exec` de Apps Script responde 302 a un enlace de un solo uso; cuando el segundo salto falla
+// llega HTML de Google con 404. Reproducido en producción: dos `login` idénticos y seguidos dieron
+// 404 y 200, y el residente veía «HTTP 404» al entrar sin nada que hacer.
+test("callBackend reintenta una acción idempotente si el transporte falla, y devuelve el éxito", async () => {
+  const fetchImpl = fetchSecuencia({ status: 404 }, { status: 200, body: { ok: true, nonce: "n1" } });
+  const r = await callBackend("https://exec.example/x", { action: "getNonce" }, { fetchImpl, esperar: sinEsperar });
+  assert.deepEqual(r, { ok: true, nonce: "n1" });
+  assert.equal(fetchImpl.calls.length, 2);
+});
+
+test("callBackend reintenta también ante excepción de red (el otro síntoma: el enlace no responde)", async () => {
+  const fetchImpl = fetchSecuencia(new TypeError("Failed to fetch"), { status: 200, body: { ok: true } });
+  const r = await callBackend("https://exec.example/x", { action: "login", idToken: "t", nonce: "n" }, { fetchImpl, esperar: sinEsperar });
+  assert.equal(r.ok, true);
+  assert.equal(fetchImpl.calls.length, 2);
+});
+
+test("callBackend hace como máximo 3 intentos y devuelve un error que no es un número pelado", async () => {
+  const fetchImpl = fetchSecuencia({ status: 404 }, { status: 404 }, { status: 404 }, { status: 200, body: { ok: true } });
+  const r = await callBackend("https://exec.example/x", { action: "getNonce" }, { fetchImpl, esperar: sinEsperar });
+  assert.equal(r.ok, false);
+  assert.equal(fetchImpl.calls.length, 3, "3 intentos, no 4: el tope existe");
+  assert.match(r.error, /Google/, "el residente no puede hacer nada con un «HTTP 404» pelado");
+  assert.match(r.error, /404/, "pero el código sigue estando, para diagnosticar");
+});
+
+test("callBackend NO reintenta una ESCRITURA: duplicaría una fila en una tabla append-only", async () => {
+  for (const action of ["guardarAsignaciones", "crearBloqueo", "guardarPeriodos", "editarResidente",
+                        "restaurarPeriodos", "publicarCuadrante", "marcarValidado", "altaResidente",
+                        "crearFestivos", "sortearEvento", "ejecutarSorteoResponsable", "registrarImaginaria"]) {
+    const fetchImpl = fetchSecuencia({ status: 404 }, { status: 200, body: { ok: true } });
+    const r = await callBackend("https://exec.example/x", { action }, { fetchImpl, esperar: sinEsperar });
+    assert.equal(r.ok, false, `${action} no debe reintentarse`);
+    assert.equal(fetchImpl.calls.length, 1, `${action} debe hacer UN solo intento`);
+  }
+});
+
+test("callBackend NO reintenta un {ok:false} del servidor: es un rechazo de negocio, no transporte", async () => {
+  // Repetirlo solo gasta el tiempo de quien espera: el veredicto es determinista.
+  const fetchImpl = fetchSecuencia({ status: 200, body: { ok: false, error: "sesión caducada" } },
+                                   { status: 200, body: { ok: true } });
+  const r = await callBackend("https://exec.example/x", { action: "listResidentes" }, { fetchImpl, esperar: sinEsperar });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "sesión caducada");
+  assert.equal(fetchImpl.calls.length, 1);
+});
+
+test("callBackend espera entre intentos, y con backoff creciente", async () => {
+  const esperas = [];
+  const fetchImpl = fetchSecuencia({ status: 404 }, { status: 404 }, { status: 200, body: { ok: true } });
+  await callBackend("https://exec.example/x", { action: "getNonce" },
+    { fetchImpl, esperar: async (ms) => { esperas.push(ms); } });
+  assert.equal(esperas.length, 2);
+  assert.ok(esperas[1] > esperas[0], `el backoff debe crecer: ${JSON.stringify(esperas)}`);
 });
