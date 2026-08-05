@@ -1464,7 +1464,7 @@ function projectCuadranteToSheets(deps, mes, anio) {
   const otrosPublicados = deps.store.readLatest("cuadrantes", CUAD_KEY).filter((r) => r.estado === "PUBLICADO");
   const publishedMonths = [...otrosPublicados.map((r) => ({ mes: r.mes, anio: r.anio })), { mes, anio }];
 
-  // Las dos hojas agregadas son del CURSO académico del mes que se publica (decisión V-23), y lo
+  // Las dos hojas agregadas son del CURSO académico del mes que se publica (decisión V-25), y lo
   // llevan en el nombre: publicar una corrección de un curso anterior republica LA HOJA DE ESE
   // CURSO, sin tocar la del actual. Con un nombre fijo se habrían pisado.
   const curso = deps.domain.academicYearOf(deps.domain.toISO(anio, mes, 1));

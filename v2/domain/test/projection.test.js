@@ -3,7 +3,7 @@
 // totales LOCALES a la propia fila — COUNTIF/SUMPRODUCT, mismo idioma que el .xlsm legado).
 // buildResumenRows / buildContajeTrimestralRows: las dos hojas agregadas del CURSO académico
 // (SUMIF encadenado cruzando pestañas mensuales por nombre + MAXIFS/MINIFS agrupando por cohorte
-// de ingreso). Ninguna reproduce el veredicto de INV-3 y ninguna dice que lo haga (decisión V-23).
+// de ingreso). Ninguna reproduce el veredicto de INV-3 y ninguna dice que lo haga (decisión V-25).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { weekday, addDays, datesOfMonth } from "../calendar.js";
@@ -159,7 +159,7 @@ test("buildMonthSheetRows: fórmula de Dobletes V-D empareja viernes con domingo
 });
 
 // ── buildResumenRows ──
-// La ventana es el CURSO académico (decisión V-23) y va en el nombre de la hoja. Abril y mayo de
+// La ventana es el CURSO académico (decisión V-25) y va en el nombre de la hoja. Abril y mayo de
 // 2027 pertenecen al curso 2026-27 (`academicYearOf`: de junio a mayo), así que `curso: 2026`.
 const CURSO = 2026;
 const resumen = (residentes, publishedMonths, curso = CURSO) => buildResumenRows({ residentes, publishedMonths, curso });
@@ -180,7 +180,7 @@ test("buildResumenRows: sin meses publicados, la cabecera y la nota de límites"
   assert.ok(rows.some((f) => /no es la comprobación de INV-3/.test(String(f[0]))));
 });
 
-test("buildResumenRows: la cabecera ya NO invoca el umbral de INV-3 (V-23)", () => {
+test("buildResumenRows: la cabecera ya NO invoca el umbral de INV-3 (V-25)", () => {
   // El cartel decía «Equidad (dif. ≤ 1)» y era falso en las dos direcciones: la ventana de INV-3 es
   // el año de residencia de cada uno (cuatro cierres con dif=1 acumulan 4 de por vida) y los dos
   // cierres normalizan por disponibilidad, que no es expresable en fórmula de hoja.
@@ -219,7 +219,7 @@ test("buildResumenRows: varios meses publicados → cadena SUMIF con un término
 });
 
 test("buildResumenRows: la cadena SUMIF no puede pasar de 12 términos, porque el curso tiene 12 meses", () => {
-  // Es la razón práctica de acotar la ventana (V-23): de por vida crecía un término por mes
+  // Es la razón práctica de acotar la ventana (V-25): de por vida crecía un término por mes
   // publicado y por celda, ~10.800 SUMIF de columna completa por recálculo a los diez años.
   const doceMeses = [6, 7, 8, 9, 10, 11].map((mes) => ({ mes, anio: 2026 }))
     .concat([1, 2, 3, 4, 5].map((mes) => ({ mes, anio: 2027 })), [{ mes: 12, anio: 2026 }]);

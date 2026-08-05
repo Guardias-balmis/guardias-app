@@ -165,14 +165,14 @@ test("publicarCuadrante: el Responsable pasa un cuadrante VALIDADO a PUBLICADO",
   assert.equal(r.estado, "PUBLICADO");
 });
 
-test("publicarCuadrante: proyecta de verdad las TRES hojas al Sheet (Fase 7.1/7.2, V-11a y V-23)", () => {
+test("publicarCuadrante: proyecta de verdad las TRES hojas al Sheet (Fase 7.1/7.2, V-11a y V-25)", () => {
   const deps = stubClean(makeDeps());
   const session = loggedInAs(deps, "resp@gmail.com");
   call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-05", residenteId: "resp-1", codigo: "G" }] }, deps);
   call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
   const r = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
   assert.equal(r.ok, true);
-  // Las dos agregadas llevan el CURSO en el nombre (V-23): julio-2027 es del curso 2027-28.
+  // Las dos agregadas llevan el CURSO en el nombre (V-25): julio-2027 es del curso 2027-28.
   assert.deepEqual(r.proyeccion, { mensual: "2027-07", resumen: "Resumen 2027-28", contaje: "Contaje Trimestral 2027-28" });
 
   const mensual = deps.ss.read("2027-07");

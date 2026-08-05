@@ -160,7 +160,7 @@ function runAll(api) {
     canEdit: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canEdit),
     stateAfterEdit: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.stateAfterEdit),
     monthSheet: api.buildMonthSheetRows({ anio: MONTH_CTX.anio, mes: MONTH_CTX.mes, residentes: MONTH_CTX.residentes, asignaciones: MONTH_CTX.asignaciones }),
-    // Las dos hojas agregadas son del CURSO académico (V-23): julio-2026 pertenece al 2026-27.
+    // Las dos hojas agregadas son del CURSO académico (V-25): julio-2026 pertenece al 2026-27.
     resumen: api.buildResumenRows({ residentes: MONTH_CTX.residentes, publishedMonths: PUB_MESES, curso: 2026 }),
     contaje: api.buildContajeTrimestralRows({ residentes: MONTH_CTX.residentes, publishedMonths: PUB_MESES, curso: 2026 }),
     cursoLabel: [api.cursoLabel(2026), api.cursoLabel(2099)],

@@ -1929,7 +1929,7 @@ var Projection = (function () {
 //    y trimestre del contaje (T1 jun-ago … T4 mar-may) más la diferencia máx-mín por cohorte
 //    en cada trimestre. Es lo que el Responsable comunica a tutoría al cerrar el trimestre.
 //
-// LA VENTANA ES EL CURSO ACADÉMICO (decisión V-23), y las dos hojas la llevan en el NOMBRE
+// LA VENTANA ES EL CURSO ACADÉMICO (decisión V-25), y las dos hojas la llevan en el NOMBRE
 // para que la del curso pasado no se sobreescriba — es lo que hacía el .xlsm recreándose cada
 // año, y encima acota la cadena SUMIF a ≤12 términos por celda en vez de crecer sin techo (a
 // diez años eran ~10.800 SUMIF de columna completa por recálculo).
@@ -1966,7 +1966,7 @@ const FIXED_HEADERS = ["Residente", "Nivel", "G", "GF", "GP", "3P", "Fines de Se
 const LEVEL_RANK = { R4: 4, R3: 3, R2: 2, R1: 1 };
 // «Dif. máx-mín (cohorte)» es un HECHO y se queda. La segunda columna era «Equidad (dif. ≤ 1)»,
 // que invocaba el umbral de INV-3 sobre una ventana y unos totales que no son los suyos (ver la
-// cabecera del fichero): ahora dice de qué curso habla y que es orientativo, decisión V-23.
+// cabecera del fichero): ahora dice de qué curso habla y que es orientativo, decisión V-25.
 const RESUMEN_HEADER = ["Residente", "Cohorte", "Total", "Fines de Semana", "Festivos", "Prefestivos", "Dobletes V-D", "3P", "Dif. máx-mín (cohorte)", "Reparto del curso (orientativo)"];
 const TRIMESTRES_ORDEN = [
   { clave: "T1", etiqueta: "T1 jun-ago" },
@@ -2133,7 +2133,7 @@ function difCohorteFormula(col, i, lastRow) {
  * agregando por SUMIF sobre las pestañas mensuales publicadas de ese curso, con la diferencia
  * máx-mín por cohorte de ingreso.
  *
- * La ventana es el curso (decisión V-23) y va en el nombre de la hoja: sin eso, republicar un mes
+ * La ventana es el curso (decisión V-25) y va en el nombre de la hoja: sin eso, republicar un mes
  * de otro curso sobreescribiría la hoja del anterior. NO reproduce el veredicto de INV-3 y no lo
  * pretende — ver la cabecera del fichero y `NOTA_LIMITES`, que se escribe en la propia hoja.
  *
@@ -2160,7 +2160,7 @@ function buildResumenRows({ residentes, publishedMonths, curso }) {
   // El umbral no se deja como celda editable (a diferencia del Excel viejo) porque el validador
   // real de la app NO lo lee de aquí: un umbral editable en el Sheet que no afecta a INV-3 sería
   // engañoso. Y el veredicto ya no dice "OK/REVISAR" sobre "dif ≤ 1", que era invocar el umbral de
-  // INV-3 sobre una ventana y unos totales que no son los suyos (V-23).
+  // INV-3 sobre una ventana y unos totales que no son los suyos (V-25).
   const lastRow = rows.length;
   for (let i = 2; i <= lastRow; i++) {
     rows[i - 1][8] = difCohorteFormula("C", i, lastRow);
