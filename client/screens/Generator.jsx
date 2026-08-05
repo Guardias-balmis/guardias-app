@@ -4,8 +4,8 @@
 // (validateMonth, sin red) la respuesta que devuelva — "la IA propone, el validador dispone"
 // (spec.md §5), mismo esquema visual de violaciones que CalendarScreen.
 import { COLOR, S, ANOS } from "./client/lib/design-tokens.js";
-import { defaultTrainingPeriods, levelOn, groupOf, periodOn } from "./v2/domain/residents.js";
-import { addDays, addYears, toISO, daysInMonth, bridgesOfMonth } from "./v2/domain/calendar.js";
+import { periodsOfResident, levelOn, groupOf, periodOn } from "./v2/domain/residents.js";
+import { addDays, toISO, daysInMonth, bridgesOfMonth } from "./v2/domain/calendar.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/domain/validate.js";
 import { accumulatedTally } from "./v2/domain/accumulate.js";
 import { canEdit } from "./v2/domain/cuadrante.js";
@@ -22,9 +22,11 @@ function nombreMesDe(anio, mes) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// `periodsOfResident` y no `defaultTrainingPeriods`: es la derivación única del dominio (V-24) y
+// la ÚNICA que respeta los periodos editados de la nota [a]. Con `defaultTrainingPeriods` directo,
+// esta pantalla mostraría un nivel distinto del que juzga el validador.
 function nivelEnFecha(residente, iso) {
-  const fin = residente.fechaFin || addDays(addYears(residente.fechaInicio, 4), -1);
-  return levelOn(defaultTrainingPeriods(residente.fechaInicio, fin), iso);
+  return levelOn(periodsOfResident(residente), iso);
 }
 
 function agruparPorNivel(residentes, iso) {
@@ -218,8 +220,7 @@ function GeneratorScreen() {
       // generado solo para el lookahead de doblete de (a).
       const desdesAcumulado = residentes
         .map((r) => {
-          const fin = r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1);
-          const periodo = periodOn(defaultTrainingPeriods(r.fechaInicio, fin), monthStart);
+          const periodo = periodOn(periodsOfResident(r), monthStart);
           return periodo ? periodo.start : null;
         })
         .filter(Boolean);

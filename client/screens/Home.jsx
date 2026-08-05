@@ -1,8 +1,7 @@
 // HomeScreen — dashboard. El nivel R1-R4 de cada residente se DERIVA aquí de sus fechas
 // (nunca se lee un campo "ano" almacenado — ese campo no existe ya, spec.md S-2).
 import { COLOR, ANOS, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js";
-import { defaultTrainingPeriods, levelOn } from "./v2/domain/residents.js";
-import { addDays, addYears } from "./v2/domain/calendar.js";
+import { periodsOfResident, levelOn } from "./v2/domain/residents.js";
 import { todayISO } from "./client/lib/dates.js";
 import { S } from "./client/lib/design-tokens.js";
 import { puedeMoverCiclo } from "./client/lib/permisos.js";
@@ -10,9 +9,11 @@ import { puedeMoverCiclo } from "./client/lib/permisos.js";
 const { useState, useEffect } = React;
 const { Card, QuickCard, Btn } = window.UI;
 
+// `periodsOfResident` y no `defaultTrainingPeriods`: es la derivación única del dominio (V-24) y
+// la ÚNICA que respeta los periodos editados de la nota [a]. Con `defaultTrainingPeriods` directo,
+// esta pantalla mostraría un nivel distinto del que juzga el validador.
 function nivelDe(residente) {
-  const fin = residente.fechaFin || addDays(addYears(residente.fechaInicio, 4), -1);
-  return levelOn(defaultTrainingPeriods(residente.fechaInicio, fin), todayISO());
+  return levelOn(periodsOfResident(residente), todayISO());
 }
 
 
