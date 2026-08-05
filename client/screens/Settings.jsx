@@ -61,6 +61,14 @@ function SettingsScreen() {
         <Btn onClick={() => setTab("datos-servicio")} color={COLOR.bluePale} textColor={COLOR.blueDark}>Ver / cargar →</Btn>
       </Card>
 
+      <Card title="Residentes y periodos">
+        <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
+          Las fechas de cada residente, de las que se deriva su nivel R1–R4, y sus periodos
+          formativos por si una baja larga ha retrasado una promoción (nota [a] de la normativa).
+        </div>
+        <Btn onClick={() => setTab("residentes")} color={COLOR.bluePale} textColor={COLOR.blueDark}>Ver / corregir →</Btn>
+      </Card>
+
       <Card title="Responsable del contaje">
         <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
           Mandato anual (enero→enero) de un R3: voluntariado, sorteo auditable e historial.

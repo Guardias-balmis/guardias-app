@@ -52,6 +52,15 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
       call({ action: "altaResidente", ...identidad, nombre, fechaInicio, fechaFin }),
     whoami: () => authed("whoami"),
     listResidentes: () => authed("listResidentes"),
+    /**
+     * Fechas y periodos formativos (nota [a] de la normativa, V-24). Las tres exigen el permiso del
+     * ciclo en el servidor: el retraso de una promoción lo decide tutoría, no el propio residente.
+     * `periodos` viaja en la forma de la TABLA (`{anio,fechaInicio,fechaFin}`); el router la traduce
+     * a la del dominio (`{year,start,end}`), que es la que vuelve en `listResidentes`.
+     */
+    editarResidente: (residenteId, { fechaInicio, fechaFin } = {}) => authed("editarResidente", { residenteId, fechaInicio, fechaFin }),
+    guardarPeriodos: (residenteId, periodos) => authed("guardarPeriodos", { residenteId, periodos }),
+    restaurarPeriodos: (residenteId) => authed("restaurarPeriodos", { residenteId }),
     listAsignaciones: (anio, mes) => authed("listAsignaciones", { anio, mes }),
     listAsignacionesRango: (desde, hasta) => authed("listAsignacionesRango", { desde, hasta }),
     guardarAsignaciones: (cambios) => authed("guardarAsignaciones", { cambios }),
