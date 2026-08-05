@@ -12,17 +12,10 @@
 //    recomputable/auditable a partir del registro guardado.
 
 import { addDays, toISO } from "./calendar.js";
-import { defaultTrainingPeriods, levelOn } from "./residents.js";
+import { periodsOfResident, levelOn } from "./residents.js";
 
 const err = (detalle, extra = {}) => ({ invariante: "INV-14", severidad: "error", detalle, ...extra });
 
-// Mismo patrón que validate.js/periodsOf: usa periodos editados si el residente los trae
-// (bajas, nota [a]), si no los genera por defecto a partir de fechaInicio/fechaFin.
-function periodsOf(residente) {
-  if (residente.periodos) return residente.periodos;
-  const fin = residente.fechaFin || addDays(toISO(Number(residente.fechaInicio.slice(0, 4)) + 4, Number(residente.fechaInicio.slice(5, 7)), Number(residente.fechaInicio.slice(8, 10))), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
 
 /**
  * Residentes con nivel R3 en `periodoInicio` (candidatos naturales al mandato), en orden
@@ -34,7 +27,7 @@ function periodsOf(residente) {
  */
 export function eligibleCandidates(residentes, periodoInicio) {
   return residentes
-    .filter((r) => levelOn(periodsOf(r), periodoInicio) === "R3")
+    .filter((r) => levelOn(periodsOfResident(r), periodoInicio) === "R3")
     .map((r) => r.id)
     .sort();
 }
@@ -95,7 +88,7 @@ export function validateResponsible(responsable, ctx) {
     return violations;
   }
 
-  if (levelOn(periodsOf(titular), responsable.periodoInicio) !== "R3") {
+  if (levelOn(periodsOfResident(titular), responsable.periodoInicio) !== "R3") {
     violations.push(err(
       `${responsable.residenteId} no tiene nivel R3 en ${responsable.periodoInicio} (el mandato exige R3 al inicio del periodo)`,
       { residenteId: responsable.residenteId, fecha: responsable.periodoInicio }

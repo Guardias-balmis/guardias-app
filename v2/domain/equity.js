@@ -18,6 +18,7 @@ import { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow, br
 import { tally } from "./tally.js";
 import { absences, DESCUENTA_DISPONIBILIDAD } from "./absences.js";
 import { accumulatedTally } from "./accumulate.js";
+import { periodsOfResident } from "./residents.js";
 
 const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "dobletes"];
 // Los tres códigos que ocupan puesto. El 3P queda fuera a propósito (INV-4): es voluntario, así
@@ -269,7 +270,10 @@ export function validateQuarterClose(ctx) {
   for (const r of residentes) {
     // Un residente que solo estaba parte del trimestre (alta a mitad, o R4 que termina) se
     // compara sobre la parte que le tocaba, no sobre el trimestre entero.
-    const presente = intersect(win, { start: r.fechaInicio, end: r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1) });
+    // El rango de presencia sale de los periodos (V-24), no de reconstruir `fechaInicio +4 años`:
+    // con los periodos editados de la nota [a] el primero y el último son los que mandan.
+    const suyos = periodsOfResident(r);
+    const presente = intersect(win, { start: suyos[0].start, end: suyos[suyos.length - 1].end });
     if (!presente) continue;
     const diasPresente = daysInclusive(presente.start, presente.end);
     const disponibles = availableDays(presente, absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD }));
@@ -304,12 +308,20 @@ export function validateQuarterClose(ctx) {
   return violations;
 }
 
+/**
+ * La ventana del año de residencia que CIERRA en este mes, o `null` si no cierra ninguno.
+ *
+ * Sale de `periodsOfResident` (unificación de V-24) y no de reconstruir el aniversario a mano.
+ * Antes iteraba `addYears(r.fechaInicio, k)`, lo que ignoraba **las dos** vías por las que un año
+ * de residencia puede no acabar en su aniversario nominal: `fechaFin` y los periodos editados de
+ * la nota [a]. Medido al unificar: con `fechaFin` nominal el resultado es idéntico mes a mes —o
+ * sea, para todos los residentes de hoy no cambia nada—, y donde cambia es donde estaba mal: un
+ * R4 que deja la residencia el 15 de marzo cerraba su año en MAYO, dos meses después de irse, con
+ * una ventana que se extendía más allá de su último día.
+ */
 function closingWindowThisMonth(r, mes, anio) {
-  for (let k = 1; k <= 4; k++) {
-    const cierre = addDays(addYears(r.fechaInicio, k), -1);
-    if (inMonth(cierre, mes, anio)) return { start: addYears(r.fechaInicio, k - 1), end: cierre };
-  }
-  return null;
+  const p = periodsOfResident(r).find((per) => inMonth(per.end, mes, anio));
+  return p ? { start: p.start, end: p.end } : null;
 }
 
 /** Fracción de disponibilidad = (días de la ventana − días de baja) / días de la ventana. */

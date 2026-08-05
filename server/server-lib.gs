@@ -383,8 +383,21 @@ var Router = (function () {
 const ASIG_KEY = (r) => `${r.fecha}|${r.residenteId}`;
 const PREF_KEY = (r) => `${r.residenteId}|${r.anio}|${r.mes}`;
 const CUAD_KEY = (r) => `${r.mes}|${r.anio}`;
+// Los periodos se corrigen REINSERTANDO las 4 filas (append-only), así que el estado actual es la
+// última fila por residente+año — nunca se reescribe ni se borra ninguna.
+const PERIODO_KEY = (r) => `${r.residenteId}|${r.anio}`;
 const EVENTO_TIPOS = new Set(["NAVIDAD", "DESPEDIDA"]); // los dos eventos del servicio (INV-10)
 const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA"]); // enum de motivos válidos (severidad mixta desde V-8: solo BAJA bloquea la asignación)
+// Códigos de asignación (spec.md §2 + `CODES_CYCLE` del cliente). El "" es el BORRADO explícito:
+// `readLatest("asignaciones", …, { emptyField: "codigo" })` lo usa para quitar una asignación sin
+// borrar la fila, así que la lista blanca tiene que admitirlo. Existe porque sin ella entraba
+// cualquier cadena y las erratas son MUDAS: una "g" minúscula no la reconoce ni `GUARDIA` (INV-1
+// da el día por descubierto) ni `tally` (no cuenta para nada), y nadie avisa.
+const ASIG_CODIGOS = new Set(["G", "GF", "GP", "3P", "V", "R", "B", ""]);
+// `origen` marca la guardia cedida o comprada, que INV-4 excluye de los seis ejes de INV-3.
+// `tally.js:15` lo evalúa por TRUTHINESS, así que una errata cualquiera —no solo un valor de otro
+// enum— saca la guardia del cómputo y de los totales de la pestaña publicada, en silencio.
+const ASIG_ORIGENES = new Set(["CEDIDA", "COMPRADA"]);
 
 /**
  * @param {string} rawBody  cuerpo crudo de la petición (JSON en text/plain)
@@ -416,12 +429,101 @@ function handleRequest(rawBody, deps) {
 
       case "validar":
         return authed(req, deps, () => {
-          const violaciones = deps.domain.validateMonth(req.cuadrante);
+          // Mismo tratamiento que en `marcarValidado` (V-22): aquí los bloqueos los manda el
+          // cliente, que los saca de `listBloqueos` — y esa acción devuelve también las filas con
+          // fecha ilegible, para que se puedan cancelar. Esta acción no llama a los cierres de
+          // equidad, así que no hay riesgo de excepción; lo que se evita es que INV-5 dé un
+          // veredicto a suerte sobre una fecha que no se puede leer, y lo que se gana es que
+          // `Calendar.jsx` —que valida por aquí— diga qué fila hay que arreglar en vez de callarse.
+          const cuadrante = req.cuadrante || {};
+          const { usables, corruptas } = partitionBloqueos(deps, cuadrante.bloqueos || []);
+          const violaciones = [
+            ...bloqueoCorruptoViolations(corruptas),
+            ...deps.domain.validateMonth({ ...cuadrante, bloqueos: usables }),
+          ];
           return { ok: true, violaciones, bloqueantes: violaciones.filter((v) => v.severidad === "error").length };
         });
 
       case "listResidentes":
-        return authed(req, deps, () => ({ ok: true, residentes: deps.store.readRecords("residentes") }));
+        return authed(req, deps, () => ({ ok: true, residentes: allResidentes(deps) }));
+
+      // Corregir las fechas de un residente. Hasta ahora `fechaInicio`/`fechaFin` solo se escribían
+      // en el alta (`handleAlta`) y no había forma de tocarlas después, lo que dejaba sin salida
+      // dentro de la app el caso que V-21 tuvo que degradar a `aviso`: una `fechaFin` mal teclada
+      // hacía que INV-1 avisara de una asignación «a quien no es residente asignable» sin que nadie
+      // pudiera arreglar la causa. Append-only: se reinserta la fila con el MISMO id (readLatest
+      // resuelve), nunca se reescribe.
+      case "editarResidente":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "corregir las fechas de un residente");
+          if (denegado) return denegado;
+          const actual = allResidentes(deps).find((r) => r.id === req.residenteId);
+          if (!actual) return { ok: false, error: "el residente no existe" };
+
+          const fechaInicio = req.fechaInicio || actual.fechaInicio;
+          const fechaFin = req.fechaFin || actual.fechaFin;
+          const malRango = validRango({ desde: fechaInicio, hasta: fechaFin }, deps);
+          if (malRango.ok === false) return malRango;
+
+          // El email y el nombre NO se tocan aquí: el email es la llave del login y cambiarlo por
+          // este camino dejaría a alguien fuera de la app sin que se note hasta que intente entrar.
+          deps.store.appendRecord("residentes", { ...actual, fechaInicio, fechaFin });
+          return { ok: true, residenteId: req.residenteId, fechaInicio, fechaFin };
+        });
+
+      // Periodos formativos editados (nota [a] de la normativa: «los periodos generados son
+      // editables después»). Es el dato que permite expresar que una baja larga RETRASA la
+      // promoción — y por eso lo escribe quien reparte y no el propio residente: el retraso lo
+      // decide tutoría, no se deriva de la tabla `bloqueos` (una baja de dos semanas no retrasa
+      // nada, y adivinarlo cambiaría el nivel de alguien sin que nadie lo haya decidido).
+      case "guardarPeriodos":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "editar los periodos formativos de un residente");
+          if (denegado) return denegado;
+          if (!allResidentes(deps).some((r) => r.id === req.residenteId)) {
+            return { ok: false, error: "el residente no existe" };
+          }
+          if (!Array.isArray(req.periodos)) return { ok: false, error: "periodos debe ser una lista de 4" };
+
+          // Forma de la tabla → forma del dominio, para poder validar con el dominio. La traducción
+          // inversa la hace `allResidentes`; que las dos vivan en este fichero es a propósito.
+          const enDominio = req.periodos.map((p) => ({ year: Number(p.anio), start: p.fechaInicio, end: p.fechaFin }));
+          for (const p of enDominio) {
+            const malRango = validRango({ desde: p.start, hasta: p.end }, deps);
+            if (malRango.ok === false) return { ok: false, error: `periodo R${p.year}: ${malRango.error}` };
+          }
+          // `validateTrainingPeriods` existe justo para esto y no la llamaba NADIE (exactamente 4,
+          // años 1..4 en orden, sin solapes; los huecos SÍ se permiten, que es S-3: una baja
+          // retrasa la promoción, no des-promociona).
+          const errores = deps.domain.validateTrainingPeriods(enDominio);
+          if (errores.length) return { ok: false, error: errores.join("; ") };
+
+          // Las 4 filas de golpe (`appendRecords`, un solo lock) y con el id derivado de
+          // residente+año: reinsertar el mismo par SUSTITUYE por `readLatest`, sin borrar nada.
+          deps.store.appendRecords("periodos", enDominio.map((p) => ({
+            id: `${req.residenteId}|${p.year}`, residenteId: req.residenteId,
+            anio: p.year, fechaInicio: p.start, fechaFin: p.end,
+          })));
+          return { ok: true, residenteId: req.residenteId, periodos: enDominio };
+        });
+
+      // Volver a los periodos derivados de las fechas: reinserta las 4 filas con el rango que
+      // `defaultTrainingPeriods` calcularía. Sin esto, unos periodos mal editados serían
+      // irreversibles (la tabla es append-only y `allResidentes` exige las 4), y eso es un bloqueo
+      // sin salida dentro de la herramienta — lo mismo que V-16 tuvo que arreglar de urgencia.
+      case "restaurarPeriodos":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "restaurar los periodos formativos de un residente");
+          if (denegado) return denegado;
+          const actual = allResidentes(deps).find((r) => r.id === req.residenteId);
+          if (!actual) return { ok: false, error: "el residente no existe" };
+          const derivados = deps.domain.periodsOfResident({ fechaInicio: actual.fechaInicio, fechaFin: actual.fechaFin });
+          deps.store.appendRecords("periodos", derivados.map((p) => ({
+            id: `${req.residenteId}|${p.year}`, residenteId: req.residenteId,
+            anio: p.year, fechaInicio: p.start, fechaFin: p.end,
+          })));
+          return { ok: true, residenteId: req.residenteId, periodos: derivados };
+        });
 
       case "listAsignaciones":
         return authed(req, deps, () => {
@@ -436,7 +538,8 @@ function handleRequest(rawBody, deps) {
       // aunque empiece en un mes anterior) y para el contaje acumulado del generador (§4).
       case "listAsignacionesRango":
         return authed(req, deps, () => {
-          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+          const rango = validRango(req, deps);
+          if (rango.ok === false) return rango;
           const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
           return { ok: true, asignaciones: all.filter((a) => a.fecha >= req.desde && a.fecha <= req.hasta) };
         });
@@ -453,6 +556,13 @@ function handleRequest(rawBody, deps) {
           } catch (e) {
             return { ok: false, error: "cambio con fecha inválida: " + e.message };
           }
+          // Listas blancas de `codigo` y `origen`: la tabla es append-only y el Sheet se edita a
+          // mano, así que lo que entre mal se queda para siempre y encima no se nota (ver el
+          // comentario de ASIG_CODIGOS/ASIG_ORIGENES).
+          const malCodigo = req.cambios.find((c) => !ASIG_CODIGOS.has(c.codigo || ""));
+          if (malCodigo) return { ok: false, error: `código de asignación inválido: ${JSON.stringify(malCodigo.codigo)} (válidos: ${[...ASIG_CODIGOS].filter(Boolean).join(", ")})` };
+          const malOrigen = req.cambios.find((c) => c.origen !== undefined && c.origen !== "" && !ASIG_ORIGENES.has(c.origen));
+          if (malOrigen) return { ok: false, error: `origen inválido: ${JSON.stringify(malOrigen.origen)} (válidos: ${[...ASIG_ORIGENES].join(", ")})` };
           const meses = [...new Map(fechas.map((f) => [`${f.year}-${f.month}`, f])).values()]
             .map((f) => ({ mes: f.month, anio: f.year, estado: currentCuadranteEstado(deps, f.month, f.year) }));
           const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
@@ -505,20 +615,21 @@ function handleRequest(rawBody, deps) {
       case "crearBloqueo":
         return authed(req, deps, (session) => {
           if (!BLOQ_MOTIVOS.has(req.motivo)) return { ok: false, error: "motivo inválido" };
-          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+          const rango = validRango(req, deps);
+          if (rango.ok === false) return rango;
 
           let residenteId = session.sub;
           if (req.residenteId && req.residenteId !== session.sub) {
             const denegado = requireCicloPermiso(deps, session, "registrar la ausencia de otro residente");
             if (denegado) return denegado;
-            if (!deps.store.readRecords("residentes").some((r) => r.id === req.residenteId)) {
+            if (!allResidentes(deps).some((r) => r.id === req.residenteId)) {
               return { ok: false, error: "el residente no existe" };
             }
             residenteId = req.residenteId;
           }
 
           const id = deps.store.appendRecord("bloqueos", {
-            residenteId, desde: req.desde, hasta: req.hasta, motivo: req.motivo,
+            residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo,
             provincia: req.provincia, guardiasEnCentroExterno: req.guardiasEnCentroExterno, activo: true,
           });
           return { ok: true, id, residenteId };
@@ -539,8 +650,9 @@ function handleRequest(rawBody, deps) {
       // las que solapan el mes que se está validando.
       case "listBloqueosRango":
         return authed(req, deps, () => {
-          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
-          return { ok: true, bloqueos: bloqueosInRange(deps, allBloqueos(deps), req.desde, req.hasta) };
+          const rango = validRango(req, deps);
+          if (rango.ok === false) return rango;
+          return { ok: true, bloqueos: bloqueosInRange(deps, allBloqueos(deps), rango.desde, rango.hasta) };
         });
 
       // FESTIVOS (S-4: datos de entrada, nunca derivados). Lectura por RANGO y abierta a cualquier
@@ -608,7 +720,7 @@ function handleRequest(rawBody, deps) {
       case "estadoResponsable":
         return authed(req, deps, (session) => {
           if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
-          const residentes = deps.store.readRecords("residentes");
+          const residentes = allResidentes(deps);
           return {
             ok: true,
             ...periodoResponsable(deps, req.anio, session, residentes),
@@ -621,7 +733,7 @@ function handleRequest(rawBody, deps) {
           if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
           const { periodoInicio } = mandatoPeriod(req.anio);
           if (currentMandate(deps, periodoInicio)) return { ok: false, error: "el responsable de ese periodo ya está decidido" };
-          const residentes = deps.store.readRecords("residentes");
+          const residentes = allResidentes(deps);
           const elegibles = deps.domain.eligibleCandidates(residentes, periodoInicio);
           if (!elegibles.includes(session.sub)) return { ok: false, error: "no tienes nivel R3 en ese periodo" };
           deps.store.appendRecord("voluntariosResponsable", { residenteId: session.sub, periodoInicio, activo: true });
@@ -649,7 +761,7 @@ function handleRequest(rawBody, deps) {
           if (denegado) return denegado;
           const { periodoInicio, periodoFin } = mandatoPeriod(req.anio);
           if (currentMandate(deps, periodoInicio)) return { ok: false, error: "el responsable de ese periodo ya está decidido" };
-          const residentes = deps.store.readRecords("residentes");
+          const residentes = allResidentes(deps);
           const elegibles = deps.domain.eligibleCandidates(residentes, periodoInicio);
           if (elegibles.length === 0) return { ok: false, error: "no hay ningún R3 elegible para ese periodo" };
           const voluntarios = activeVolunteers(deps, periodoInicio);
@@ -756,7 +868,7 @@ function handleRequest(rawBody, deps) {
           if (!evento) return { ok: false, error: "evento no encontrado" };
           if (evento.sorteoId) return { ok: false, error: "ese evento ya está sorteado" };
 
-          const residentes = deps.store.readRecords("residentes");
+          const residentes = allResidentes(deps);
           const r2 = residentes
             .filter((r) => deps.domain.levelOn(deps.domain.periodsOfResident(r), evento.fecha) === "R2")
             .map((r) => r.id);
@@ -792,7 +904,7 @@ function handleRequest(rawBody, deps) {
           return {
             ok: true,
             cola: deps.domain.imaginariaQueue({
-              residentes: deps.store.readRecords("residentes"),
+              residentes: allResidentes(deps),
               coberturas: activeImaginaria(deps),
               asignaciones: todas.filter((a) => a.fecha >= desde && a.fecha <= hasta),
               grupo: req.grupo, fechaIncidencia: req.fecha,
@@ -806,7 +918,7 @@ function handleRequest(rawBody, deps) {
           if (denegado) return denegado;
           if (req.grupo !== "MAYOR" && req.grupo !== "PEQUENO") return { ok: false, error: "grupo inválido (MAYOR o PEQUENO)" };
           try { deps.domain.parseISO(req.fechaIncidencia); } catch (e) { return { ok: false, error: "fecha inválida: " + e.message }; }
-          if (!deps.store.readRecords("residentes").some((r) => r.id === req.residenteId)) {
+          if (!allResidentes(deps).some((r) => r.id === req.residenteId)) {
             return { ok: false, error: "el residente no existe" };
           }
           // NO se exige que sea el primero de la cola: la incidencia se resuelve por teléfono y
@@ -860,6 +972,7 @@ function handleRequest(rawBody, deps) {
           // tercer puesto).
           const snap = monthSnapshot(deps);
           const violaciones = [
+            ...bloqueoCorruptoViolations(snap.bloqueosCorruptos),
             ...deps.domain.validateMonth(buildCuadranteCtx(deps, req.mes, req.anio, snap)),
             ...closeViolations(deps, req.mes, req.anio, snap),
             ...deps.domain.validateThirdPost(buildThirdPostCtx(deps, req.mes, req.anio, snap)),
@@ -871,9 +984,13 @@ function handleRequest(rawBody, deps) {
           return { ok: true, estado: "VALIDADO", violaciones };
         });
 
-      // Fase 7.1 (decisión V-11a): publicar proyecta de verdad al Sheet legible (pestaña
-      // mensual + Resumen) en el MISMO paso — "publicar" pasa a significar publicar de
-      // verdad. La proyección ocurre ANTES de escribir el estado: ver projectCuadranteToSheets.
+      // Fase 7.1 (decisión V-11a): publicar proyecta de verdad al Sheet legible en el MISMO paso
+      // — "publicar" pasa a significar publicar de verdad. Desde la Fase 7.2 son TRES hojas
+      // (mensual + Resumen del curso + Contaje Trimestral del curso), así que la ventana en la que
+      // el Sheet puede quedar a medias es de tres `rebuildSheet` y no de dos. Sigue sin ser una
+      // transacción a propósito: cada uno es idempotente (shadow-swap) y volver a pulsar Publicar
+      // lo sana, que es lo único que puede hacer alguien sin administrador. La proyección ocurre
+      // ANTES de escribir el estado: ver projectCuadranteToSheets.
       case "publicarCuadrante":
         return authed(req, deps, (session) => {
           const denegado = requireCicloPermiso(deps, session, "publicar el cuadrante");
@@ -923,7 +1040,7 @@ function handleLogin(req, deps) {
   const v = verifyIdentity(req, deps);
   if (!v.ok) return { ok: false, error: v.reason };
 
-  const residente = deps.store.readRecords("residentes").find((r) => (r.email || "").toLowerCase() === v.email);
+  const residente = allResidentes(deps).find((r) => (r.email || "").toLowerCase() === v.email);
   if (!residente) {
     // El email SÍ quedó verificado con Google (aud/iss/email_verified/exp ya comprobados);
     // se emite un token de corta vida para que el cliente pueda completar el alta sin
@@ -955,7 +1072,7 @@ function handleAlta(req, deps) {
 
   if (!req.nombre || !req.fechaInicio || !req.fechaFin) return { ok: false, error: "nombre, fechaInicio y fechaFin son obligatorios" };
 
-  const yaExiste = deps.store.readRecords("residentes").some((r) => (r.email || "").toLowerCase() === email);
+  const yaExiste = allResidentes(deps).some((r) => (r.email || "").toLowerCase() === email);
   if (yaExiste) return { ok: false, error: "ese email ya está vinculado a un residente" };
 
   const id = deps.store.appendRecord("residentes", { nombre: req.nombre, email, fechaInicio: req.fechaInicio, fechaFin: req.fechaFin });
@@ -967,7 +1084,20 @@ function monthPrefix(anio, mes) {
   return `${anio}-${String(mes).padStart(2, "0")}`;
 }
 
-/** Rango [desde,hasta] validado como ISO de verdad, no por orden lexicográfico. */
+/**
+ * Rango [desde,hasta] validado como ISO de verdad, no por orden lexicográfico. Devuelve
+ * `{desde,hasta}` si está bien, o el propio `{ok:false,error}` que debe devolver la acción.
+ *
+ * Es el ÚNICO sitio donde se valida un rango de fechas de entrada: lo comparten `crearBloqueo`,
+ * `listBloqueosRango`, `listAsignacionesRango` y `listFestivosRango`/`listEventosRango`. Las tres
+ * primeras tenían su propio `!desde || !hasta || desde > hasta` en línea, que es una comparación
+ * LEXICOGRÁFICA de lo que mandara el cliente y colaba cualquier cosa cuyo primer carácter ordenase
+ * por debajo: `"30/02/2027"`, `"2027-13-45"`, `"9999"` y hasta un objeto entraron en la sonda del
+ * 2026-08-02. En una tabla append-only sobre un Sheet editable a mano eso no es un detalle: una
+ * fila BAJA con `desde` no-ISO se descarta sola del rango de `absences` —que compara cadenas a
+ * propósito, V-19— y **desactiva INV-5 en silencio**. Medido: con `desde` válida, validar el mes
+ * emitía 31 violaciones de INV-5 sobre la baja; con `desde="30/02/2026"`, cero.
+ */
 function validRango(req, deps) {
   if (!req.desde || !req.hasta) return { ok: false, error: "rango de fechas inválido" };
   try {
@@ -1000,9 +1130,93 @@ function activeImaginaria(deps) {
   return deps.store.readLatest("imaginaria", (r) => r.id).filter((c) => c.activo === true);
 }
 
+/**
+ * Los residentes, con sus periodos formativos EDITADOS ya montados en `residente.periodos`.
+ *
+ * Lector único a propósito, y es el punto entero de la fase 2 de V-24: `periodsOfResident` solo
+ * respeta los periodos editados si el residente los TRAE, así que hidratar en unas acciones y no en
+ * otras sería peor que no hidratar — daría un nivel distinto según por qué endpoint entres. Había
+ * trece `readRecords("residentes")` sueltos en este fichero.
+ *
+ * La tabla guarda `{id, residenteId, anio, fechaInicio, fechaFin}` y el dominio consume
+ * `{year, start, end}`: la traducción de forma vive aquí y solo aquí. Nadie la había escrito, y era
+ * el fallo silencioso más probable de este punto — unos `periodos` con las claves equivocadas no
+ * lanzan, simplemente hacen que `levelOn` lea `undefined` y devuelva basura.
+ *
+ * Un residente sin las 4 filas NO recibe la clave, así que `periodsOfResident` sigue derivando de
+ * las fechas: es el caso normal y el que tiene todo el mundo hoy. Las incompletas se ignoran
+ * ENTERAS en vez de montar unos periodos a medias que nadie podría diagnosticar; quien las escribe
+ * (`guardarPeriodos`) ya no deja que eso ocurra, pero el Sheet se edita a mano.
+ */
+function allResidentes(deps) {
+  const porResidente = new Map();
+  for (const f of deps.store.readLatest("periodos", PERIODO_KEY)) {
+    if (!porResidente.has(f.residenteId)) porResidente.set(f.residenteId, []);
+    porResidente.get(f.residenteId).push({ year: Number(f.anio), start: f.fechaInicio, end: f.fechaFin });
+  }
+  // `readLatest` y no `readRecords`: `residentes` es append-only como todo lo demás, y hasta que
+  // existió `editarResidente` nadie reinsertaba una fila, así que leer todas y coger la primera
+  // daba igual. Con la corrección de fechas ya no: `readRecords` devolvería la fila VIEJA y la
+  // edición no tendría ningún efecto visible. Lo destapó el test, no la lectura del código.
+  return deps.store.readLatest("residentes", (r) => r.id).map((r) => {
+    const suyos = (porResidente.get(r.id) || []).sort((a, b) => a.year - b.year);
+    if (suyos.length !== 4) return r;
+    return { ...r, periodos: suyos };
+  });
+}
+
 /** Estado actual de la tabla de bloqueos (última reinserción gana, como cancelarBloqueo). */
 function allBloqueos(deps) {
   return deps.store.readLatest("bloqueos", (r) => r.id);
+}
+
+/**
+ * Parte las ausencias ACTIVAS en las que se pueden usar y las que tienen una fecha que no es ISO.
+ *
+ * `crearBloqueo` ya no deja entrar una fecha mala, pero el Sheet es datastore y entregable a la
+ * vez —se edita a mano— y las tablas son append-only, así que una fila corrupta puede estar ya
+ * escrita y no se va a borrar nunca. Sin partirla, el problema NO es que el validador reviente
+ * (`validateMonth` solo compara cadenas y nunca lanza por esto): es que **el veredicto de INV-5
+ * sale a suerte**, según por dónde ordene la basura. Medido el 2026-08-02 con una guardia
+ * asignada encima de la baja:
+ *  - `hasta="no-es-fecha"` o `hasta="30/02/2028"` → INV-5 emite, pero por casualidad: la cadena
+ *    basura ordena por encima del día, así que el rango "contiene" la fecha de puro accidente;
+ *  - `desde="30/02/2027"` → INV-5 emite CERO. `absences` descarta la fila del rango —compara
+ *    cadenas a propósito, V-19— y la baja médica deja de proteger EN SILENCIO.
+ * Y los cierres de equidad de INV-3, que sí hacen aritmética de fechas, hacían que
+ * `marcarValidado` respondiera «Fecha ISO inválida: "…"» sin decir de qué tabla, de quién ni cuál.
+ *
+ * La política (decisión V-22): apartarla del contexto —para que ningún invariante la juzgue con
+ * una fecha inventada— y emitir un `error` que la nombre. Es `error` y no `aviso` porque no es una regla nueva que
+ * bloquea: es INV-5 diciendo que no puede comprobarse, ya bloqueaba antes con un mensaje ciego, y
+ * SÍ tiene salida dentro de la herramienta —cancelar la fila y recrearla, y desde V-19 eso vale
+ * también para la ausencia de otro—. Por eso las lecturas de UI la siguen mostrando (ver
+ * `activeBloqueosInMonth`): apartarla también de ahí la volvería incancelable.
+ */
+function partitionBloqueos(deps, bloqueos) {
+  const usables = [];
+  const corruptas = [];
+  for (const b of deps.domain.absences(bloqueos)) { // solo activas: una cancelada ya no molesta
+    try {
+      deps.domain.parseISO(b.desde);
+      deps.domain.parseISO(b.hasta);
+      usables.push(b);
+    } catch (e) {
+      corruptas.push({ bloqueo: b, motivo: e.message });
+    }
+  }
+  return { usables, corruptas };
+}
+
+/** Un `error` por ausencia con fecha ilegible, nombrando la fila para que se pueda cancelar. */
+function bloqueoCorruptoViolations(corruptas) {
+  return corruptas.map(({ bloqueo, motivo }) => ({
+    invariante: "INV-5",
+    severidad: "error",
+    residenteId: bloqueo.residenteId,
+    detalle: `Ausencia ${bloqueo.motivo || "(sin motivo)"} con fecha ilegible (${bloqueo.desde} → ${bloqueo.hasta}): ${motivo}. `
+      + `Mientras siga así no se puede comprobar si hay guardias asignadas sobre ella; cancélala (id ${bloqueo.id}) y vuelve a crearla.`,
+  }));
 }
 
 /**
@@ -1015,11 +1229,17 @@ function bloqueosInRange(deps, bloqueos, desde, hasta) {
   return deps.domain.absences(bloqueos, { desde, hasta });
 }
 
-/** Bloqueos activos (de cualquier residente) que solapan el mes dado. */
+/**
+ * Bloqueos activos (de cualquier residente) que solapan el mes dado, MÁS las filas con fecha
+ * ilegible. Las corruptas se añaden en todos los meses a propósito: con la fecha ilegible no se
+ * puede saber en cuál caen, y esconderlas las volvería incancelables desde la UI, que es la única
+ * salida que tiene quien se las encuentre (ver `partitionBloqueos`).
+ */
 function activeBloqueosInMonth(deps, anio, mes) {
   const prefix = monthPrefix(anio, mes);
+  const { usables, corruptas } = partitionBloqueos(deps, allBloqueos(deps));
   // Tope superior lexicográfico holgado: "-31" existe en ISO aunque el mes tenga 28/30 días.
-  return bloqueosInRange(deps, allBloqueos(deps), `${prefix}-01`, `${prefix}-31`);
+  return [...bloqueosInRange(deps, usables, `${prefix}-01`, `${prefix}-31`), ...corruptas.map((c) => c.bloqueo)];
 }
 
 /**
@@ -1029,10 +1249,16 @@ function activeBloqueosInMonth(deps, anio, mes) {
  * dos veces, y en Apps Script cada lectura es una llamada real a Sheets.
  */
 function monthSnapshot(deps) {
+  // Las ausencias con fecha ilegible se apartan aquí y viajan en `bloqueosCorruptos`: si entraran
+  // en el contexto, INV-5 las juzgaría por comparación de cadenas (veredicto a suerte) y los
+  // cierres de equidad tumbarían la petición con un «Fecha ISO inválida» que no dice de qué fila
+  // habla (decisión V-22, ver `partitionBloqueos`).
+  const { usables, corruptas } = partitionBloqueos(deps, allBloqueos(deps));
   return {
-    residentes: deps.store.readRecords("residentes"),
+    residentes: allResidentes(deps),
     asignaciones: deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }),
-    bloqueos: allBloqueos(deps),
+    bloqueos: usables,
+    bloqueosCorruptos: corruptas,
     festivos: allFestivos(deps).filter((f) => f.activo === true),
     eventos: activeEventos(deps),
   };
@@ -1170,7 +1396,10 @@ function requireCicloPermiso(deps, session, accion) {
   if (mandato) {
     return mandato.residenteId === session.sub ? null : { ok: false, error: `solo el Responsable puede ${accion}` };
   }
-  const residente = deps.store.readRecords("residentes").find((r) => r.id === session.sub);
+  // Hidratado: `groupOnDate` deriva MAYOR/PEQUENO de los periodos, así que el permiso del ciclo
+  // (V-16) depende de los editados. Leerlo crudo aquí sería justo la incoherencia por acción que
+  // la fase 2 de V-24 viene a quitar — alguien sería Mayor para validar y Pequeño para el resto.
+  const residente = allResidentes(deps).find((r) => r.id === session.sub);
   const grupo = residente ? deps.domain.groupOnDate(residente, deps.today) : null;
   if (grupo !== "MAYOR") {
     return { ok: false, error: `no hay Responsable designado para este periodo: hasta que se decida, solo un R3 o R4 puede ${accion}` };
@@ -1224,7 +1453,7 @@ function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps)) {
  * y de bajo impacto (~15 usuarios, latencia de Apps Script) frente a la complejidad de evitarla.
  */
 function projectCuadranteToSheets(deps, mes, anio) {
-  const residentes = deps.store.readRecords("residentes");
+  const residentes = allResidentes(deps);
   const prefix = monthPrefix(anio, mes);
   const asignacionesDelMes = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" })
     .filter((a) => a.fecha.startsWith(prefix));
@@ -1234,10 +1463,18 @@ function projectCuadranteToSheets(deps, mes, anio) {
 
   const otrosPublicados = deps.store.readLatest("cuadrantes", CUAD_KEY).filter((r) => r.estado === "PUBLICADO");
   const publishedMonths = [...otrosPublicados.map((r) => ({ mes: r.mes, anio: r.anio })), { mes, anio }];
-  const resumen = deps.domain.buildResumenRows({ residentes, publishedMonths });
+
+  // Las dos hojas agregadas son del CURSO académico del mes que se publica (decisión V-25), y lo
+  // llevan en el nombre: publicar una corrección de un curso anterior republica LA HOJA DE ESE
+  // CURSO, sin tocar la del actual. Con un nombre fijo se habrían pisado.
+  const curso = deps.domain.academicYearOf(deps.domain.toISO(anio, mes, 1));
+  const resumen = deps.domain.buildResumenRows({ residentes, publishedMonths, curso });
   deps.store.rebuildSheet(resumen.sheetName, resumen.rows);
 
-  return { mensual: mensual.sheetName, resumen: resumen.sheetName };
+  const contaje = deps.domain.buildContajeTrimestralRows({ residentes, publishedMonths, curso });
+  deps.store.rebuildSheet(contaje.sheetName, contaje.rows);
+
+  return { mensual: mensual.sheetName, resumen: resumen.sheetName, contaje: contaje.sheetName };
 }
 
 /**

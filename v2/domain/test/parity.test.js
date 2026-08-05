@@ -28,8 +28,10 @@ import {
   yearCloseHistoryStart, yearCloseFestivosRange, buildYearCloseContext,
 } from "../equity.js";
 import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings } from "../cuadrante.js";
-import { buildMonthSheetRows, buildResumenRows } from "../projection.js";
+import { buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows, cursoLabel } from "../projection.js";
+import { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible } from "../responsible.js";
 import { handleRequest as esmHandleRequest } from "../../../server/src/router.js";
+import { makeStore as esmMakeStore } from "../../../server/src/sheets-store.js";
 import { issueSession } from "../../../server/src/session.js";
 
 // ── Fixtures deterministas que ejercitan cada función pública ──
@@ -84,6 +86,22 @@ const EQ_CTX = {
 // El 8-dic-2026 es martes y el 6-dic domingo → el lunes 7 es puente. Cae en el año natural
 // ANTERIOR al del cierre de mayo-2027: ejercita el cruce de dos años del eje `puentesLibres`.
 const EQ_FESTIVOS = ["2026-12-06", "2026-12-08", "2026-12-25", "2027-01-01"];
+// Meses publicados que tocan T1 (julio) y T3 (dic-2026 + feb-2027, que cruza el año natural):
+// si el bundle agrupara los trimestres por año de calendario en vez de por mes, esto lo cazaría.
+const PUB_MESES = [{ mes: 7, anio: 2026 }, { mes: 12, anio: 2026 }, { mes: 2, anio: 2027 }];
+
+// INV-14: en 2027-01-01 ambos residentes de EQ_CTX son R3, así que son los dos elegibles.
+// `RESP_MAL` cambia el titular por uno que NO es R3 en esa fecha y rompe el enero-a-enero, para
+// que la paridad cubra también la rama de violación (el sorteo reproducible y la rama VOLUNTARIO
+// las cubren `RESP_OK` y `resolveMethod` en runAll).
+const RESP_SEMILLA = "2027-01-01|sorteo";
+const RESP_OK = {
+  periodoInicio: "2027-01-01", periodoFin: "2028-01-01", metodo: "SORTEO",
+  voluntarios: [], candidatos: ["r3a", "r3b"], semilla: RESP_SEMILLA,
+};
+const RESP_MAL = { ...RESP_OK, residenteId: "r1nuevo", periodoFin: "2027-12-31" };
+const RESP_RESIDENTES = [...EQ_CTX.residentes, { id: "r1nuevo", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }];
+
 // Cierre de T2 (nov-2026) con diferencia 2 en totales → un aviso (P-8, decisión V-13).
 const QC_CTX = {
   mes: 11, anio: 2026,
@@ -142,7 +160,24 @@ function runAll(api) {
     canEdit: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canEdit),
     stateAfterEdit: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.stateAfterEdit),
     monthSheet: api.buildMonthSheetRows({ anio: MONTH_CTX.anio, mes: MONTH_CTX.mes, residentes: MONTH_CTX.residentes, asignaciones: MONTH_CTX.asignaciones }),
-    resumen: api.buildResumenRows({ residentes: MONTH_CTX.residentes, publishedMonths: [{ mes: MONTH_CTX.mes, anio: MONTH_CTX.anio }] }),
+    // Las dos hojas agregadas son del CURSO académico (V-25): julio-2026 pertenece al 2026-27.
+    resumen: api.buildResumenRows({ residentes: MONTH_CTX.residentes, publishedMonths: PUB_MESES, curso: 2026 }),
+    contaje: api.buildContajeTrimestralRows({ residentes: MONTH_CTX.residentes, publishedMonths: PUB_MESES, curso: 2026 }),
+    cursoLabel: [api.cursoLabel(2026), api.cursoLabel(2099)],
+    // INV-14 (`responsible.js`). El sorteo se recomputa aquí y su ganador alimenta
+    // `validateResponsible`, que es como lo encadena el router (:286-296): si el bundle no
+    // trae el módulo, el `api.*` es undefined y esto revienta en vez de pasar en verde.
+    responsible: (() => {
+      const elegibles = api.eligibleCandidates(RESP_RESIDENTES, "2027-01-01");
+      const sorteo = api.resolveMethod(elegibles, []);
+      const unVoluntario = api.resolveMethod(elegibles, ["r3b"]);
+      const ganador = api.drawResponsible(sorteo.candidatos, RESP_SEMILLA);
+      return {
+        elegibles, sorteo, unVoluntario, ganador,
+        ok: api.validateResponsible({ ...RESP_OK, residenteId: ganador }, { residentes: RESP_RESIDENTES }),
+        mal: api.validateResponsible(RESP_MAL, { residentes: RESP_RESIDENTES }),
+      };
+    })(),
   };
 }
 
@@ -152,9 +187,10 @@ const esm = {
   trimesterWindow, validateQuarterClose, quarterCloseWindow, yearCloseHistoryStart, yearCloseFestivosRange,
   buildYearCloseContext, bridgesBetween,
   buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings,
-  buildMonthSheetRows, buildResumenRows,
+  buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows, cursoLabel,
   absences, isNearbyRotation, BLOQUEA_ASIGNACION, AUSENCIA_SIMULTANEA,
   imaginariaQueue, nextForImaginaria,
+  eligibleCandidates, resolveMethod, drawResponsible, validateResponsible,
 };
 
 // Carga el bundle en un ámbito global único, como hace Apps Script al concatenar los .gs.
@@ -166,7 +202,7 @@ function loadBundle(code) {
 
 test("el bundle expone la API pública esperada", () => {
   const Domain = loadBundle(buildBundle());
-  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "buildYearCloseContext", "yearCloseHistoryStart", "validateQuarterClose", "quarterCloseWindow", "trimesterWindow", "validateThirdPost", "levelOn", "groupOf", "groupOnDate", "periodsOfResident", "weekday", "canValidate", "equityWarnings", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows"]) {
+  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "buildYearCloseContext", "yearCloseHistoryStart", "validateQuarterClose", "quarterCloseWindow", "trimesterWindow", "validateThirdPost", "thirdPostHistoryStart", "levelOn", "groupOf", "groupOnDate", "periodsOfResident", "weekday", "bridgesBetween", "absences", "isNearbyRotation", "imaginariaQueue", "nextForImaginaria", "eligibleCandidates", "resolveMethod", "drawResponsible", "validateResponsible", "canValidate", "equityWarnings", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows", "buildContajeTrimestralRows", "cursoLabel"]) {
     assert.equal(typeof Domain[fn], "function", `Domain.${fn} debe ser función`);
   }
 });
@@ -222,6 +258,58 @@ test("PARIDAD servidor: Server.handleRequest del bundle == fuente ESM", () => {
   };
   const body = JSON.stringify({ action: "validar", session, cuadrante });
   assert.equal(JSON.stringify(Server.handleRequest(body, deps)), JSON.stringify(esmHandleRequest(body, deps)));
+});
+
+// `Server.makeStore` se invoca en server/Code.gs:142 DENTRO de `deps_()`, es decir en CADA
+// petición: si falta del bundle el fallo es total e inmediato en producción. La paridad de
+// `handleRequest` no lo sostiene, porque su `deps` de arriba no lleva `store` — así que sin este
+// test se podía quitar "sheets-store" de SERVER_MODULES y la suite seguía en verde (comprobado).
+test("PARIDAD servidor: Server.makeStore del bundle == fuente ESM", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(buildServerBundle(), ctx);
+  assert.equal(typeof ctx.Server.makeStore, "function");
+
+  // Fake de hoja en memoria (idéntico contrato al de server/test/sheets.test.js).
+  const fakeSS = () => {
+    const sheets = new Map();
+    const guard = (n) => { if (!sheets.has(n)) throw new Error(`hoja inexistente: ${n}`); };
+    return {
+      listSheets: () => [...sheets.keys()],
+      exists: (n) => sheets.has(n),
+      read: (n) => (sheets.get(n) || []).map((r) => r.slice()),
+      overwrite: (n, rows) => { guard(n); sheets.set(n, rows.map((r) => r.slice())); },
+      append: (n, rows) => { if (!sheets.has(n)) sheets.set(n, []); sheets.get(n).push(...rows.map((r) => r.slice())); },
+      createSheet: (n) => { sheets.set(n, []); },
+      deleteSheet: (n) => { guard(n); sheets.delete(n); },
+      renameSheet: (from, to) => { guard(from); sheets.set(to, sheets.get(from)); sheets.delete(from); },
+      _dump: () => [...sheets.entries()],
+    };
+  };
+
+  // Ejercita las cinco operaciones: cabecera automática, lote, borrado explícito por
+  // `emptyField` (last-row-wins de `readLatest`) y el shadow-swap de `rebuildSheet`.
+  const exercise = (makeStore) => {
+    const ss = fakeSS();
+    let n = 0;
+    const store = makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++n}` });
+    const ids = store.appendRecords("asignaciones", [
+      { fecha: "2026-07-15", residenteId: "ANA", codigo: "G", origen: "IA" },
+      { fecha: "2026-07-16", residenteId: "IVAN", codigo: "3P" },
+    ]);
+    const suelto = store.appendRecord("asignaciones", { fecha: "2026-07-16", residenteId: "IVAN", codigo: "" });
+    const key = (a) => `${a.fecha}|${a.residenteId}`;
+    store.rebuildSheet("Resumen", [["Residente", "Total"], ["ANA", 1]]);
+    return {
+      ids, suelto,
+      records: store.readRecords("asignaciones"),
+      latest: store.readLatest("asignaciones", key, { emptyField: "codigo" }),
+      latestSinFiltro: store.readLatest("asignaciones", key),
+      hojas: ss.listSheets(),
+      dump: ss._dump(),
+    };
+  };
+
+  assert.equal(JSON.stringify(exercise(ctx.Server.makeStore)), JSON.stringify(exercise(esmMakeStore)));
 });
 
 test("FRESCURA: los .gs comiteados están al día con la fuente", () => {

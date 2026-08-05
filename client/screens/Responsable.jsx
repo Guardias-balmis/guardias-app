@@ -117,7 +117,12 @@ function ResponsableScreen() {
         </Card>
       )}
 
-      {estado.siguiente && !estado.siguiente.mandato && (
+      {/* `estado?.` y no `estado.`: este bloque es hermano del ternario de arriba, no está dentro,
+          así que en el PRIMER render (`estado === null`, antes de que cargue `estadoResponsable`)
+          se evaluaba igual y lanzaba. Y una excepción en render desmonta el árbol entero: la
+          pantalla se quedaba en blanco para siempre, no un instante. Entró con V-16, que es lo que
+          añadió el bloque del próximo mandato. */}
+      {estado?.siguiente && !estado.siguiente.mandato && (
         <Card title={`🙋 Próximo mandato (${estado.siguiente.anio} → ${estado.siguiente.anio + 1})`}>
           <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 10 }}>
             Todavía sin decidir. Se decide ANTES de que empiece (1 de enero de {estado.siguiente.anio}), así que el

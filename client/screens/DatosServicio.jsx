@@ -12,8 +12,8 @@
 import { COLOR, S } from "./client/lib/design-tokens.js";
 import { parseFestivos } from "./client/lib/festivos-parse.js";
 import { puedeMoverCiclo } from "./client/lib/permisos.js";
-import { defaultTrainingPeriods, levelOn } from "./v2/domain/residents.js";
-import { addDays, addYears, bridgesOfMonth } from "./v2/domain/calendar.js";
+import { periodsOfResident, levelOn } from "./v2/domain/residents.js";
+import { bridgesOfMonth } from "./v2/domain/calendar.js";
 import { todayISO } from "./client/lib/dates.js";
 
 const { useState, useEffect, useMemo } = React;
@@ -23,9 +23,11 @@ const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "
 const fechaLarga = (iso) => `${Number(iso.slice(8, 10))} ${MESES[Number(iso.slice(5, 7)) - 1]}`;
 const TIPO_LABEL = { NAVIDAD: "Comida de Navidad", DESPEDIDA: "Despedida de R4" };
 
+// `periodsOfResident` y no `defaultTrainingPeriods`: es la derivación única del dominio (V-24) y
+// la ÚNICA que respeta los periodos editados de la nota [a]. Con `defaultTrainingPeriods` directo,
+// esta pantalla mostraría un nivel distinto del que juzga el validador.
 function nivelEn(residente, fecha) {
-  const fin = residente.fechaFin || addDays(addYears(residente.fechaInicio, 4), -1);
-  return levelOn(defaultTrainingPeriods(residente.fechaInicio, fin), fecha);
+  return levelOn(periodsOfResident(residente), fecha);
 }
 
 /** Festivos de un año: lo cargado, y el pegado en lote con vista previa antes de escribir. */

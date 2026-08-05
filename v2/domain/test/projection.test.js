@@ -1,12 +1,13 @@
 // Tests de v2/domain/projection.js (Fase 7.1, spec.md §7, decisión V-11).
 // buildMonthSheetRows: filas de la pestaña mensual (código día a día + fórmulas de
 // totales LOCALES a la propia fila — COUNTIF/SUMPRODUCT, mismo idioma que el .xlsm legado).
-// buildResumenRows: filas de la hoja "Resumen" (SUMIF encadenado cruzando pestañas
-// mensuales por nombre + MAXIFS/MINIFS de equidad agrupando por cohorte de ingreso).
+// buildResumenRows / buildContajeTrimestralRows: las dos hojas agregadas del CURSO académico
+// (SUMIF encadenado cruzando pestañas mensuales por nombre + MAXIFS/MINIFS agrupando por cohorte
+// de ingreso). Ninguna reproduce el veredicto de INV-3 y ninguna dice que lo haga (decisión V-25).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { weekday, addDays, datesOfMonth } from "../calendar.js";
-import { columnLetter, monthSheetName, buildMonthSheetRows, buildResumenRows } from "../projection.js";
+import { columnLetter, monthSheetName, cursoLabel, buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows } from "../projection.js";
 
 // ── columnLetter ──
 test("columnLetter: 1..26 son A..Z", () => {
@@ -158,20 +159,49 @@ test("buildMonthSheetRows: fórmula de Dobletes V-D empareja viernes con domingo
 });
 
 // ── buildResumenRows ──
-test("buildResumenRows: sin meses publicados, solo la cabecera", () => {
-  const { sheetName, rows } = buildResumenRows({ residentes: [ANA, BETO], publishedMonths: [] });
-  assert.equal(sheetName, "Resumen");
-  assert.equal(rows.length, 1);
-  assert.deepEqual(rows[0], ["Residente", "Cohorte", "Total", "Fines de Semana", "Festivos", "Prefestivos", "Dobletes V-D", "3P", "Dif. máx-mín (cohorte)", "Equidad (dif. ≤ 1)"]);
+// La ventana es el CURSO académico (decisión V-25) y va en el nombre de la hoja. Abril y mayo de
+// 2027 pertenecen al curso 2026-27 (`academicYearOf`: de junio a mayo), así que `curso: 2026`.
+const CURSO = 2026;
+const resumen = (residentes, publishedMonths, curso = CURSO) => buildResumenRows({ residentes, publishedMonths, curso });
+// Filas de residente: sin la cabecera y sin el bloque de nota del final (separador + NOTA_LIMITES).
+const filasResidente = (rows) => rows.slice(1).filter((f) => f[0] !== "" && !/^Lectura orientativa/.test(String(f[0])));
+
+test("buildResumenRows: el nombre de la hoja lleva el curso, para que no se pise la del curso anterior", () => {
+  assert.equal(resumen([ANA], [{ mes: 4, anio: 2027 }]).sheetName, "Resumen 2026-27");
+  assert.equal(resumen([ANA], [{ mes: 7, anio: 2027 }], 2027).sheetName, "Resumen 2027-28");
+});
+
+test("buildResumenRows: sin meses publicados, la cabecera y la nota de límites", () => {
+  const { rows } = resumen([ANA, BETO], []);
+  assert.deepEqual(rows[0], ["Residente", "Cohorte", "Total", "Fines de Semana", "Festivos", "Prefestivos", "Dobletes V-D", "3P", "Dif. máx-mín (cohorte)", "Reparto del curso (orientativo)"]);
+  assert.equal(filasResidente(rows).length, 0);
+  // La nota va en la hoja, no solo en un comentario del código: el Sheet lo lee gente que no abre
+  // el repo, y «Dif. máx-mín» invita a leerse como el «dif ≤ 1» de la normativa.
+  assert.ok(rows.some((f) => /no es la comprobación de INV-3/.test(String(f[0]))));
+});
+
+test("buildResumenRows: la cabecera ya NO invoca el umbral de INV-3 (V-25)", () => {
+  // El cartel decía «Equidad (dif. ≤ 1)» y era falso en las dos direcciones: la ventana de INV-3 es
+  // el año de residencia de cada uno (cuatro cierres con dif=1 acumulan 4 de por vida) y los dos
+  // cierres normalizan por disponibilidad, que no es expresable en fórmula de hoja.
+  const { rows } = resumen([ANA], [{ mes: 4, anio: 2027 }]);
+  assert.ok(!rows[0].some((c) => /dif\. ≤ 1|Equidad/i.test(String(c))), `cabecera: ${JSON.stringify(rows[0])}`);
+});
+
+test("buildResumenRows: solo cuenta los meses DEL CURSO, no los de otros cursos", () => {
+  // junio-2027 abre el curso siguiente: no puede colarse en el Resumen del 2026-27.
+  const { rows } = resumen([ANA], [{ mes: 4, anio: 2027 }, { mes: 6, anio: 2027 }]);
+  assert.match(filasResidente(rows)[0][2], /'2027-04'!/);
+  assert.doesNotMatch(filasResidente(rows)[0][2], /'2027-06'!/);
 });
 
 test("buildResumenRows: excluye a quien no estuvo activo en NINGÚN mes publicado", () => {
-  const { rows } = buildResumenRows({ residentes: [ANA, CARLA], publishedMonths: [{ mes: 4, anio: 2027 }] });
-  assert.deepEqual(rows.slice(1).map((r) => r[0]), ["Ana"]);
+  const { rows } = resumen([ANA, CARLA], [{ mes: 4, anio: 2027 }]);
+  assert.deepEqual(filasResidente(rows).map((r) => r[0]), ["Ana"]);
 });
 
 test("buildResumenRows: un mes publicado → cadena SUMIF de un solo término, por columna correcta de la pestaña mensual", () => {
-  const { rows } = buildResumenRows({ residentes: [ANA], publishedMonths: [{ mes: 4, anio: 2027 }] });
+  const { rows } = resumen([ANA], [{ mes: 4, anio: 2027 }]);
   const r = 2;
   assert.equal(rows[1][0], "Ana");
   assert.equal(rows[1][1], 2024); // cohorte = año de fechaInicio
@@ -184,34 +214,143 @@ test("buildResumenRows: un mes publicado → cadena SUMIF de un solo término, p
 });
 
 test("buildResumenRows: varios meses publicados → cadena SUMIF con un término por mes, en orden cronológico", () => {
-  const { rows } = buildResumenRows({ residentes: [ANA], publishedMonths: [{ mes: 5, anio: 2027 }, { mes: 4, anio: 2027 }] });
-  const r = 2;
-  assert.equal(rows[1][2], `=SUMIF('2027-04'!$A:$A,$A${r},'2027-04'!$I:$I)+SUMIF('2027-05'!$A:$A,$A${r},'2027-05'!$I:$I)`);
+  const { rows } = resumen([ANA], [{ mes: 5, anio: 2027 }, { mes: 4, anio: 2027 }]);
+  assert.equal(rows[1][2], `=SUMIF('2027-04'!$A:$A,$A2,'2027-04'!$I:$I)+SUMIF('2027-05'!$A:$A,$A2,'2027-05'!$I:$I)`);
+});
+
+test("buildResumenRows: la cadena SUMIF no puede pasar de 12 términos, porque el curso tiene 12 meses", () => {
+  // Es la razón práctica de acotar la ventana (V-25): de por vida crecía un término por mes
+  // publicado y por celda, ~10.800 SUMIF de columna completa por recálculo a los diez años.
+  const doceMeses = [6, 7, 8, 9, 10, 11].map((mes) => ({ mes, anio: 2026 }))
+    .concat([1, 2, 3, 4, 5].map((mes) => ({ mes, anio: 2027 })), [{ mes: 12, anio: 2026 }]);
+  const { rows } = resumen([ANA], doceMeses);
+  assert.equal(rows[1][2].split("+").length, 12);
 });
 
 test("buildResumenRows: un mes repetido en publishedMonths NO duplica su término en la cadena SUMIF", () => {
-  const { rows } = buildResumenRows({ residentes: [ANA], publishedMonths: [{ mes: 4, anio: 2027 }, { mes: 4, anio: 2027 }] });
-  const r = 2;
-  assert.equal(rows[1][2], `=SUMIF('2027-04'!$A:$A,$A${r},'2027-04'!$I:$I)`); // un solo término, no dos
+  const { rows } = resumen([ANA], [{ mes: 4, anio: 2027 }, { mes: 4, anio: 2027 }]);
+  assert.equal(rows[1][2], `=SUMIF('2027-04'!$A:$A,$A2,'2027-04'!$I:$I)`); // un solo término, no dos
 });
 
 test("buildResumenRows: agrupa la cohorte por AÑO DE INGRESO (no por nivel actual — decisión V-11)", () => {
   const RES_2024 = { id: "r24", nombre: "Zeta", fechaInicio: "2024-05-20", fechaFin: "2028-05-19" };
   const RES_2024B = { id: "r24b", nombre: "Yago", fechaInicio: "2024-06-01", fechaFin: "2028-05-31" };
-  const { rows } = buildResumenRows({ residentes: [RES_2024, RES_2024B], publishedMonths: [{ mes: 4, anio: 2027 }] });
+  const { rows } = resumen([RES_2024, RES_2024B], [{ mes: 4, anio: 2027 }]);
   // orden: cohorte asc, luego nombre asc dentro de la cohorte
-  assert.deepEqual(rows.slice(1).map((r) => r[0]), ["Yago", "Zeta"]);
+  assert.deepEqual(filasResidente(rows).map((r) => r[0]), ["Yago", "Zeta"]);
   assert.equal(rows[1][1], 2024);
   assert.equal(rows[2][1], 2024);
 });
 
-test("buildResumenRows: fórmulas de equidad (MAXIFS/MINIFS por cohorte + etiqueta OK/REVISAR)", () => {
+test("buildResumenRows: dif máx-mín por cohorte, y la lectura ya no dice OK/REVISAR sobre «dif ≤ 1»", () => {
   const A = { id: "a", nombre: "Ana", fechaInicio: "2024-05-20", fechaFin: "2028-05-19" };
   const B = { id: "b", nombre: "Bea", fechaInicio: "2024-06-01", fechaFin: "2028-05-31" };
-  const { rows } = buildResumenRows({ residentes: [A, B], publishedMonths: [{ mes: 4, anio: 2027 }] });
-  const lastRow = rows.length;
-  for (let i = 2; i <= lastRow; i++) {
-    assert.equal(rows[i - 1][8], `=IF($B${i}="","",MAXIFS($C$2:$C$${lastRow},$B$2:$B$${lastRow},$B${i})-MINIFS($C$2:$C$${lastRow},$B$2:$B$${lastRow},$B${i}))`);
-    assert.equal(rows[i - 1][9], `=IF($B${i}="","",IF(I${i}<=1,"OK","REVISAR"))`);
+  const { rows } = resumen([A, B], [{ mes: 4, anio: 2027 }]);
+  const ultimaFilaResidente = 1 + filasResidente(rows).length; // 1-based, sin contar el bloque de nota
+  assert.equal(ultimaFilaResidente, 3);
+  for (let i = 2; i <= ultimaFilaResidente; i++) {
+    assert.equal(rows[i - 1][8], `=IF($B${i}="","",MAXIFS($C$2:$C$${ultimaFilaResidente},$B$2:$B$${ultimaFilaResidente},$B${i})-MINIFS($C$2:$C$${ultimaFilaResidente},$B$2:$B$${ultimaFilaResidente},$B${i}))`);
+    assert.equal(rows[i - 1][9], `=IF($B${i}="","",IF(I${i}<=1,"equilibrado","desigual: mirar en la app"))`);
+    assert.doesNotMatch(rows[i - 1][9], /REVISAR/);
   }
+});
+
+// ── buildContajeTrimestralRows (Fase 7.2) ──
+// La pieza que faltaba del entregable: el Responsable tiene que comunicar el contaje a tutoría al
+// cerrar cada trimestre y no había nada que enseñar fuera de la app.
+const contaje = (residentes, publishedMonths, curso = CURSO) => buildContajeTrimestralRows({ residentes, publishedMonths, curso });
+
+test("buildContajeTrimestralRows: cabecera con los cuatro trimestres del contaje y el curso en el nombre", () => {
+  const { sheetName, rows } = contaje([ANA], [{ mes: 4, anio: 2027 }]);
+  assert.equal(sheetName, "Contaje Trimestral 2026-27");
+  assert.deepEqual(rows[0].slice(0, 6), ["Residente", "Cohorte", "T1 jun-ago", "T2 sep-nov", "T3 dic-feb", "T4 mar-may"]);
+});
+
+test("buildContajeTrimestralRows: cada mes cae en su trimestre POR MES, nunca por posición", () => {
+  // Trocear por rangos fijos de fila es el «bug de trimestres posicionales» que ADR-001 manda
+  // eliminar: al insertar un residente el .xlsm se desalineaba en silencio.
+  const meses = [{ mes: 7, anio: 2026 }, { mes: 10, anio: 2026 }, { mes: 1, anio: 2027 }, { mes: 4, anio: 2027 }];
+  const { rows } = contaje([ANA], meses);
+  assert.match(rows[1][2], /'2026-07'!/); // T1 jun-ago
+  assert.match(rows[1][3], /'2026-10'!/); // T2 sep-nov
+  assert.match(rows[1][4], /'2027-01'!/); // T3 dic-feb
+  assert.match(rows[1][5], /'2027-04'!/); // T4 mar-may
+});
+
+test("buildContajeTrimestralRows: T3 cruza el año natural (dic del año anterior + ene/feb)", () => {
+  // Agrupar por año de calendario partiría T3 en dos: diciembre es 2026 y febrero 2027, y los tres
+  // meses son el MISMO trimestre del curso 2026-27.
+  const { rows } = contaje([ANA], [{ mes: 12, anio: 2026 }, { mes: 2, anio: 2027 }]);
+  assert.match(rows[1][4], /'2026-12'!/);
+  assert.match(rows[1][4], /'2027-02'!/);
+  assert.equal(rows[1][2], 0, "T1 sin meses publicados suma 0, no una fórmula vacía");
+});
+
+test("buildContajeTrimestralRows: solo el TOTAL, que es el único eje del cierre trimestral (V-13/P-8)", () => {
+  // El .xlsm mostraba la carga anual agrupada por nivel. Enseñar una cifra distinta de la que juzga
+  // el invariante es la trampa que V-11(c) ya evitó en el Resumen.
+  const { rows } = contaje([ANA], [{ mes: 4, anio: 2027 }]);
+  assert.equal(rows[1][5], `=SUMIF('2027-04'!$A:$A,$A2,'2027-04'!$I:$I)`); // columna I = Total (G+GF+GP)
+  assert.equal(rows[0].length, 6, "ni findes, ni festivos, ni dobletes: el cierre trimestral solo compara el total");
+});
+
+test("buildContajeTrimestralRows: un bloque de dif máx-mín por cohorte, que es como compara INV-3", () => {
+  const A = { id: "a", nombre: "Ana", fechaInicio: "2024-05-20", fechaFin: "2028-05-19" };
+  const B = { id: "b", nombre: "Bea", fechaInicio: "2024-06-01", fechaFin: "2028-05-31" };
+  const C = { id: "c", nombre: "Cira", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" };
+  const { rows } = contaje([A, B, C], [{ mes: 4, anio: 2027 }]);
+  const cabecera = rows.findIndex((f) => f[0] === "Dif. máx-mín por cohorte");
+  assert.ok(cabecera > 0, `debe haber bloque de dif: ${JSON.stringify(rows.map((f) => f[0]))}`);
+  const cohortes = rows.slice(cabecera + 1).filter((f) => /^Cohorte /.test(String(f[0])));
+  // Cira está sola en la 2025: su MAXIFS-MINIFS valdría 0 por definición y una fila permanente a 0
+  // se lee como «equilibrado» cuando no hay con quién comparar. INV-3 tampoco compara ahí.
+  assert.deepEqual(cohortes.map((f) => f[0]), ["Cohorte 2024"]);
+  // La fórmula compara dentro de la cohorte (columna B) y sobre el rango de filas de RESIDENTE
+  // (2..4), no sobre el bloque de dif — si el rango se colara a sí mismo, la dif se realimentaría.
+  // «Cohorte 2024» es la fila 7: 1 cabecera + 3 residentes + separador + cabecera del bloque.
+  assert.equal(cohortes[0][2], "=MAXIFS($C$2:$C$4,$B$2:$B$4,$B7)-MINIFS($C$2:$C$4,$B$2:$B$4,$B7)");
+});
+
+test("buildContajeTrimestralRows: sin ninguna cohorte de 2+ miembros no hay bloque de dif", () => {
+  const A = { id: "a", nombre: "Ana", fechaInicio: "2024-05-20", fechaFin: "2028-05-19" };
+  const C = { id: "c", nombre: "Cira", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" };
+  const { rows } = contaje([A, C], [{ mes: 4, anio: 2027 }]);
+  assert.equal(rows.filter((f) => f[0] === "Dif. máx-mín por cohorte").length, 0);
+  assert.equal(rows.filter((f) => /^Cohorte /.test(String(f[0]))).length, 0);
+  // pero las filas de residente y la nota siguen ahí
+  assert.deepEqual(rows.slice(1, 3).map((f) => f[0]), ["Ana", "Cira"]);
+  assert.ok(rows.some((f) => /no es la comprobación de INV-3/.test(String(f[0]))));
+});
+
+test("buildContajeTrimestralRows: sin meses del curso no inventa filas, pero deja la nota", () => {
+  const { rows } = contaje([ANA], [{ mes: 6, anio: 2027 }]); // junio-2027 es del curso siguiente
+  assert.equal(rows.filter((f) => f[0] === "Ana").length, 0);
+  assert.ok(rows.some((f) => /no es la comprobación de INV-3/.test(String(f[0]))));
+});
+
+// ── Rectangularidad: contrato con `setValues` de Apps Script ──
+test("las TRES hojas devuelven una matriz RECTANGULAR (setValues lanza si no lo es)", () => {
+  // `Code.gs` escribe con getRange(1,1,rows.length,rows[0].length).setValues(rows), y setValues
+  // exige que todas las filas tengan el mismo ancho. Ningún otro test lo vería: el `ss` de los
+  // fakes es un array de arrays sin límites — la misma ceguera que dejó pasar el fallo de la
+  // rejilla de 26 columnas hasta probarlo en vivo. Las filas de nota y de separación son
+  // justamente las que lo rompen.
+  const A = { id: "a", nombre: "Ana", fechaInicio: "2024-05-20", fechaFin: "2028-05-19" };
+  const B = { id: "b", nombre: "Bea", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" };
+  const meses = [{ mes: 4, anio: 2027 }, { mes: 12, anio: 2026 }];
+  const hojas = [
+    buildMonthSheetRows({ anio: 2027, mes: 4, residentes: [A, B], asignaciones: [{ residenteId: "a", fecha: "2027-04-03", codigo: "G" }] }),
+    resumen([A, B], meses),
+    contaje([A, B], meses),
+  ];
+  for (const { sheetName, rows } of hojas) {
+    const anchos = [...new Set(rows.map((f) => f.length))];
+    assert.equal(anchos.length, 1, `${sheetName}: filas de anchos distintos ${JSON.stringify(anchos)}`);
+    assert.ok(anchos[0] > 0, `${sheetName}: ancho 0`);
+  }
+});
+
+test("cursoLabel: etiqueta legible y ordenable del curso académico", () => {
+  assert.equal(cursoLabel(2026), "2026-27");
+  assert.equal(cursoLabel(2099), "2099-00"); // cruce de siglo: dos dígitos con cero a la izquierda
 });

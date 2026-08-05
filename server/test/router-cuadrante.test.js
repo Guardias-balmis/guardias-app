@@ -14,9 +14,9 @@ import { validateThirdPost, thirdPostHistoryStart, thirdPostCommitmentEnd, canWi
 import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange, validateQuarterClose, quarterCloseWindow } from "../../v2/domain/equity.js";
 import { groupOnDate } from "../../v2/domain/residents.js";
 import { eligibleCandidates } from "../../v2/domain/responsible.js";
-import { parseISO } from "../../v2/domain/calendar.js";
+import { parseISO, academicYearOf, toISO } from "../../v2/domain/calendar.js";
 import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
-import { buildMonthSheetRows, buildResumenRows } from "../../v2/domain/projection.js";
+import { buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows } from "../../v2/domain/projection.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -40,7 +40,7 @@ function fakeSS(rows = {}) {
 const RESP = { id: "resp-1", nombre: "Rita", email: "resp@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
 const OTRO = { id: "otro-1", nombre: "Oscar", email: "otro@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
 
-function makeDeps(overrides = {}) {
+function makeDeps(overrides = {}, extraSheets = {}) {
   const ss = fakeSS({
     residentes: [headerOf(TABLES.residentes), ...[RESP, OTRO].map((r) => recordToRow(TABLES.residentes, r))],
     responsables: [headerOf(TABLES.responsables), recordToRow(TABLES.responsables, { id: "m1", periodoInicio: "2027-01-01", periodoFin: "2028-01-01", residenteId: "resp-1", metodo: "VOLUNTARIO" })],
@@ -48,6 +48,7 @@ function makeDeps(overrides = {}) {
     cuadrantes: [headerOf(TABLES.cuadrantes)],
     festivos: [headerOf(TABLES.festivos)],
     voluntarios3P: [headerOf(TABLES.voluntarios3P)],
+    ...extraSheets,
   });
   const nonces = new Set();
   return {
@@ -66,7 +67,9 @@ function makeDeps(overrides = {}) {
       validateQuarterClose, quarterCloseWindow,
       groupOnDate, eligibleCandidates,
       validateThirdPost, thirdPostHistoryStart, thirdPostCommitmentEnd, canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES,
-      canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, buildMonthSheetRows, buildResumenRows,
+      canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit,
+      // La proyección son TRES hojas desde la Fase 7.2, y las dos agregadas necesitan el curso.
+      buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows, academicYearOf, toISO,
     },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
@@ -162,14 +165,15 @@ test("publicarCuadrante: el Responsable pasa un cuadrante VALIDADO a PUBLICADO",
   assert.equal(r.estado, "PUBLICADO");
 });
 
-test("publicarCuadrante: proyecta de verdad la pestaña mensual y la hoja Resumen al Sheet (Fase 7.1, V-11a)", () => {
+test("publicarCuadrante: proyecta de verdad las TRES hojas al Sheet (Fase 7.1/7.2, V-11a y V-25)", () => {
   const deps = stubClean(makeDeps());
   const session = loggedInAs(deps, "resp@gmail.com");
   call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-05", residenteId: "resp-1", codigo: "G" }] }, deps);
   call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
   const r = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
   assert.equal(r.ok, true);
-  assert.deepEqual(r.proyeccion, { mensual: "2027-07", resumen: "Resumen" });
+  // Las dos agregadas llevan el CURSO en el nombre (V-25): julio-2027 es del curso 2027-28.
+  assert.deepEqual(r.proyeccion, { mensual: "2027-07", resumen: "Resumen 2027-28", contaje: "Contaje Trimestral 2027-28" });
 
   const mensual = deps.ss.read("2027-07");
   assert.equal(mensual[0][0], "Residente");
@@ -177,9 +181,14 @@ test("publicarCuadrante: proyecta de verdad la pestaña mensual y la hoja Resume
   assert.ok(filaRita, "la pestaña mensual debe incluir a Rita (RESP, activa en julio-2027)");
   assert.equal(filaRita.slice(9)[4], "G"); // día 5 (índice 4 tras las 9 columnas fijas): el código real cae en la columna correcta
 
-  const resumen = deps.ss.read("Resumen");
+  const resumen = deps.ss.read("Resumen 2027-28");
   assert.equal(resumen[0][0], "Residente");
   assert.ok(resumen.some((row) => row[0] === "Rita"));
+
+  const contaje = deps.ss.read("Contaje Trimestral 2027-28");
+  assert.equal(contaje[0][0], "Residente");
+  assert.equal(contaje[0][2], "T1 jun-ago", "julio cae en T1 y la cabecera nombra los cuatro trimestres");
+  assert.ok(contaje.some((row) => row[0] === "Rita"));
 });
 
 test("publicarCuadrante: una asignación de OTRO mes no se cuela en la pestaña publicada", () => {
@@ -207,10 +216,15 @@ test("publicarCuadrante: publicar un segundo mes actualiza Resumen para incluir 
 
   assert.ok(deps.ss.exists("2027-07"));
   assert.ok(deps.ss.exists("2027-08"));
-  const resumen = deps.ss.read("Resumen");
+  const resumen = deps.ss.read("Resumen 2027-28");
   const filaResp = resumen.find((row) => row[0] === "Rita");
   assert.match(filaResp[2], /'2027-07'!/); // el Total de Resumen referencia AMBAS pestañas publicadas
   assert.match(filaResp[2], /'2027-08'!/);
+  // Y las dos caen en T1 (jun-ago), así que la columna T1 del Contaje también las referencia.
+  const filaContaje = deps.ss.read("Contaje Trimestral 2027-28").find((row) => row[0] === "Rita");
+  assert.match(filaContaje[2], /'2027-07'!/);
+  assert.match(filaContaje[2], /'2027-08'!/);
+  assert.equal(filaContaje[3], 0, "T2 (sep-nov) no tiene ningún mes publicado todavía");
 });
 
 test("publicarCuadrante: si la proyección al Sheet falla, el cuadrante queda intacto en VALIDADO (nunca un PUBLICADO fantasma)", () => {
@@ -231,7 +245,7 @@ test("publicarCuadrante: si falla la escritura de Resumen TRAS haber escrito ya 
   call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
   const rebuildSheetReal = deps.store.rebuildSheet;
   deps.store.rebuildSheet = (name, rows) => {
-    if (name === "Resumen") throw new Error("fallo simulado al escribir Resumen");
+    if (name.startsWith("Resumen")) throw new Error("fallo simulado al escribir Resumen");
     return rebuildSheetReal(name, rows);
   };
   const r = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
@@ -239,7 +253,8 @@ test("publicarCuadrante: si falla la escritura de Resumen TRAS haber escrito ya 
   assert.match(r.error, /fallo simulado al escribir Resumen/);
   assert.equal(call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "VALIDADO");
   assert.ok(deps.ss.exists("2027-07")); // ventana de desincronización aceptada: ver comentario de projectCuadranteToSheets
-  assert.ok(!deps.ss.exists("Resumen"));
+  assert.ok(!deps.ss.exists("Resumen 2027-28"));
+  assert.ok(!deps.ss.exists("Contaje Trimestral 2027-28"), "el Contaje va DESPUÉS de Resumen: si Resumen falla, no se llega a escribir");
 });
 
 test("publicarCuadrante: tras un fallo parcial, reintentar Publicar sana del todo (ambas pestañas completas, sin residuo _tmp_)", () => {
@@ -249,7 +264,7 @@ test("publicarCuadrante: tras un fallo parcial, reintentar Publicar sana del tod
   const rebuildSheetReal = deps.store.rebuildSheet;
   let falla = true;
   deps.store.rebuildSheet = (name, rows) => {
-    if (falla && name === "Resumen") throw new Error("fallo simulado");
+    if (falla && name.startsWith("Resumen")) throw new Error("fallo simulado");
     return rebuildSheetReal(name, rows);
   };
   const primero = call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps);
@@ -259,7 +274,8 @@ test("publicarCuadrante: tras un fallo parcial, reintentar Publicar sana del tod
   assert.equal(segundo.ok, true);
   assert.equal(segundo.estado, "PUBLICADO");
   assert.ok(deps.ss.exists("2027-07"));
-  assert.ok(deps.ss.exists("Resumen"));
+  assert.ok(deps.ss.exists("Resumen 2027-28"));
+  assert.ok(deps.ss.exists("Contaje Trimestral 2027-28"), "el reintento tiene que sanar las TRES hojas, no solo las dos primeras");
   assert.ok(!deps.ss.listSheets().some((n) => n.startsWith("_tmp_")));
 });
 
@@ -608,4 +624,83 @@ test("marcarValidado: el ciclo de INV-8b arranca en el alta de CADA uno, no en e
     r.violaciones.filter((v) => v.invariante === "INV-8" && /repite/.test(v.detalle)), [],
     "el 3P de enero es anterior a su alta: no entra en su ciclo"
   );
+});
+
+// ── Ausencia con fecha ilegible ya escrita en el Sheet (decisión V-22) ──
+// `crearBloqueo` ya no la deja entrar, pero el Sheet se edita a mano y las tablas son append-only:
+// la fila puede estar ya ahí y no se va a borrar. Medido el 2026-08-02, antes de V-22, hacía una de
+// dos cosas según por dónde ordenase la fecha mala, y las dos son peores que un error con nombre:
+// desaparecer del rango de `absences` —que compara cadenas a propósito (V-19)— dejando INV-5 sin
+// proteger EN SILENCIO, o tumbar `marcarValidado` con «Fecha ISO inválida» sin decir de qué fila.
+const bloqueoRaw = (b) => [headerOf(TABLES.bloqueos), recordToRow(TABLES.bloqueos, b)];
+
+test("una ausencia con fecha ilegible da un error INV-5 que la nombra, en vez de tumbar la validación", () => {
+  const mala = { id: "b-mala", residenteId: "otro-1", desde: "2027-07-01", hasta: "30/02/2028", motivo: "BAJA", activo: true };
+  const deps = stubClean(makeDeps({}, { bloqueos: bloqueoRaw(mala) }));
+  const r = call({ action: "marcarValidado", session: loggedInAs(deps, "resp@gmail.com"), mes: 7, anio: 2027 }, deps);
+
+  assert.equal(r.ok, false, "no se puede validar mientras la baja no se pueda comprobar");
+  assert.equal(r.error, "el cuadrante tiene errores, no se puede validar");
+  const v = r.violaciones.find((x) => /fecha ilegible/.test(x.detalle));
+  assert.ok(v, `debía nombrar la fila; violaciones: ${JSON.stringify(r.violaciones)}`);
+  assert.equal(v.invariante, "INV-5");
+  assert.equal(v.severidad, "error");
+  assert.equal(v.residenteId, "otro-1", "sin residenteId, violations.js no puede traducirlo a un nombre");
+  assert.match(v.detalle, /BAJA/);          // de qué ausencia habla
+  assert.match(v.detalle, /30\/02\/2028/);  // qué fecha está mal
+  assert.match(v.detalle, /b-mala/);        // y el id, que es lo que hace falta para cancelarla
+});
+
+test("la fecha ilegible que ordena POR ENCIMA ya no desaparece: antes INV-5 no emitía nada", () => {
+  // `desde="30/02/2027"` empieza por "3", así que `absences` la descartaba por `b.desde > hasta` y
+  // la baja se volvía invisible: con guardias asignadas encima, INV-5 emitía CERO violaciones.
+  const invisible = { id: "b-inv", residenteId: "otro-1", desde: "30/02/2027", hasta: "2027-07-31", motivo: "BAJA", activo: true };
+  const deps = stubClean(makeDeps({}, { bloqueos: bloqueoRaw(invisible) }));
+  const session = loggedInAs(deps, "resp@gmail.com");
+  guardar(deps, session, [{ fecha: "2027-07-10", residenteId: "otro-1", codigo: "G" }]); // guardia sobre la baja
+
+  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, false);
+  assert.equal(r.violaciones.filter((v) => v.invariante === "INV-5").length, 1);
+
+  // Y sigue siendo visible en la lista, que es la única forma de cancelarla desde la app. Aparece
+  // en CUALQUIER mes a propósito: con la fecha ilegible no se sabe en cuál cae.
+  for (const mes of [7, 11]) {
+    const lista = call({ action: "listBloqueos", session, anio: 2027, mes }, deps).bloqueos;
+    assert.ok(lista.some((b) => b.id === "b-inv"), `debía verse en el mes ${mes} para poder cancelarla`);
+  }
+});
+
+test("cancelar la ausencia ilegible desbloquea la validación (la salida existe dentro de la app)", () => {
+  const mala = { id: "b-mala", residenteId: "otro-1", desde: "2027-07-01", hasta: "30/02/2028", motivo: "BAJA", activo: true };
+  const deps = stubClean(makeDeps({}, { bloqueos: bloqueoRaw(mala) }));
+  const session = loggedInAs(deps, "resp@gmail.com");
+  assert.equal(call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps).ok, false);
+
+  // Desde V-19 el permiso del ciclo alcanza a cancelar la ausencia de otro, así que esto lo puede
+  // hacer quien valida — sin eso, el error sería un bloqueo sin salida y no podría ser `error`.
+  assert.equal(call({ action: "cancelarBloqueo", session, id: "b-mala" }, deps).ok, true);
+  assert.equal(call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps).ok, true);
+});
+
+test("la acción `validar` cambia el veredicto-a-suerte de INV-5 por el error que nombra la fila", () => {
+  // `validateMonth` NO lanza por una fecha de bloqueo ilegible: todas sus comparaciones son de
+  // cadenas. Lo que hacía era peor de explicar: con `hasta="no-es-fecha"` INV-5 emitía su
+  // «Asignación G … sobre bloqueo BAJA» de puro accidente ("2" ordena antes que "n"), y con
+  // `desde="30/02/…"` no emitía nada. Aquí se comprueba que ya no juzga la fila ilegible y que en
+  // su lugar dice qué arreglar — que es lo que ve quien valida desde Calendar.jsx.
+  const deps = makeDeps(); // validateMonth REAL, sin stub
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = call({ action: "validar", session, cuadrante: {
+    mes: 7, anio: 2027, residentes: [OTRO],
+    asignaciones: [{ residenteId: "otro-1", fecha: "2027-07-10", codigo: "G" }],
+    bloqueos: [{ id: "b-x", residenteId: "otro-1", desde: "2027-07-01", hasta: "no-es-fecha", motivo: "BAJA", activo: true }],
+  } }, deps);
+
+  assert.equal(r.ok, true);
+  const i5 = r.violaciones.filter((v) => v.invariante === "INV-5");
+  assert.equal(i5.length, 1, `una sola violación de INV-5, la de la fila ilegible: ${JSON.stringify(i5)}`);
+  assert.match(i5[0].detalle, /fecha ilegible/);
+  assert.doesNotMatch(i5[0].detalle, /sobre bloqueo/, "no debe juzgar la asignación con una fecha que no se puede leer");
+  assert.ok(r.bloqueantes >= 1);
 });

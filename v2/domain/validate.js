@@ -21,7 +21,7 @@
 // cuadrante. No subir nada a `error` sin revisar V-14 en spec.md §6.
 
 import { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays, isHoliday } from "./calendar.js";
-import { defaultTrainingPeriods, levelOn, groupOf } from "./residents.js";
+import { periodsOfResident, levelOn, groupOf } from "./residents.js";
 import { tally } from "./tally.js";
 import { absences, isNearbyRotation, BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA } from "./absences.js";
 
@@ -36,15 +36,30 @@ const ASIGNACION = new Set(["G", "GF", "GP", "3P"]); // cualquier asignación (I
 const err = (invariante, detalle, extra = {}) => ({ invariante, severidad: "error", detalle, ...extra });
 const aviso = (invariante, detalle, extra = {}) => ({ invariante, severidad: "aviso", detalle, ...extra });
 
-function periodsOf(residente) {
-  if (residente.periodos) return residente.periodos;
-  const fin = residente.fechaFin || addDays(toISO(Number(residente.fechaInicio.slice(0, 4)) + 4, Number(residente.fechaInicio.slice(5, 7)), Number(residente.fechaInicio.slice(8, 10))), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
+// `periodsOfResident` (residents.js) es la ÚNICA derivación de periodos del dominio desde la
+// unificación de V-24: antes cada módulo tenía su propia copia del `fechaFin || addYears(+4)` y
+// tres de ellas —projection, accumulate y el `closingWindowThisMonth` de equity— NO miraban
+// `residente.periodos`, así que con la tabla `periodos` rellena el mismo residente habría tenido
+// dos niveles distintos DENTRO de una misma llamada a `marcarValidado`. Medido antes de unificar:
+// `projection.js` daba R2 el mismo día que `validate.js` daba R1.
 const cohortOf = (residente) => Number(residente.fechaInicio.slice(0, 4)); // promoción = año de inicio
 
 function inRange(fecha, desde, hasta) {
   return compareISO(fecha, desde) >= 0 && compareISO(fecha, hasta) <= 0;
+}
+
+/**
+ * Por qué un residente no es asignable en una fecha, en palabras y con la fecha frontera.
+ * `groupOf` devuelve null para los tres casos (residents.js:74-77) y son indistinguibles
+ * desde el grupo; el Responsable necesita saber cuál es para arreglarlo.
+ * @param {"PENDIENTE"|"FINALIZADO"|null} nivel  null = el id no está en `residentes`
+ * @param {{start:string,end:string}[]|undefined} periodos
+ */
+function reasonNotAssignable(nivel, periodos) {
+  if (nivel === null || !periodos) return "no figura en la lista de residentes";
+  if (nivel === "FINALIZADO") return `su residencia terminó el ${periodos[periodos.length - 1].end}`;
+  if (nivel === "PENDIENTE") return `su residencia empieza el ${periodos[0].start}`;
+  return `nivel ${nivel}, sin grupo de guardia`; // defensivo: hoy inalcanzable
 }
 
 /**
@@ -77,7 +92,13 @@ export function rotationHistoryStart(bloqueos, monthStart) {
 export function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [], eventos = [] }) {
   return {
     mes, anio,
-    residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
+    // `periodos` viaja SIEMPRE que venga: es lo único que expresa la nota [a] («los periodos
+    // generados son editables después»), y recortarlo aquí hacía inalcanzable el punto entero —
+    // por mucho que el router hidrate desde la tabla, este `map` los borraba y `levelOn` volvía a
+    // derivar del aniversario nominal. Un fallo perfectamente silencioso: no lanza, solo devuelve
+    // el nivel equivocado. La proyección sigue siendo explícita a propósito (no arrastrar campos
+    // que el validador no debe ver), así que un campo nuevo hay que añadirlo aquí a mano.
+    residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin, periodos: r.periodos })),
     asignaciones: [...historicas, ...asignacionesDelMes],
     bloqueos,
     // Los eventos llegan como FILAS de la tabla y se moldean aquí, una sola vez. Se quedan los
@@ -121,7 +142,7 @@ function shapeEventos(filas, monthStart) {
 export function validateMonth(ctx) {
   const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, festivos = [] } = ctx;
   const byId = new Map(residentes.map((r) => [r.id, r]));
-  const periods = new Map(residentes.map((r) => [r.id, periodsOf(r)]));
+  const periods = new Map(residentes.map((r) => [r.id, periodsOfResident(r)]));
   const levelOnDay = (id, fecha) => (periods.has(id) ? levelOn(periods.get(id), fecha) : null);
 
   const days = datesOfMonth(anio, mes);
@@ -147,6 +168,21 @@ export function validateMonth(ctx) {
     const roles = guardias.map((a) => ({ id: a.residenteId, level: levelOnDay(a.residenteId, fecha), group: groupOf(levelOnDay(a.residenteId, fecha)) }));
     const mayores = roles.filter((r) => r.group === "MAYOR");
     const pequenos = roles.filter((r) => r.group === "PEQUENO");
+    const noAsignables = roles.filter((r) => r.group === null);
+
+    // Asignaciones a quien no es asignable ese día (residencia terminada, no empezada, o id
+    // que no está en `residentes`). Antes se contaban como "nadie" y el día salía con el
+    // MISMO objeto que un día vacío —«sin cubrir (mayores=0, pequeños=0)»—, un diagnóstico
+    // falso, sin `residenteId` y por tanto sin nada que traducir en client/lib/violations.js.
+    // Es `aviso` y no `error` (decisión V-21) porque la causa vive en las fechas del
+    // residente y hoy no hay forma de corregirlas desde la app (no existe `editarResidente`):
+    // bloquear dejaría al servicio sin cuadrante por algo que nadie puede arreglar DENTRO de
+    // la herramienta, que es el criterio de V-12/V-14/V-16.
+    for (const r of noAsignables) {
+      violations.push(aviso("INV-1",
+        `Guardia del ${fecha} asignada a ${r.id}, que no es residente asignable en esa fecha (${reasonNotAssignable(r.level, periods.get(r.id))})`,
+        { fecha, residenteId: r.id }));
+    }
 
     if (guardias.length === 2 && pequenos.length === 2 && pequenos.every((p) => p.level === "R2")) {
       // Candidato 2×R2 → lo gobierna INV-9
@@ -179,6 +215,15 @@ export function validateMonth(ctx) {
     let detalle;
     if (mayores.length >= 2) detalle = `Dos o más Residentes Mayores el ${fecha}; falta el puesto de Pequeño`;
     else if (pequenos.length >= 2) detalle = `Dos Residentes Pequeños el ${fecha} (la excepción 2×R2 exige que ambos sean R2)`;
+    else if (noAsignables.length > 0) {
+      // El día TIENE nombres escritos en la rejilla: decirlo así, y no «sin cubrir», que es lo
+      // que lo hacía indistinguible de un día vacío. Aviso por lo mismo que el bucle de arriba
+      // (V-21) — el aviso de cada asignación ya dice a quién hay que arreglar.
+      violations.push(aviso("INV-1",
+        `Guardia del ${fecha} sin nadie asignable: el día solo lo cubre ${noAsignables.map((r) => r.id).join(", ")}`,
+        { fecha }));
+      continue;
+    }
     else detalle = `Día ${fecha} sin cubrir con exactamente 1 Mayor y 1 Pequeño (mayores=${mayores.length}, pequeños=${pequenos.length})`;
     violations.push(err("INV-1", detalle, { fecha }));
   }

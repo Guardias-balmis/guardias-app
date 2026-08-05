@@ -4,7 +4,7 @@
 // periodo formativo en curso .. hasta] y delega el contaje.
 
 import { addDays, addYears } from "./calendar.js";
-import { defaultTrainingPeriods, periodOn } from "./residents.js";
+import { periodsOfResident, periodOn } from "./residents.js";
 import { tally } from "./tally.js";
 
 const ZERO = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 };
@@ -22,8 +22,7 @@ const ZERO = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, ter
 export function accumulatedTally(residentes, asignaciones, hasta) {
   const out = new Map();
   for (const r of residentes) {
-    const fin = r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1);
-    const periods = defaultTrainingPeriods(r.fechaInicio, fin);
+    const periods = periodsOfResident(r);
     // El periodo se busca a `hasta+1` (el primer día del mes que se va a generar), no a
     // `hasta`: así, si el aniversario cae exactamente ese día, ya se usa el periodo NUEVO.
     // Caso límite intencional: cuando eso ocurre, `periodoActual.start` (el aniversario)
