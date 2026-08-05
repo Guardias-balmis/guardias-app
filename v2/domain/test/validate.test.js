@@ -746,10 +746,26 @@ test("rotationHistoryStart: con varias rotaciones cercanas, devuelve el desde M�
 
 // ── buildMonthContext (Fase 6.2: única forma del ctx de validateMonth, reusada por
 // Calendar.jsx, Generator.jsx y server/src/router.js en vez de reimplementarla cada vez) ──
-test("buildMonthContext: proyecta cada residente a {id,fechaInicio,fechaFin} descartando el resto", () => {
+test("buildMonthContext: descarta nombre y email del residente, pero NO los periodos editados", () => {
+  // La proyección es explícita a propósito: el validador no debe ver `nombre` ni `email` (traducir
+  // id→nombre es trabajo de la UI, ver client/lib/violations.js). Pero `periodos` sí tiene que
+  // viajar: es lo único que expresa la nota [a], y recortarlo hacía inalcanzable la edición de
+  // periodos por muy bien que el router la hidratara desde la tabla — `levelOn` volvía al
+  // aniversario nominal sin lanzar ni avisar (V-24, fase 3).
   const r = { id: "r1", nombre: "Ana", fechaInicio: "2024-05-27", fechaFin: "2028-05-26", email: "a@x.com" };
   const ctx = buildMonthContext({ mes: 7, anio: 2026, residentes: [r], asignacionesDelMes: [], bloqueos: [] });
-  assert.deepEqual(ctx.residentes, [{ id: "r1", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" }]);
+  assert.deepEqual(ctx.residentes, [{ id: "r1", fechaInicio: "2024-05-27", fechaFin: "2028-05-26", periodos: undefined }]);
+
+  const periodos = [
+    { year: 1, start: "2024-05-27", end: "2026-05-26" },
+    { year: 2, start: "2026-05-27", end: "2027-05-26" },
+    { year: 3, start: "2027-05-27", end: "2028-05-26" },
+    { year: 4, start: "2028-05-27", end: "2029-05-26" },
+  ];
+  const conPeriodos = buildMonthContext({ mes: 7, anio: 2026, residentes: [{ ...r, periodos }], asignacionesDelMes: [], bloqueos: [] });
+  assert.deepEqual(conPeriodos.residentes[0].periodos, periodos);
+  assert.equal(conPeriodos.residentes[0].nombre, undefined);
+  assert.equal(conPeriodos.residentes[0].email, undefined);
 });
 
 test("buildMonthContext: concatena historicas + asignacionesDelMes, historicas primero", () => {

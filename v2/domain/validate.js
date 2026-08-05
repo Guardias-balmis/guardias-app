@@ -92,7 +92,13 @@ export function rotationHistoryStart(bloqueos, monthStart) {
 export function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [], eventos = [] }) {
   return {
     mes, anio,
-    residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
+    // `periodos` viaja SIEMPRE que venga: es lo único que expresa la nota [a] («los periodos
+    // generados son editables después»), y recortarlo aquí hacía inalcanzable el punto entero —
+    // por mucho que el router hidrate desde la tabla, este `map` los borraba y `levelOn` volvía a
+    // derivar del aniversario nominal. Un fallo perfectamente silencioso: no lanza, solo devuelve
+    // el nivel equivocado. La proyección sigue siendo explícita a propósito (no arrastrar campos
+    // que el validador no debe ver), así que un campo nuevo hay que añadirlo aquí a mano.
+    residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin, periodos: r.periodos })),
     asignaciones: [...historicas, ...asignacionesDelMes],
     bloqueos,
     // Los eventos llegan como FILAS de la tabla y se moldean aquí, una sola vez. Se quedan los
