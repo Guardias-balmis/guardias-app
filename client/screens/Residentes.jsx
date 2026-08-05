@@ -192,16 +192,22 @@ function Ficha({ api, residente, puedoEscribir, showToast, onCambio }) {
 
 function ResidentesScreen() {
   const app = window.useApp();
-  const { api, showToast, setTab } = app;
+  const { api, showToast, setTab, loadResidentes } = app;
   const [residentes, setResidentes] = useState(null);
   const [error, setError] = useState(null);
 
   // Lista propia y no la del contexto de App: esta pantalla la reescribe, y necesita releerla
   // después de cada guardado para que la ficha muestre lo que hay en la tabla de verdad.
+  //
+  // Pero refresca TAMBIÉN la del contexto (`loadResidentes`), y eso no es opcional: de ahí sacan
+  // los residentes la rejilla del cuadrante, el generador y el inicio, y las tres derivan el nivel
+  // con `periodsOfResident`. Sin este refresco, editar unos periodos aquí y pasar al Cuadrante sin
+  // recargar la página enseñaba el nivel VIEJO — comprobado en vivo: Iván salía R2 donde ya era R1.
   const cargar = async () => {
     const r = await api.listResidentes();
     if (r.ok) { setResidentes(r.residentes); setError(null); }
     else { setResidentes(null); setError(r.error); }
+    await loadResidentes();
   };
   useEffect(() => { cargar(); }, []);
 
