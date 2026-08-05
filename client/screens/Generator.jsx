@@ -10,6 +10,7 @@ import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/dom
 import { accumulatedTally } from "./v2/domain/accumulate.js";
 import { canEdit } from "./v2/domain/cuadrante.js";
 import { violationText } from "./client/lib/violations.js";
+import { monthReplacementPlan } from "./client/lib/apply-month.js";
 
 const { useState, useMemo, useEffect } = React;
 const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
@@ -139,6 +140,12 @@ alrededor:
 Genera el cuadrante completo de ${nombreMes} (mes=${mes}, año=${anio}) respetando estas normas.`;
 }
 
+/** Muestra acotada para los mensajes de rechazo: no vuelca 60 fechas o 60 ids en la pantalla. */
+function muestraDe(valores) {
+  const unicos = [...new Set(valores)].sort();
+  return { n: unicos.length, texto: unicos.slice(0, 5).join(", ") + (unicos.length > 5 ? ` y ${unicos.length - 5} más` : "") };
+}
+
 function ViolationBox({ v, color, bg, residentes }) {
   return (
     <div style={{ fontSize: 12, color, background: bg, borderRadius: 6, padding: "4px 8px" }}>
@@ -176,6 +183,10 @@ function GeneratorScreen() {
   // servidor ya lo rechaza en guardarAsignaciones, esto solo lo refleja en la UI.
   const [estadoCuadrante, setEstadoCuadrante] = useState("BORRADOR");
   const [festivos, setFestivos] = useState([]);
+  // Lo que el mes YA tiene. No entra en la validación (eso duplicaría lo pegado), pero sin ello
+  // no se puede aplicar bien: `guardarAsignaciones` es append-only y mandar solo las filas nuevas
+  // AÑADE — ver client/lib/apply-month.js.
+  const [existentes, setExistentes] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -185,27 +196,35 @@ function GeneratorScreen() {
       setLoading(true);
 
       const monthEnd = toISO(anio, mes, daysInMonth(anio, mes));
-      const [rBloqueos, rEstado, rFestivos] = await Promise.all([
+      const [rBloqueos, rEstado, rFestivos, rExistentes] = await Promise.all([
         api.listBloqueos(anio, mes),
         api.estadoCuadrante(anio, mes),
         // Con margen: el vecino del día 1 y el del último día deciden si son puente (§3.4).
         api.listFestivosRango(addDays(monthStart, -1), addDays(monthEnd, 1)),
+        api.listAsignaciones(anio, mes),
       ]);
       if (cancelled) return;
-      // Un fallo de estadoCuadrante pasa por el MISMO contextError que un fallo de bloqueos
-      // (no se distingue cuál falló): si no se sabe el estado real, no se puede asegurar que
-      // el mes no esté PUBLICADO, así que se trata igual de mal que no tener bloqueos.
-      if (!rBloqueos.ok || !rEstado.ok) {
+      // Un fallo de estadoCuadrante o del cuadrante actual pasa por el MISMO contextError que un
+      // fallo de bloqueos: si no se sabe el estado real no se puede asegurar que el mes no esté
+      // PUBLICADO, y si no se sabe qué hay escrito ya, aplicar añadiría encima en vez de
+      // reemplazar — que es justo el fallo que apply-month.js existe para cerrar.
+      const fallo = !rBloqueos.ok ? "No se pudieron cargar los bloqueos: " + rBloqueos.error
+        : !rEstado.ok ? "No se pudo comprobar el estado del cuadrante: " + rEstado.error
+        : !rExistentes.ok ? "No se pudo leer el cuadrante actual del mes: " + rExistentes.error
+        : null;
+      if (fallo) {
         setLoading(false);
-        setContextError(!rBloqueos.ok ? ("No se pudieron cargar los bloqueos: " + rBloqueos.error) : ("No se pudo comprobar el estado del cuadrante: " + rEstado.error));
+        setContextError(fallo);
         setCargandoContexto(false);
         // Se resetean (no se dejan los del mes anterior): con contextError activo el
         // prompt/comprobar() no deben mostrar datos reales de OTRO mes como si fueran de este.
         setBloqueos([]);
         setHistoricas([]);
         setFestivos([]);
+        setExistentes([]);
         return;
       }
+      setExistentes(rExistentes.asignaciones);
       setEstadoCuadrante(rEstado.estado);
       // Un fallo al cargar festivos NO tumba la pantalla (INV-12 es aviso, V-14), pero tampoco
       // se calla: sin ellos el prompt le dice al modelo que no invente ninguno.
@@ -237,6 +256,7 @@ function GeneratorScreen() {
         setCargandoContexto(false);
         setBloqueos([]);
         setHistoricas([]);
+        setExistentes([]);
         return;
       }
       setBloqueos(rBloqueos.bloqueos);
@@ -256,6 +276,13 @@ function GeneratorScreen() {
     () => festivos.filter((f) => f.fecha.startsWith(monthStart.slice(0, 7))),
     [festivos, monthStart]
   );
+  // Cuántas guardias tiene ya el mes. Es exactamente "cuántas se perderían si la propuesta no
+  // reemplazara ninguna", así que sale del mismo sitio que el plan real en vez de repetir aquí
+  // qué códigos le pertenecen al generador.
+  const guardiasEnElMes = useMemo(
+    () => monthReplacementPlan({ mes, anio, residentes, existentes, propuesta: [] }).borradas.length,
+    [mes, anio, residentes, existentes]
+  );
   const promptText = useMemo(
     () => construirPrompt({ mes, anio, nombreMes, porNivel, acumulados, bloqueosDelMes: bloqueos, festivosDelMes, puentesDelMes: puentes }),
     [mes, anio, nombreMes, porNivel, acumulados, bloqueos, festivosDelMes, puentes]
@@ -265,6 +292,7 @@ function GeneratorScreen() {
   const [parseError, setParseError] = useState(null);
   const [violaciones, setViolaciones] = useState(null); // null = aún no comprobado
   const [parsedAsignaciones, setParsedAsignaciones] = useState(null);
+  const [plan, setPlan] = useState(null); // lo que se escribiría al aplicar (apply-month.js)
   const [applying, setApplying] = useState(false);
 
   const onRespuestaChange = (v) => {
@@ -272,6 +300,7 @@ function GeneratorScreen() {
     setParseError(null);
     setViolaciones(null);
     setParsedAsignaciones(null);
+    setPlan(null);
   };
 
   const copiarPrompt = async () => {
@@ -284,23 +313,43 @@ function GeneratorScreen() {
   };
 
   const comprobar = () => {
+    // Un único punto de rechazo: cada motivo tiene que dejar la pantalla en el mismo estado (sin
+    // veredicto y sin plan de escritura), y ya eran tres copias de lo mismo antes de sumar la
+    // comprobación de las fechas de abajo.
+    const rechaza = (msg) => {
+      setParseError(msg);
+      setViolaciones(null);
+      setParsedAsignaciones(null);
+      setPlan(null);
+    };
     const texto = respuesta.replace(/```json|```/g, "").trim();
     let parsed;
     try {
       parsed = JSON.parse(texto);
     } catch (e) {
-      setParseError("La respuesta no es JSON válido: " + e.message);
-      setViolaciones(null);
-      setParsedAsignaciones(null);
-      return;
+      return rechaza("La respuesta no es JSON válido: " + e.message);
     }
     const asignacionesRespuesta = Array.isArray(parsed) ? parsed
       : (parsed && Array.isArray(parsed.asignaciones)) ? parsed.asignaciones : null;
     if (!asignacionesRespuesta) {
-      setParseError('El JSON debe tener la forma {"asignaciones": [...]}');
-      setViolaciones(null);
-      setParsedAsignaciones(null);
-      return;
+      return rechaza('El JSON debe tener la forma {"asignaciones": [...]}');
+    }
+
+    // El plan de escritura se calcula ANTES de validar: si la respuesta trae fechas que no son de
+    // este mes, el veredicto de abajo no hablaría de ellas —`validateMonth` solo mira los días
+    // del mes— y aplicar las escribiría igual, en otro mes y cambiándole el estado de paso. Se
+    // rechaza entera: lo que ha devuelto el asistente no es el mes que se le pidió.
+    const nuevoPlan = monthReplacementPlan({ mes, anio, residentes, existentes, propuesta: asignacionesRespuesta });
+    if (nuevoPlan.fueraDelMes.length > 0) {
+      const { texto } = muestraDe(nuevoPlan.fueraDelMes.map((a) => a.fecha));
+      return rechaza(`La respuesta trae ${nuevoPlan.fueraDelMes.length} asignación(es) con fechas que no son de ${nombreMes}: ${texto}. Pide al asistente que las corrija y vuelve a pegarla.`);
+    }
+    // Un id inventado solo produce `aviso` en INV-1 (V-21), así que se aplicaba: filas que nadie
+    // puede ver ni corregir desde la rejilla, en una tabla que no se borra nunca. Y ahora que
+    // aplicar REEMPLAZA el mes, además borraría el cuadrante bueno a cambio de nada visible.
+    if (nuevoPlan.desconocidos.length > 0) {
+      const { n, texto } = muestraDe(nuevoPlan.desconocidos.map((a) => a.residenteId));
+      return rechaza(`La respuesta usa ${n} identificador(es) que no son de ningún residente: ${texto}. Pide al asistente que use los "id" exactos del prompt y vuelve a pegarla.`);
     }
     // El histórico (meses anteriores, ya cargado para el contaje acumulado) más la respuesta
     // del asistente: INV-7 (contrato C-2) necesita ver la rotación completa, no solo el mes
@@ -318,23 +367,28 @@ function GeneratorScreen() {
       setParseError(null);
       setViolaciones(validateMonth(ctx));
       setParsedAsignaciones(asignacionesRespuesta);
+      setPlan(nuevoPlan);
     } catch (e) {
-      setParseError("La respuesta no se pudo validar: " + e.message);
-      setViolaciones(null);
-      setParsedAsignaciones(null);
+      return rechaza("La respuesta no se pudo validar: " + e.message);
     }
   };
 
   const errores = (violaciones || []).filter((v) => v.severidad === "error");
   const avisos = (violaciones || []).filter((v) => v.severidad === "aviso");
   const cuadrantePublicado = !canEdit(estadoCuadrante);
+  // `parsedAsignaciones.length > 0` y no `plan.cambios.length`: un `{"asignaciones": []}` genera un
+  // plan que solo borra, y "aplicar" no puede ser la forma de vaciar el mes de un botonazo.
   const puedeAplicar = violaciones !== null && errores.length === 0 && parsedAsignaciones && parsedAsignaciones.length > 0 && !cuadrantePublicado;
+  const guardiasQueSePierden = plan ? plan.borradas.length : 0;
 
   const aplicar = async () => {
     setApplying(true);
     setLoading(true);
-    const cambios = parsedAsignaciones.map((a) => ({ fecha: a.fecha, residenteId: a.residenteId, codigo: a.codigo }));
-    const r = await api.guardarAsignaciones(cambios);
+    // `plan.cambios`, no la propuesta a secas: incluye el borrado de las guardias previas que la
+    // propuesta no reemplaza. Mandar solo la propuesta AÑADE sobre lo que hubiera (la tabla es
+    // append-only con clave fecha|residenteId) y dejaba días con tres personas justo después de
+    // un "sin violaciones" — ver client/lib/apply-month.js.
+    const r = await api.guardarAsignaciones(plan.cambios);
     setLoading(false);
     setApplying(false);
     if (r.ok) {
@@ -362,6 +416,14 @@ function GeneratorScreen() {
           <div style={{ marginTop: 8 }}>
             <Btn onClick={() => setRetryTick((t) => t + 1)}>🔄 Reintentar</Btn>
           </div>
+        </Aviso>
+      )}
+
+      {!contextError && guardiasEnElMes > 0 && (
+        <Aviso>
+          {nombreMes} ya tiene {guardiasEnElMes} guardia{guardiasEnElMes === 1 ? "" : "s"} asignada
+          {guardiasEnElMes === 1 ? "" : "s"}. Aplicar una propuesta <b>reemplaza</b> el mes: quedará
+          exactamente lo que valides aquí abajo. Las marcas V/R/B de la rejilla se conservan.
         </Aviso>
       )}
 
@@ -433,9 +495,20 @@ function GeneratorScreen() {
                 falta corregirlo, el Responsable puede despublicarlo desde la pantalla Cuadrante.
               </Aviso>
             ) : (
-              <Btn onClick={aplicar} disabled={applying || !puedeAplicar} color={COLOR.greenMid}>
-                {applying ? "Aplicando…" : "✅ Aplicar al cuadrante"}
-              </Btn>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {guardiasQueSePierden > 0 && (
+                  <Aviso>
+                    Aplicar eliminará {guardiasQueSePierden} guardia{guardiasQueSePierden === 1 ? "" : "s"} del
+                    cuadrante actual de {nombreMes} que esta propuesta no incluye. El mes quedará exactamente
+                    como lo validado arriba.
+                  </Aviso>
+                )}
+                <Btn onClick={aplicar} disabled={applying || !puedeAplicar} color={COLOR.greenMid}>
+                  {applying ? "Aplicando…"
+                    : guardiasQueSePierden > 0 ? `♻️ Reemplazar el cuadrante de ${nombreMes}`
+                    : "✅ Aplicar al cuadrante"}
+                </Btn>
+              </div>
             )}
           </div>
         </Card>
