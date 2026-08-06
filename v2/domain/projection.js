@@ -11,13 +11,30 @@
 //    con un domingo DENTRO del propio mes (nunca ve la pestaña del mes siguiente): la misma
 //    limitación que ya tenía el .xlsm, documentada y aceptada en spec.md §4 (S-5) — el
 //    dominio (`tally`) sí ve ese doblete de borde; esta proyección, deliberadamente, no.
-//  - `buildResumenRows`: hoja "Resumen", una fila por residente activo en algún mes
-//    publicado, con SUMIF encadenado cruzando TODAS las pestañas mensuales publicadas (por
-//    nombre de hoja) y la comprobación de equidad (MAXIFS/MINIFS) agrupada por COHORTE de
-//    ingreso — mismo criterio que INV-3/V-2, no por nivel actual como hacía el Excel viejo.
-//    Alcance provisional: acumula TODOS los meses publicados desde siempre, no por año
-//    académico como el .xlsm (que se recreaba cada año) — simplificación consciente,
-//    revisar si con varios años de datos reales deja de ser una lectura útil.
+//  - `buildResumenRows`: hoja "Resumen YYYY-YY", una fila por residente activo en el CURSO
+//    académico (jun–may), con SUMIF encadenado cruzando las pestañas mensuales publicadas de
+//    ese curso y la diferencia máx-mín agrupada por COHORTE de ingreso — mismo criterio de
+//    agrupación que INV-3/V-2, no por nivel actual como hacía el Excel viejo.
+//  - `buildContajeTrimestralRows`: hoja "Contaje Trimestral YYYY-YY", el total por residente
+//    y trimestre del contaje (T1 jun-ago … T4 mar-may) más la diferencia máx-mín por cohorte
+//    en cada trimestre. Es lo que el Responsable comunica a tutoría al cerrar el trimestre.
+//
+// LA VENTANA ES EL CURSO ACADÉMICO (decisión V-25), y las dos hojas la llevan en el NOMBRE
+// para que la del curso pasado no se sobreescriba — es lo que hacía el .xlsm recreándose cada
+// año, y encima acota la cadena SUMIF a ≤12 términos por celda en vez de crecer sin techo (a
+// diez años eran ~10.800 SUMIF de columna completa por recálculo).
+//
+// NINGUNA de las dos hojas puede reproducir el veredicto de INV-3, y por eso ninguna dice
+// "dif ≤ 1" ni habla de equidad: son una LECTURA, no una validación (ver `NOTA_LIMITES`). Las
+// diferencias son estructurales, no de precisión, y están medidas:
+//  - la ventana de INV-3 anual es el AÑO DE RESIDENCIA de cada residente, que arranca en su
+//    aniversario y no en junio; cuatro cierres anuales con dif=1 —los cuatro OK para INV-3—
+//    acumulan una dif de por vida de 4;
+//  - los dos cierres de INV-3 NORMALIZAN por disponibilidad (descuentan la baja médica), y eso
+//    no es expresable en una fórmula de hoja: con una baja de 6 meses INV-3 calla y un
+//    MAXIFS/MINIFS sobre totales brutos marcaría una diferencia de 25;
+//  - la hoja solo ve meses PUBLICADOS, así que un trimestre está incompleto hasta que se
+//    publica su tercer mes.
 //
 // Limitaciones conocidas y aceptadas (puerta de consistencia, revisión de 4 agentes):
 //  - El SUMIF de "Resumen" cruza por NOMBRE de residente (columna A de cada pestaña
@@ -30,14 +47,56 @@
 //    que `accumulatedTally` (spec.md §4, Fase 6.1). Cosmético: no alimenta INV-3 ni ningún
 //    contaje real, que siguen mirando la fecha exacta vía `tally`/`levelOn` en el dominio.
 
-import { datesOfMonth, weekday, addDays, addYears } from "./calendar.js";
-import { defaultTrainingPeriods, levelOn, isActiveOn } from "./residents.js";
+import { datesOfMonth, weekday, addDays, addYears, academicYearOf, trimesterOf, toISO } from "./calendar.js";
+import { periodsOfResident, levelOn, isActiveOn } from "./residents.js";
 
 const GUARDIA_CODES = new Set(["G", "GF", "GP"]);
 
 const FIXED_HEADERS = ["Residente", "Nivel", "G", "GF", "GP", "3P", "Fines de Semana", "Dobl. V-D", "Total"];
 const LEVEL_RANK = { R4: 4, R3: 3, R2: 2, R1: 1 };
-const RESUMEN_HEADER = ["Residente", "Cohorte", "Total", "Fines de Semana", "Festivos", "Prefestivos", "Dobletes V-D", "3P", "Dif. máx-mín (cohorte)", "Equidad (dif. ≤ 1)"];
+// «Dif. máx-mín (cohorte)» es un HECHO y se queda. La segunda columna era «Equidad (dif. ≤ 1)»,
+// que invocaba el umbral de INV-3 sobre una ventana y unos totales que no son los suyos (ver la
+// cabecera del fichero): ahora dice de qué curso habla y que es orientativo, decisión V-25.
+const RESUMEN_HEADER = ["Residente", "Cohorte", "Total", "Fines de Semana", "Festivos", "Prefestivos", "Dobletes V-D", "3P", "Dif. máx-mín (cohorte)", "Reparto del curso (orientativo)"];
+const TRIMESTRES_ORDEN = [
+  { clave: "T1", etiqueta: "T1 jun-ago" },
+  { clave: "T2", etiqueta: "T2 sep-nov" },
+  { clave: "T3", etiqueta: "T3 dic-feb" },
+  { clave: "T4", etiqueta: "T4 mar-may" },
+];
+const CONTAJE_HEADER = ["Residente", "Cohorte", ...TRIMESTRES_ORDEN.map((t) => t.etiqueta)];
+
+// La nota va DENTRO de la hoja, no solo en este comentario: el Sheet es el entregable y lo lee
+// gente que no abre el repo. Sin ella, «Dif. máx-mín» invita a leerse como el «dif ≤ 1» de la
+// normativa, que es justo lo que estas hojas no pueden comprobar.
+const NOTA_LIMITES = "Lectura orientativa, no es la comprobación de INV-3: solo cuenta meses ya PUBLICADOS de este curso (un trimestre está incompleto hasta publicar su tercer mes), no descuenta bajas médicas (el validador de la app sí lo hace) y la equidad de la normativa se cierra por año de residencia de cada uno, que empieza en su aniversario y no en junio.";
+
+/** Etiqueta del curso académico: 2026 → "2026-27". Ordena bien y no colisiona entre cursos. */
+export function cursoLabel(curso) {
+  return `${curso}-${String((curso + 1) % 100).padStart(2, "0")}`;
+}
+
+/**
+ * Rellena todas las filas hasta el ancho de la más ancha, con "".
+ *
+ * OBLIGATORIO en todo lo que devuelva este módulo: `Code.gs` escribe con
+ * `getRange(1,1,rows.length,rows[0].length).setValues(rows)`, y `setValues` exige una matriz
+ * RECTANGULAR — una fila más corta lanza «The number of columns in the data does not match». Una
+ * fila de nota o de separación es lo primero que rompe eso, y ningún test lo vería: el `ss` de los
+ * fakes es un array de arrays sin límites (la misma ceguera que dejó pasar el fallo de la rejilla
+ * de 26 columnas hasta que se probó en vivo).
+ */
+function rectangular(rows) {
+  const ancho = rows.reduce((max, f) => Math.max(max, f.length), 0);
+  return rows.map((f) => (f.length === ancho ? f : [...f, ...Array(ancho - f.length).fill("")]));
+}
+
+/** Los meses publicados que caen en el curso académico dado, ordenados cronológicamente. */
+function monthsOfCurso(publishedMonths, curso) {
+  return [...new Map(publishedMonths.map((m) => [monthSheetName(m.anio, m.mes), m])).values()]
+    .filter((m) => academicYearOf(toISO(m.anio, m.mes, 1)) === curso)
+    .sort((a, b) => a.anio - b.anio || a.mes - b.mes);
+}
 
 /** Nombre de pestaña mensual: "YYYY-MM" (ordena bien alfabéticamente, sin acentos ni espacios). */
 export function monthSheetName(anio, mes) {
@@ -56,17 +115,11 @@ export function columnLetter(n) {
   return s;
 }
 
-// Mismo fallback de fechaFin que accumulate.js/validate.js (deuda preexistente conocida,
-// spec.md §6 retro Fase 6.1: duplicado en 7 sitios; no se consolida aquí, fuera de alcance).
-function periodsOf(residente) {
-  const fin = residente.fechaFin || addDays(addYears(residente.fechaInicio, 4), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
 
 /** Residentes activos (R1-R4) en alguna de `dates`, con su primer día activo dentro de ese conjunto. */
 function activeResidents(residentes, dates) {
   return residentes
-    .map((r) => ({ ...r, periods: periodsOf(r) }))
+    .map((r) => ({ ...r, periods: periodsOfResident(r) }))
     .map((r) => ({ ...r, firstActiveDate: dates.find((d) => isActiveOn(r.periods, d)) }))
     .filter((r) => r.firstActiveDate !== undefined);
 }
@@ -138,7 +191,7 @@ export function buildMonthSheetRows({ anio, mes, residentes, asignaciones }) {
       ...codigos,
     ]);
   }
-  return { sheetName: monthSheetName(anio, mes), rows };
+  return { sheetName: monthSheetName(anio, mes), rows: rectangular(rows) };
 }
 
 function sumifChain(mesesOrdenados, rowNum, col) {
@@ -150,22 +203,37 @@ function sumifChain(mesesOrdenados, rowNum, col) {
   return `=${terms.join("+")}`;
 }
 
-/**
- * Filas de la hoja "Resumen" (spec.md §7): equidad acumulada por cohorte de ingreso,
- * agregando por SUMIF/MAXIFS/MINIFS sobre todas las pestañas mensuales PUBLICADAS.
- * @param {object} p { residentes:{id,nombre,fechaInicio}[], publishedMonths:{mes,anio}[] }
- * @returns {{sheetName:"Resumen", rows:Array<Array<string|number>>}}
- */
-export function buildResumenRows({ residentes, publishedMonths }) {
-  const meses = [...new Map(publishedMonths.map((m) => [monthSheetName(m.anio, m.mes), m])).values()]
-    .sort((a, b) => a.anio - b.anio || a.mes - b.mes);
-  const todasLasFechas = meses.flatMap((m) => datesOfMonth(m.anio, m.mes));
-  const activos = activeResidents(residentes, todasLasFechas)
+/** Residentes activos en alguno de esos meses, con su cohorte, ordenados por cohorte y nombre. */
+function activosDeLosMeses(residentes, meses) {
+  const fechas = meses.flatMap((m) => datesOfMonth(m.anio, m.mes));
+  return activeResidents(residentes, fechas)
     .map((r) => ({ nombre: r.nombre, cohorte: Number(r.fechaInicio.slice(0, 4)) }))
     .sort((a, b) => a.cohorte - b.cohorte || a.nombre.localeCompare(b.nombre));
+}
 
+/** MAXIFS-MINIFS de `col` entre las filas de la MISMA cohorte (columna B), para la fila `i`. */
+function difCohorteFormula(col, i, lastRow) {
+  const rango = `$${col}$2:$${col}$${lastRow}`;
+  const cohortes = `$B$2:$B$${lastRow}`;
+  return `=IF($B${i}="","",MAXIFS(${rango},${cohortes},$B${i})-MINIFS(${rango},${cohortes},$B${i}))`;
+}
+
+/**
+ * Filas de la hoja "Resumen YYYY-YY" (spec.md §7): carga por residente en el CURSO académico,
+ * agregando por SUMIF sobre las pestañas mensuales publicadas de ese curso, con la diferencia
+ * máx-mín por cohorte de ingreso.
+ *
+ * La ventana es el curso (decisión V-25) y va en el nombre de la hoja: sin eso, republicar un mes
+ * de otro curso sobreescribiría la hoja del anterior. NO reproduce el veredicto de INV-3 y no lo
+ * pretende — ver la cabecera del fichero y `NOTA_LIMITES`, que se escribe en la propia hoja.
+ *
+ * @param {object} p { residentes:{id,nombre,fechaInicio}[], publishedMonths:{mes,anio}[], curso:number }
+ * @returns {{sheetName:string, rows:Array<Array<string|number>>}}
+ */
+export function buildResumenRows({ residentes, publishedMonths, curso }) {
+  const meses = monthsOfCurso(publishedMonths, curso);
   const rows = [RESUMEN_HEADER];
-  for (const r of activos) {
+  for (const r of activosDeLosMeses(residentes, meses)) {
     const rowNum = rows.length + 1;
     rows.push([
       r.nombre, r.cohorte,
@@ -175,17 +243,74 @@ export function buildResumenRows({ residentes, publishedMonths }) {
       sumifChain(meses, rowNum, "E"), // Prefestivos (columna GP)
       sumifChain(meses, rowNum, "H"), // Dobletes V-D
       sumifChain(meses, rowNum, "F"), // 3P
-      "", "", // equidad: se rellena abajo, una vez se conoce el rango completo de filas
+      "", "", // dif y lectura: se rellenan abajo, una vez se conoce el rango completo de filas
     ]);
   }
 
-  // Umbral de equidad = 1, el mismo que exige INV-3 (equity.js): no se deja como celda
-  // editable (a diferencia del Excel viejo) porque el validador real de la app NO lo lee
-  // de aquí — un umbral "editable" en el Sheet que no afecta a INV-3 sería engañoso.
+  // El umbral no se deja como celda editable (a diferencia del Excel viejo) porque el validador
+  // real de la app NO lo lee de aquí: un umbral editable en el Sheet que no afecta a INV-3 sería
+  // engañoso. Y el veredicto ya no dice "OK/REVISAR" sobre "dif ≤ 1", que era invocar el umbral de
+  // INV-3 sobre una ventana y unos totales que no son los suyos (V-25).
   const lastRow = rows.length;
   for (let i = 2; i <= lastRow; i++) {
-    rows[i - 1][8] = `=IF($B${i}="","",MAXIFS($C$2:$C$${lastRow},$B$2:$B$${lastRow},$B${i})-MINIFS($C$2:$C$${lastRow},$B$2:$B$${lastRow},$B${i}))`;
-    rows[i - 1][9] = `=IF($B${i}="","",IF(I${i}<=1,"OK","REVISAR"))`;
+    rows[i - 1][8] = difCohorteFormula("C", i, lastRow);
+    rows[i - 1][9] = `=IF($B${i}="","",IF(I${i}<=1,"equilibrado","desigual: mirar en la app"))`;
   }
-  return { sheetName: "Resumen", rows };
+  rows.push([], [NOTA_LIMITES]);
+  return { sheetName: `Resumen ${cursoLabel(curso)}`, rows: rectangular(rows) };
+}
+
+/**
+ * Filas de la hoja "Contaje Trimestral YYYY-YY" (spec.md §7, Fase 7.2): el total por residente en
+ * cada trimestre del contaje, más la diferencia máx-mín por cohorte en cada uno. Es lo que el
+ * Responsable tiene que comunicar a tutoría al cerrar cada trimestre y hasta ahora no existía
+ * fuera de la app.
+ *
+ * Los trimestres se agrupan por MES (`trimesterOf`), nunca por posición de fila: trocear por
+ * rangos fijos es el «bug de trimestres posicionales» que el .xlsm tenía y que ADR-001 manda
+ * eliminar — al insertar un residente se desalineaba en silencio. Y T3 (dic-feb) cruza el año
+ * natural, así que agrupar por año de calendario tampoco valdría.
+ *
+ * Muestra los ejes de INV-3 TRIMESTRAL (solo el total, decisión V-13/P-8), no la carga anual por
+ * nivel del .xlsm: enseñar una cifra distinta de la que juzga el invariante es la trampa que
+ * V-11(c) ya evitó en el Resumen.
+ *
+ * @param {object} p { residentes:{id,nombre,fechaInicio}[], publishedMonths:{mes,anio}[], curso:number }
+ * @returns {{sheetName:string, rows:Array<Array<string|number>>}}
+ */
+export function buildContajeTrimestralRows({ residentes, publishedMonths, curso }) {
+  const meses = monthsOfCurso(publishedMonths, curso);
+  const porTrimestre = TRIMESTRES_ORDEN.map((t) => meses.filter((m) => trimesterOf(toISO(m.anio, m.mes, 1)) === t.clave));
+
+  const rows = [CONTAJE_HEADER];
+  for (const r of activosDeLosMeses(residentes, meses)) {
+    const rowNum = rows.length + 1;
+    // Columna I de la pestaña mensual = Total (G+GF+GP), el único eje del cierre trimestral.
+    rows.push([r.nombre, r.cohorte, ...porTrimestre.map((ms) => sumifChain(ms, rowNum, "I"))]);
+  }
+
+  const lastRow = rows.length;
+  if (lastRow > 1) {
+    // Una fila por cohorte, que es la comparación que hace INV-3 (dentro de la promoción). Las de
+    // UN SOLO miembro se omiten: su MAXIFS-MINIFS vale 0 por definición y una fila permanente a 0
+    // se lee como «equilibrado» cuando en realidad no hay con quién comparar. INV-3 tampoco compara
+    // ahí (es el mismo criterio del aviso de C-3: solo cuando alguna cohorte tiene ≥2 miembros).
+    const porCohorte = new Map();
+    for (const f of rows.slice(1, lastRow)) porCohorte.set(f[1], (porCohorte.get(f[1]) || 0) + 1);
+    const cohortes = [...porCohorte.keys()].filter((c) => porCohorte.get(c) >= 2).sort();
+    if (cohortes.length === 0) return { sheetName: `Contaje Trimestral ${cursoLabel(curso)}`, rows: rectangular([...rows, [], [NOTA_LIMITES]]) };
+
+    rows.push([]);
+    rows.push(["Dif. máx-mín por cohorte", "", ...TRIMESTRES_ORDEN.map(() => "")]);
+    for (const c of cohortes) {
+      const fila = [`Cohorte ${c}`, c];
+      for (let t = 0; t < TRIMESTRES_ORDEN.length; t++) {
+        const col = columnLetter(3 + t); // C, D, E, F
+        fila.push(`=MAXIFS($${col}$2:$${col}$${lastRow},$B$2:$B$${lastRow},$B${rows.length + 1})-MINIFS($${col}$2:$${col}$${lastRow},$B$2:$B$${lastRow},$B${rows.length + 1})`);
+      }
+      rows.push(fila);
+    }
+  }
+  rows.push([], [NOTA_LIMITES]);
+  return { sheetName: `Contaje Trimestral ${cursoLabel(curso)}`, rows: rectangular(rows) };
 }

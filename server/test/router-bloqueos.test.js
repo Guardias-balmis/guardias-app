@@ -7,6 +7,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import nodeCrypto from "node:crypto";
 import { handleRequest } from "../src/router.js";
+import { absences } from "../../v2/domain/absences.js";
+import { parseISO } from "../../v2/domain/calendar.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 
@@ -40,7 +42,8 @@ function makeDeps(overrides = {}) {
     now: 1_000_000, today: "2027-07-16",
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
-    domain: {},
+    // `parseISO` porque `crearBloqueo` valida el rango de verdad (no por orden lexicográfico).
+    domain: { absences, parseISO },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
     fetchTokeninfo: () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "ana@gmail.com", email_verified: "true", sub: "g-1", exp: String(2_000_000), nonce: [...nonces][0] }),
@@ -122,6 +125,37 @@ test("crearBloqueo valida motivo y rango de fechas", () => {
   const session = loggedIn(deps);
   assert.equal(call({ action: "crearBloqueo", session, desde: "2026-08-10", hasta: "2026-08-01", motivo: "VACACIONES" }, deps).ok, false); // hasta < desde
   assert.equal(call({ action: "crearBloqueo", session, desde: "2026-08-01", hasta: "2026-08-10", motivo: "INVENTADO" }, deps).ok, false); // motivo inválido
+});
+
+// El `!desde || !hasta || desde > hasta` que había aquí era una comparación LEXICOGRÁFICA de lo
+// que mandara el cliente: colaba cualquier cosa cuyo primer carácter ordenase por debajo de la
+// otra fecha. Las cuatro formas de abajo entraron en la sonda del 2026-08-02 con `{ok:true}`, y no
+// es cosmético: la tabla es append-only sobre un Sheet que se edita a mano, así que la fila se
+// queda para siempre, y una BAJA con `desde` no-ISO se descarta sola del rango de `absences` —que
+// compara cadenas a propósito (V-19)— y DESACTIVA INV-5 en silencio (medido: 31 violaciones → 0).
+test("crearBloqueo rechaza una fecha que no es ISO estricta, aunque ordene bien", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  const malas = [
+    "30/02/2027",   // formato español: "3" ordena por encima de "2", así que pasaba el `>` y además es un día inexistente
+    "2027-13-45",   // forma ISO pero mes y día imposibles
+    "9999",         // solo el año
+    "2027-06-1",    // día sin cero a la izquierda: rompe el orden lexicográfico de todo el resto
+    { x: 1 },       // no-string: serializaba a "[object Object]"
+  ];
+  for (const hasta of malas) {
+    const r = call({ action: "crearBloqueo", session, desde: "2026-08-01", hasta, motivo: "BAJA" }, deps);
+    assert.equal(r.ok, false, `hasta=${JSON.stringify(hasta)} debería rechazarse`);
+    assert.match(r.error, /fecha inválida|inexistente/i);
+  }
+  // Y no ha entrado ninguna fila: la defensa es en la escritura, no en la lectura.
+  assert.equal(call({ action: "misBloqueos", session, anio: 2026, mes: 8 }, deps).bloqueos.length, 0);
+});
+
+test("crearBloqueo sigue aceptando el rango de un solo día (desde == hasta)", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  assert.equal(call({ action: "crearBloqueo", session, desde: "2026-08-05", hasta: "2026-08-05", motivo: "VACACIONES" }, deps).ok, true);
 });
 
 test("crearBloqueo, misBloqueos y cancelarBloqueo requieren sesión", () => {

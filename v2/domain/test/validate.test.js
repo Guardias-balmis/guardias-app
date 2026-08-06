@@ -83,6 +83,69 @@ test("INV-1: día sin nadie de guardia (0 personas) sigue siendo error duro, no 
   assert.equal(i1[0].severidad, "error");
 });
 
+// ── INV-1: residentes NO asignables (decisión V-21) ──
+// Antes, un día cubierto solo por alguien no asignable producía el objeto byte a byte idéntico
+// al de un día vacío («sin cubrir, mayores=0, pequeños=0»), sin `residenteId`: un error duro con
+// un diagnóstico falso y sin pista de la causa. El disparador no es exótico — el R4 que acaba a
+// mediados de mayo mientras se dibuja julio, o una `fechaFin` mal teclada.
+const ZOE_FIN = R("ZOE", "2022-05-22", "2026-05-21");    // FINALIZADO en julio-2026
+const NOA_FUT = R("NOA", "2027-05-22", "2031-05-21");    // PENDIENTE en julio-2026
+
+test("INV-1: día cubierto SOLO por un FINALIZADO es aviso, nombra la causa y el residenteId", () => {
+  const asgs = coverMonth(7, 2026, 31, [asg("ZOE", "2026-07-01", "G")]);
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA, ZOE_FIN], asignaciones: asgs });
+  const i1 = only(v, "INV-1");
+  assert.equal(i1.length, 2); // el aviso de la persona + el del día que se queda sin nadie
+  assert.ok(i1.every((x) => x.severidad === "aviso"), "V-21: no bloquea, la causa está en las fechas del residente");
+
+  const porPersona = i1.find((x) => x.residenteId === "ZOE");
+  assert.ok(porPersona, "la violación debe traer residenteId para que violations.js pueda traducirla");
+  assert.match(porPersona.detalle, /terminó el 2026-05-21/);
+
+  const porDia = i1.find((x) => !x.residenteId);
+  assert.match(porDia.detalle, /sin nadie asignable/);
+  assert.doesNotMatch(porDia.detalle, /sin cubrir/, "no debe reusar el mensaje del día vacío: hay un nombre escrito en la rejilla");
+});
+
+test("INV-1: un id que no está en `residentes` se nombra como tal, no como día vacío", () => {
+  const asgs = coverMonth(7, 2026, 31, [asg("FANTASMA", "2026-07-01", "G")]);
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA], asignaciones: asgs });
+  const porPersona = only(v, "INV-1").find((x) => x.residenteId === "FANTASMA");
+  assert.equal(porPersona.severidad, "aviso");
+  assert.match(porPersona.detalle, /no figura en la lista de residentes/);
+});
+
+test("INV-1: un PENDIENTE (residencia sin empezar) da la fecha de inicio", () => {
+  const asgs = coverMonth(7, 2026, 31, [asg("NOA", "2026-07-01", "G")]);
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA, NOA_FUT], asignaciones: asgs });
+  const porPersona = only(v, "INV-1").find((x) => x.residenteId === "NOA");
+  assert.match(porPersona.detalle, /empieza el 2027-05-22/);
+});
+
+test("INV-1: 1 válido + 1 no asignable avisa de LAS DOS cosas (antes la asignación inválida era muda)", () => {
+  // Este caso llegaba a VALIDADO, a PUBLICADO y a la pestaña proyectada sin una sola violación
+  // por la asignación inválida: solo salía el aviso de infra-cobertura de V-12.
+  const asgs = coverMonth(7, 2026, 31, [asg("ANA", "2026-07-01", "G"), asg("ZOE", "2026-07-01", "G")]);
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA, ZOE_FIN], asignaciones: asgs });
+  const i1 = only(v, "INV-1");
+  assert.equal(i1.length, 2);
+  assert.ok(i1.some((x) => x.residenteId === "ZOE"), "la asignación a ZOE ya no es muda");
+  assert.ok(i1.some((x) => /1 sola persona/.test(x.detalle)), "sigue el aviso de infra-cobertura de V-12");
+});
+
+test("INV-1: 2 mayores válidos + 1 no asignable NO degrada el error de composición", () => {
+  // La presencia de un no asignable no puede volver `aviso` un 2×Mayor, que sí se arregla
+  // dentro de la app quitando a uno.
+  const asgs = coverMonth(7, 2026, 31, [
+    asg("ANA", "2026-07-01", "G"), asg("BEA", "2026-07-01", "G"), asg("ZOE", "2026-07-01", "G"),
+  ]);
+  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, BEA, ELENA, ZOE_FIN], asignaciones: asgs });
+  const i1 = only(v, "INV-1");
+  const dosMayores = i1.find((x) => /mayores/i.test(x.detalle));
+  assert.equal(dosMayores.severidad, "error");
+  assert.ok(i1.some((x) => x.residenteId === "ZOE"));
+});
+
 test("INV-1: febrero de 28 días no inventa violaciones en días fantasma", () => {
   const asgs = coverMonth(2, 2027, 28);
   const v = validateMonth({ mes: 2, anio: 2027, residentes: [ANA, ELENA], asignaciones: asgs });
@@ -548,11 +611,16 @@ test("INV-10: voluntario único cubre sin sorteo (segundo puesto por sorteo) es 
 });
 
 test("INV-10: designada de Navidad no puede repetir en la despedida", () => {
+  // Los designados de Navidad ya no llegan en un campo suelto: salen de la fila del evento de
+  // Navidad (decisión V-20). `buildMonthContext` empareja los dos eventos por año académico,
+  // que es lo que junta la Navidad de diciembre con la despedida del mayo siguiente.
   const asgs = coverMonth(5, 2027, 31, [asg("ELENA", "2027-05-14", "G"), asg("HUGO", "2027-05-14", "G")]);
   const v = validateMonth({
     mes: 5, anio: 2027, residentes: [ANA, ELENA, HUGO], asignaciones: asgs,
-    designadosNavidad: ["ELENA", "FRAN"],
-    eventos: { despedida: { fecha: "2027-05-14", voluntarios: [], sorteoDocumentado: true, designados: ["ELENA", "HUGO"] } },
+    eventos: {
+      navidad: { fecha: "2026-12-18", voluntarios: [], sorteoDocumentado: true, designados: ["ELENA", "FRAN"] },
+      despedida: { fecha: "2027-05-14", voluntarios: [], sorteoDocumentado: true, designados: ["ELENA", "HUGO"] },
+    },
   });
   const i10 = only(v, "INV-10");
   assert.equal(i10.length, 1);
@@ -678,10 +746,26 @@ test("rotationHistoryStart: con varias rotaciones cercanas, devuelve el desde M�
 
 // ── buildMonthContext (Fase 6.2: única forma del ctx de validateMonth, reusada por
 // Calendar.jsx, Generator.jsx y server/src/router.js en vez de reimplementarla cada vez) ──
-test("buildMonthContext: proyecta cada residente a {id,fechaInicio,fechaFin} descartando el resto", () => {
+test("buildMonthContext: descarta nombre y email del residente, pero NO los periodos editados", () => {
+  // La proyección es explícita a propósito: el validador no debe ver `nombre` ni `email` (traducir
+  // id→nombre es trabajo de la UI, ver client/lib/violations.js). Pero `periodos` sí tiene que
+  // viajar: es lo único que expresa la nota [a], y recortarlo hacía inalcanzable la edición de
+  // periodos por muy bien que el router la hidratara desde la tabla — `levelOn` volvía al
+  // aniversario nominal sin lanzar ni avisar (V-24, fase 3).
   const r = { id: "r1", nombre: "Ana", fechaInicio: "2024-05-27", fechaFin: "2028-05-26", email: "a@x.com" };
   const ctx = buildMonthContext({ mes: 7, anio: 2026, residentes: [r], asignacionesDelMes: [], bloqueos: [] });
-  assert.deepEqual(ctx.residentes, [{ id: "r1", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" }]);
+  assert.deepEqual(ctx.residentes, [{ id: "r1", fechaInicio: "2024-05-27", fechaFin: "2028-05-26", periodos: undefined }]);
+
+  const periodos = [
+    { year: 1, start: "2024-05-27", end: "2026-05-26" },
+    { year: 2, start: "2026-05-27", end: "2027-05-26" },
+    { year: 3, start: "2027-05-27", end: "2028-05-26" },
+    { year: 4, start: "2028-05-27", end: "2029-05-26" },
+  ];
+  const conPeriodos = buildMonthContext({ mes: 7, anio: 2026, residentes: [{ ...r, periodos }], asignacionesDelMes: [], bloqueos: [] });
+  assert.deepEqual(conPeriodos.residentes[0].periodos, periodos);
+  assert.equal(conPeriodos.residentes[0].nombre, undefined);
+  assert.equal(conPeriodos.residentes[0].email, undefined);
 });
 
 test("buildMonthContext: concatena historicas + asignacionesDelMes, historicas primero", () => {
@@ -750,4 +834,139 @@ test("V-14: lo imposible y lo ilegal SÍ bloquean (INV-1 sin cubrir, INV-5 sobre
   const r1Verano = validateMonth({ mes: 7, anio: 2026, residentes: [R1], asignaciones: [asg("R1V", "2026-07-15", "G")] })
     .filter((x) => x.invariante === "INV-11" && x.severidad === "error");
   assert.equal(r1Verano.length, 1);
+});
+
+
+// ─────────────── INV-12 (coherencia código↔festivo, aviso) ───────────────
+// Los festivos son datos de entrada (S-4): el validador no deriva ninguno. Severidad aviso
+// siempre (V-4/V-14): un código mal puesto se corrige, no bloquea el cuadrante del servicio.
+
+test("INV-12: GF en un día que no consta como festivo avisa", () => {
+  const v = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    festivos: ["2026-12-25"],
+    asignaciones: [asg("ANA", "2026-12-10", "GF")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(v.length, 1);
+  assert.equal(v[0].severidad, "aviso");
+  assert.equal(v[0].fecha, "2026-12-10");
+  assert.equal(v[0].residenteId, "ANA");
+  assert.match(v[0].detalle, /no consta como festivo/);
+});
+
+test("INV-12: G o GP EN un día festivo avisa (debería ser GF)", () => {
+  const v = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    festivos: [{ fecha: "2026-12-25", nombre: "Navidad" }],
+    asignaciones: [asg("ANA", "2026-12-25", "G")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(v.length, 1);
+  assert.equal(v[0].severidad, "aviso");
+  assert.match(v[0].detalle, /debería ser GF/);
+});
+
+test("INV-12: GF en festivo y G en día normal no dicen nada", () => {
+  const v = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    festivos: ["2026-12-25"],
+    asignaciones: [asg("ANA", "2026-12-25", "GF"), asg("ANA", "2026-12-10", "G")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(v.length, 0);
+});
+
+test("INV-12: sin festivos cargados avisa UNA vez si hay GF, y calla si no hay ninguna", () => {
+  const conGF = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    asignaciones: [asg("ANA", "2026-12-10", "GF"), asg("ANA", "2026-12-25", "GF")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(conGF.length, 1, "un aviso por mes, no uno por GF");
+  assert.match(conGF[0].detalle, /no hay festivos cargados/);
+
+  // Febrero no tiene festivos en España: avisar en todo mes sin festivos sería un aviso falso
+  // cada febrero, así que sin GF escritas no se dice nada.
+  const sinGF = validateMonth({
+    mes: 2, anio: 2027, residentes: [ANA],
+    asignaciones: [asg("ANA", "2027-02-10", "G")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(sinGF.length, 0);
+});
+
+test("INV-12: una asignación fuera del mes no se juzga (el histórico de rotación entra en asignaciones)", () => {
+  const v = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    festivos: ["2026-12-25"],
+    asignaciones: [asg("ANA", "2026-11-20", "GF")], // mes anterior: lo trae el contrato C-2
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(v.length, 0);
+});
+
+test("INV-12 nunca bloquea: un mes lleno de incoherencias sigue siendo validable (V-14)", () => {
+  const v = validateMonth({
+    mes: 12, anio: 2026, residentes: [ANA],
+    festivos: ["2026-12-25"],
+    asignaciones: [asg("ANA", "2026-12-25", "G"), asg("ANA", "2026-12-10", "GF"), asg("ANA", "2026-12-11", "GF")],
+  }).filter((x) => x.invariante === "INV-12");
+  assert.equal(v.length, 3);
+  assert.deepEqual([...new Set(v.map((x) => x.severidad))], ["aviso"]);
+});
+
+// ─────────────── INV-10: de MUDO a en vigor (decisión V-20) ───────────────
+// Hasta V-20, `validateEvents` leía un `ctx.eventos` que `buildMonthContext` ni aceptaba ni
+// propagaba, y no había tabla: con `eventos = {}` no podía emitir ni una violación. Ahora las
+// filas de la tabla entran por `buildMonthContext`, que las moldea.
+
+test("buildMonthContext: las filas de `eventos` llegan moldeadas a validateMonth", () => {
+  const ctx = buildMonthContext({
+    mes: 12, anio: 2026, residentes: [ELENA], asignacionesDelMes: [], bloqueos: [],
+    eventos: [{ tipo: "NAVIDAD", fecha: "2026-12-18", designados: ["ELENA"], voluntarios: [], sorteoId: "s1", activo: true }],
+  });
+  assert.deepEqual(ctx.eventos.navidad, {
+    fecha: "2026-12-18", voluntarios: [], designados: ["ELENA"], sorteoDocumentado: true,
+  });
+});
+
+test("buildMonthContext: `sorteoDocumentado` se DERIVA de que exista una fila de sorteo", () => {
+  // No es un booleano autodeclarado: la normativa pide sorteo para que el reparto no sea a dedo,
+  // así que lo que cuenta es que haya una fila reproducible en la tabla `sorteos`.
+  const sin = buildMonthContext({
+    mes: 12, anio: 2026, residentes: [ELENA], asignacionesDelMes: [], bloqueos: [],
+    eventos: [{ tipo: "NAVIDAD", fecha: "2026-12-18", designados: [], voluntarios: [], activo: true }],
+  });
+  assert.equal(sin.eventos.navidad.sorteoDocumentado, false);
+});
+
+test("buildMonthContext: empareja Navidad y despedida por AÑO ACADÉMICO (dic-2026 con may-2027)", () => {
+  const filas = [
+    { tipo: "NAVIDAD", fecha: "2026-12-18", designados: ["ELENA"], activo: true },
+    { tipo: "DESPEDIDA", fecha: "2027-05-14", designados: [], activo: true },
+    { tipo: "NAVIDAD", fecha: "2027-12-17", designados: ["HUGO"], activo: true }, // otro curso
+  ];
+  // Validando mayo-2027 (curso 2026) tienen que verse la Navidad de dic-2026 y la despedida.
+  const mayo = buildMonthContext({ mes: 5, anio: 2027, residentes: [ELENA], asignacionesDelMes: [], bloqueos: [], eventos: filas });
+  assert.equal(mayo.eventos.navidad.fecha, "2026-12-18");
+  assert.equal(mayo.eventos.despedida.fecha, "2027-05-14");
+  // Y validando diciembre-2027 (curso 2027), la otra Navidad y ninguna despedida.
+  const dic = buildMonthContext({ mes: 12, anio: 2027, residentes: [ELENA], asignacionesDelMes: [], bloqueos: [], eventos: filas });
+  assert.equal(dic.eventos.navidad.fecha, "2027-12-17");
+  assert.equal(dic.eventos.despedida, undefined);
+});
+
+test("buildMonthContext: un evento anulado (activo=false) no llega al validador", () => {
+  const ctx = buildMonthContext({
+    mes: 12, anio: 2026, residentes: [ELENA], asignacionesDelMes: [], bloqueos: [],
+    eventos: [{ tipo: "NAVIDAD", fecha: "2026-12-18", designados: ["ELENA"], activo: false }],
+  });
+  assert.deepEqual(ctx.eventos, {});
+});
+
+test("INV-10 de punta a punta: desde las filas de la tabla, el aviso sale de verdad", () => {
+  const asgs = coverMonth(12, 2026, 31, [asg("ANA", "2026-12-18", "G")]); // Ana es R3, no R2
+  const v = validateMonth(buildMonthContext({
+    mes: 12, anio: 2026, residentes: [ANA, ELENA, HUGO], asignacionesDelMes: asgs, bloqueos: [],
+    eventos: [{ tipo: "NAVIDAD", fecha: "2026-12-18", designados: ["ANA"], voluntarios: [], sorteoId: "s1", activo: true }],
+  }));
+  const i10 = only(v, "INV-10");
+  assert.ok(i10.length >= 1, "el evento ya no es mudo");
+  assert.equal(i10[0].severidad, "aviso"); // V-4: los eventos del servicio nunca bloquean
+  assert.match(i10[0].detalle, /debe cubrirse con 2 R2/);
 });

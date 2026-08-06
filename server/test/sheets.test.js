@@ -154,3 +154,47 @@ test("todas las escrituras pasan por withLock", () => {
   st.rebuildSheet("Jun", [["x"]]);
   assert.equal(locks, 2);
 });
+
+
+// --- appendRecords: una escritura, un lock, una comprobación de cabecera --------------------
+// Lo que se protege es el COSTE, no solo el resultado: fila a fila, aplicar un mes del generador
+// (~60-90 cambios) tomaba el lock y releía la tabla entera por cada cambio.
+
+test("appendRecords escribe el lote con UN lock y UNA lectura, y devuelve los ids en orden", () => {
+  const ss = fakeSS({ asignaciones: [] });
+  let locks = 0, lecturas = 0;
+  const espia = { ...ss, read: (n) => { lecturas++; return ss.read(n); } };
+  const st = makeStore({ ss: espia, withLock: (fn) => { locks++; return fn(); }, newId: seqId });
+
+  const cambios = Array.from({ length: 60 }, (_, i) => ({
+    fecha: `2027-03-${String((i % 28) + 1).padStart(2, "0")}`, residenteId: `r${i}`, codigo: "G",
+  }));
+  const ids = st.appendRecords("asignaciones", cambios);
+
+  assert.equal(locks, 1, "un solo lock para todo el lote");
+  assert.equal(lecturas, 1, "una sola lectura (la comprobación de cabecera)");
+  assert.equal(ids.length, 60);
+  assert.equal(new Set(ids).size, 60, "un id distinto por registro");
+  const filas = st.readRecords("asignaciones");
+  assert.equal(filas.length, 60);
+  assert.equal(filas[0].residenteId, "r0");
+  assert.equal(filas[59].residenteId, "r59");
+});
+
+test("appendRecords con lote vacío no escribe ni toma el lock", () => {
+  const ss = fakeSS({ asignaciones: [] });
+  let locks = 0;
+  const st = makeStore({ ss, withLock: (fn) => { locks++; return fn(); }, newId: seqId });
+  assert.deepEqual(st.appendRecords("asignaciones", []), []);
+  assert.equal(locks, 0);
+  assert.equal(ss.read("asignaciones").length, 0, "ni siquiera se escribe la cabecera");
+});
+
+test("appendRecord sigue funcionando (es appendRecords de un elemento) y respeta un id dado", () => {
+  const ss = fakeSS({ bloqueos: [] });
+  const st = store(ss);
+  const id = st.appendRecord("bloqueos", { residenteId: "r1", desde: "2027-01-01", hasta: "2027-01-05", motivo: "BAJA", activo: true });
+  assert.ok(id);
+  assert.equal(st.appendRecord("bloqueos", { id, residenteId: "r1", desde: "2027-01-01", hasta: "2027-01-05", motivo: "BAJA", activo: false }), id);
+  assert.equal(st.readLatest("bloqueos", (r) => r.id).length, 1, "la reinserción con el mismo id es una cancelación, no una fila nueva");
+});

@@ -20,33 +20,46 @@
 // bloquea por algo que no se puede corregir DENTRO de la herramienta deja al servicio sin
 // cuadrante. No subir nada a `error` sin revisar V-14 en spec.md §6.
 
-import { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays } from "./calendar.js";
-import { defaultTrainingPeriods, levelOn, groupOf } from "./residents.js";
+import { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays, isHoliday } from "./calendar.js";
+import { periodsOfResident, levelOn, groupOf } from "./residents.js";
 import { tally } from "./tally.js";
+import { absences, isNearbyRotation, BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA } from "./absences.js";
 
 const GUARDIA = new Set(["G", "GF", "GP"]);          // ocupan puesto obligatorio
 const ASIGNACION = new Set(["G", "GF", "GP", "3P"]); // cualquier asignación (INV-5, INV-7)
-const PROVINCIAS_CERCANAS = new Set(["alicante", "valencia", "murcia", "albacete"]);
-// Decisión V-8 (Fase 5.x): solo BAJA bloquea la asignación — no se puede exigir una guardia
-// a alguien de baja médica/embarazo, por seguridad/legalidad. VACACIONES y ROTACION dejaron
-// de bloquear (antes ambas asignaciones aquí también contaban por igual): son informativas
-// para el generador, igual que una preferencia BLANDA — pero sus fechas SIGUEN alimentando
-// INV-2 (exención del mínimo mensual), INV-6 (ausencias simultáneas) e INV-7 (cobertura
-// viernes/sábado en rotación cercana), que las leen de `bloqueos` directamente, no de este set.
-const DURO = new Set(["BAJA"]);
+// Qué motivo de `bloqueos` cuenta para qué invariante vive en `absences.js`, no aquí: eran
+// cinco criterios escritos a mano en cinco sitios. Decisión V-8 (Fase 5.x): solo BAJA bloquea
+// la asignación —no se puede exigir una guardia a alguien de baja médica/embarazo—, mientras
+// VACACIONES y ROTACION son informativas para el generador pero SIGUEN alimentando INV-2
+// (exención del mínimo), INV-6 (ausencias simultáneas) e INV-7 (rotación cercana).
 
 const err = (invariante, detalle, extra = {}) => ({ invariante, severidad: "error", detalle, ...extra });
 const aviso = (invariante, detalle, extra = {}) => ({ invariante, severidad: "aviso", detalle, ...extra });
 
-function periodsOf(residente) {
-  if (residente.periodos) return residente.periodos;
-  const fin = residente.fechaFin || addDays(toISO(Number(residente.fechaInicio.slice(0, 4)) + 4, Number(residente.fechaInicio.slice(5, 7)), Number(residente.fechaInicio.slice(8, 10))), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
+// `periodsOfResident` (residents.js) es la ÚNICA derivación de periodos del dominio desde la
+// unificación de V-24: antes cada módulo tenía su propia copia del `fechaFin || addYears(+4)` y
+// tres de ellas —projection, accumulate y el `closingWindowThisMonth` de equity— NO miraban
+// `residente.periodos`, así que con la tabla `periodos` rellena el mismo residente habría tenido
+// dos niveles distintos DENTRO de una misma llamada a `marcarValidado`. Medido antes de unificar:
+// `projection.js` daba R2 el mismo día que `validate.js` daba R1.
 const cohortOf = (residente) => Number(residente.fechaInicio.slice(0, 4)); // promoción = año de inicio
 
 function inRange(fecha, desde, hasta) {
   return compareISO(fecha, desde) >= 0 && compareISO(fecha, hasta) <= 0;
+}
+
+/**
+ * Por qué un residente no es asignable en una fecha, en palabras y con la fecha frontera.
+ * `groupOf` devuelve null para los tres casos (residents.js:74-77) y son indistinguibles
+ * desde el grupo; el Responsable necesita saber cuál es para arreglarlo.
+ * @param {"PENDIENTE"|"FINALIZADO"|null} nivel  null = el id no está en `residentes`
+ * @param {{start:string,end:string}[]|undefined} periodos
+ */
+function reasonNotAssignable(nivel, periodos) {
+  if (nivel === null || !periodos) return "no figura en la lista de residentes";
+  if (nivel === "FINALIZADO") return `su residencia terminó el ${periodos[periodos.length - 1].end}`;
+  if (nivel === "PENDIENTE") return `su residencia empieza el ${periodos[0].start}`;
+  return `nivel ${nivel}, sin grupo de guardia`; // defensivo: hoy inalcanzable
 }
 
 /**
@@ -63,8 +76,8 @@ function inRange(fecha, desde, hasta) {
  *          asignaciones del propio mes basta (ninguna rotación cercana lo cruza)
  */
 export function rotationHistoryStart(bloqueos, monthStart) {
-  const desdes = bloqueos
-    .filter((b) => b.motivo === "ROTACION" && b.provincia && PROVINCIAS_CERCANAS.has(b.provincia.toLowerCase()) && b.desde < monthStart)
+  const desdes = absences(bloqueos)
+    .filter((b) => isNearbyRotation(b) && b.desde < monthStart)
     .map((b) => b.desde);
   return desdes.length === 0 ? null : desdes.reduce((min, d) => (d < min ? d : min));
 }
@@ -76,24 +89,60 @@ export function rotationHistoryStart(bloqueos, monthStart) {
  * la misma forma de objeto de forma independiente en Calendar.jsx, Generator.jsx y el router.
  * @param {object} p { mes, anio, residentes, historicas?, asignacionesDelMes, bloqueos }
  */
-export function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos }) {
+export function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [], eventos = [] }) {
   return {
     mes, anio,
-    residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
+    // `periodos` viaja SIEMPRE que venga: es lo único que expresa la nota [a] («los periodos
+    // generados son editables después»), y recortarlo aquí hacía inalcanzable el punto entero —
+    // por mucho que el router hidrate desde la tabla, este `map` los borraba y `levelOn` volvía a
+    // derivar del aniversario nominal. Un fallo perfectamente silencioso: no lanza, solo devuelve
+    // el nivel equivocado. La proyección sigue siendo explícita a propósito (no arrastrar campos
+    // que el validador no debe ver), así que un campo nuevo hay que añadirlo aquí a mano.
+    residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin, periodos: r.periodos })),
     asignaciones: [...historicas, ...asignacionesDelMes],
     bloqueos,
+    // Los eventos llegan como FILAS de la tabla y se moldean aquí, una sola vez. Se quedan los
+    // del año académico del mes validado (jun→may), que es el que empareja la Navidad de
+    // diciembre con la despedida del mayo siguiente — sin eso, validar mayo no encontraría la
+    // Navidad con la que comparar y la regla «los de Navidad libres en la despedida» sería muda.
+    eventos: shapeEventos(eventos, toISO(anio, mes, 1)),
+    // Datos de entrada, jamás derivados (S-4). Se piden con un día de margen a cada lado del mes:
+    // los vecinos del día 1 y del último día caen fuera y deciden si son puente (§3.4).
+    festivos,
   };
 }
 
 /**
- * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos?, excepciones?,
- *                        eventos?, designadosNavidad? }
+ * Filas de `eventos` → la forma que consume `validateEvents`: `{navidad, despedida}`, solo las
+ * del año académico del mes validado. `sorteoDocumentado` se DERIVA de que exista `sorteoId`
+ * (una fila real en la tabla `sorteos`, reproducible) y no de un booleano autodeclarado: la
+ * normativa pide sorteo justamente para que el reparto no sea a dedo.
+ */
+function shapeEventos(filas, monthStart) {
+  const curso = academicYearOf(monthStart);
+  const out = {};
+  for (const e of filas) {
+    if (!e || e.activo === false || academicYearOf(e.fecha) !== curso) continue;
+    const clave = String(e.tipo || "").toLowerCase();
+    if (clave !== "navidad" && clave !== "despedida") continue;
+    out[clave] = {
+      fecha: e.fecha,
+      voluntarios: e.voluntarios || [],
+      designados: e.designados || [],
+      sorteoDocumentado: Boolean(e.sorteoId),
+    };
+  }
+  return out;
+}
+
+/**
+ * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos?, excepciones?, eventos? }
  * @returns {{invariante:string, severidad:'error'|'aviso', fecha?:string, residenteId?:string, detalle:string}[]}
  */
 export function validateMonth(ctx) {
-  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, designadosNavidad = [] } = ctx;
+  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, festivos = [] } = ctx;
   const byId = new Map(residentes.map((r) => [r.id, r]));
-  const periods = new Map(residentes.map((r) => [r.id, periodsOf(r)]));
+  const periods = new Map(residentes.map((r) => [r.id, periodsOfResident(r)]));
   const levelOnDay = (id, fecha) => (periods.has(id) ? levelOn(periods.get(id), fecha) : null);
 
   const days = datesOfMonth(anio, mes);
@@ -119,6 +168,21 @@ export function validateMonth(ctx) {
     const roles = guardias.map((a) => ({ id: a.residenteId, level: levelOnDay(a.residenteId, fecha), group: groupOf(levelOnDay(a.residenteId, fecha)) }));
     const mayores = roles.filter((r) => r.group === "MAYOR");
     const pequenos = roles.filter((r) => r.group === "PEQUENO");
+    const noAsignables = roles.filter((r) => r.group === null);
+
+    // Asignaciones a quien no es asignable ese día (residencia terminada, no empezada, o id
+    // que no está en `residentes`). Antes se contaban como "nadie" y el día salía con el
+    // MISMO objeto que un día vacío —«sin cubrir (mayores=0, pequeños=0)»—, un diagnóstico
+    // falso, sin `residenteId` y por tanto sin nada que traducir en client/lib/violations.js.
+    // Es `aviso` y no `error` (decisión V-21) porque la causa vive en las fechas del
+    // residente y hoy no hay forma de corregirlas desde la app (no existe `editarResidente`):
+    // bloquear dejaría al servicio sin cuadrante por algo que nadie puede arreglar DENTRO de
+    // la herramienta, que es el criterio de V-12/V-14/V-16.
+    for (const r of noAsignables) {
+      violations.push(aviso("INV-1",
+        `Guardia del ${fecha} asignada a ${r.id}, que no es residente asignable en esa fecha (${reasonNotAssignable(r.level, periods.get(r.id))})`,
+        { fecha, residenteId: r.id }));
+    }
 
     if (guardias.length === 2 && pequenos.length === 2 && pequenos.every((p) => p.level === "R2")) {
       // Candidato 2×R2 → lo gobierna INV-9
@@ -151,6 +215,15 @@ export function validateMonth(ctx) {
     let detalle;
     if (mayores.length >= 2) detalle = `Dos o más Residentes Mayores el ${fecha}; falta el puesto de Pequeño`;
     else if (pequenos.length >= 2) detalle = `Dos Residentes Pequeños el ${fecha} (la excepción 2×R2 exige que ambos sean R2)`;
+    else if (noAsignables.length > 0) {
+      // El día TIENE nombres escritos en la rejilla: decirlo así, y no «sin cubrir», que es lo
+      // que lo hacía indistinguible de un día vacío. Aviso por lo mismo que el bucle de arriba
+      // (V-21) — el aviso de cada asignación ya dice a quién hay que arreglar.
+      violations.push(aviso("INV-1",
+        `Guardia del ${fecha} sin nadie asignable: el día solo lo cubre ${noAsignables.map((r) => r.id).join(", ")}`,
+        { fecha }));
+      continue;
+    }
     else detalle = `Día ${fecha} sin cubrir con exactamente 1 Mayor y 1 Pequeño (mayores=${mayores.length}, pequeños=${pequenos.length})`;
     violations.push(err("INV-1", detalle, { fecha }));
   }
@@ -158,7 +231,7 @@ export function validateMonth(ctx) {
   // ── INV-5: asignación sobre bloqueo BAJA (único motivo DURO — decisión V-8) ──
   for (const a of asignaciones) {
     if (!dayset.has(a.fecha) || !ASIGNACION.has(a.codigo)) continue;
-    const hit = bloqueos.find((b) => b.residenteId === a.residenteId && DURO.has(b.motivo) && inRange(a.fecha, b.desde, b.hasta));
+    const hit = absences(bloqueos, { residenteId: a.residenteId, motivos: BLOQUEA_ASIGNACION, fecha: a.fecha })[0];
     if (hit) violations.push(err("INV-5", `Asignación ${a.codigo} el ${a.fecha} sobre bloqueo ${hit.motivo}`, { fecha: a.fecha, residenteId: a.residenteId }));
   }
 
@@ -176,7 +249,7 @@ export function validateMonth(ctx) {
       violations.push(aviso("INV-2", `${r.id}: ${total} guardias computables > máximo 6`, { residenteId: r.id }));
     } else if (total < 4) {
       const esFebrero = mes === 2;
-      const tieneVoB = bloqueos.some((b) => b.residenteId === r.id && (b.motivo === "VACACIONES" || b.motivo === "BAJA") && rangeIntersectsMonth(b, days));
+      const tieneVoB = absences(bloqueos, { residenteId: r.id, motivos: EXIME_DEL_MINIMO, desde: days[0], hasta: days[days.length - 1] }).length > 0;
       const nivelMedio = levelOnDay(r.id, days[Math.floor(days.length / 2)]);
       const r1Verano = nivelMedio === "R1" && (mes === 6 || mes === 7 || mes === 8);
       if (!esFebrero && !tieneVoB && !r1Verano) {
@@ -195,8 +268,8 @@ export function validateMonth(ctx) {
   validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, violations);
 
   // ── INV-7: presencia mínima en rotación cercana (solo en el mes de fin) ──
-  for (const b of bloqueos) {
-    if (b.motivo !== "ROTACION" || !b.provincia || !PROVINCIAS_CERCANAS.has(b.provincia.toLowerCase())) continue;
+  for (const b of absences(bloqueos)) {
+    if (!isNearbyRotation(b)) continue;
     const finEnEsteMes = Number(b.hasta.slice(0, 4)) === anio && Number(b.hasta.slice(5, 7)) === mes;
     if (!finEnEsteMes) continue;
     const period = eachDate(b.desde, b.hasta);
@@ -216,7 +289,30 @@ export function validateMonth(ctx) {
   }
 
   // ── INV-9 adicional / INV-10: eventos del servicio ──
-  validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, violations);
+  validateEvents(eventos, byDay, levelOnDay, dayset, violations);
+
+  // ── INV-12: coherencia código↔festivo (aviso siempre, V-4/V-14) ──
+  // GF solo en día festivo; G y GP nunca EN festivo (un prefestivo es la víspera, no el día).
+  // Sin lista de festivos no se deriva ninguno (S-4: el v1 se los pedía a la IA, prohibido). Y
+  // no se avisa "falta el calendario" en todo mes vacío de festivos: febrero no tiene ninguno en
+  // España, así que sería un aviso falso cada febrero. Se avisa solo cuando la falta IMPIDE
+  // comprobar algo que sí se ha escrito: hay GF en el mes y no hay festivos cargados.
+  const gfDelMes = asignaciones.filter((a) => a.codigo === "GF" && dayset.has(a.fecha));
+  if (festivos.length === 0) {
+    if (gfDelMes.length) {
+      violations.push(aviso("INV-12", `Hay ${gfDelMes.length} guardia(s) marcadas GF pero no hay festivos cargados para ${anio}-${String(mes).padStart(2, "0")}: no se puede comprobar que caigan en festivo`, { fecha: gfDelMes[0].fecha }));
+    }
+  } else {
+    for (const a of asignaciones) {
+      if (!dayset.has(a.fecha)) continue;
+      const esFestivo = isHoliday(a.fecha, festivos);
+      if (a.codigo === "GF" && !esFestivo) {
+        violations.push(aviso("INV-12", `GF el ${a.fecha}, que no consta como festivo`, { fecha: a.fecha, residenteId: a.residenteId }));
+      } else if ((a.codigo === "G" || a.codigo === "GP") && esFestivo) {
+        violations.push(aviso("INV-12", `${a.codigo} el ${a.fecha}, que consta como festivo (debería ser GF)`, { fecha: a.fecha, residenteId: a.residenteId }));
+      }
+    }
+  }
 
   // ── INV-11: verano sin R1 + recuento entre R2 del mismo año ──
   if (mes === 6 || mes === 7 || mes === 8) {
@@ -264,13 +360,11 @@ function rangeIntersectsMonth(b, days) {
 
 function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, violations) {
   const cohortOfId = new Map(residentes.map((r) => [r.id, cohortOf(r)]));
-  const AUS = new Set(["ROTACION", "VACACIONES"]); // la baja no computa
   const emittedRun = new Map(); // cohorte → estaba en exceso el día anterior
 
   for (const fecha of days) {
     const cohorts = new Map(); // cohorte → [{id, motivo}]
-    for (const b of bloqueos) {
-      if (!AUS.has(b.motivo) || !inRange(fecha, b.desde, b.hasta)) continue;
+    for (const b of absences(bloqueos, { motivos: AUSENCIA_SIMULTANEA, fecha })) {
       const c = cohortOfId.get(b.residenteId);
       if (c === undefined) continue;
       if (!cohorts.has(c)) cohorts.set(c, []);
@@ -296,7 +390,13 @@ function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, viol
   }
 }
 
-function validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, violations) {
+/**
+ * INV-10. `designadosNavidad` ya no es un parámetro suelto: sale de la fila del evento de
+ * Navidad (decisión V-20, se ALMACENA). Antes había que pasárselo aparte y nadie lo hacía —
+ * ese es medio motivo de que este invariante llevara desde la Fase 3 mudo.
+ */
+function validateEvents(eventos, byDay, levelOnDay, dayset, violations) {
+  const designadosNavidad = (eventos.navidad && eventos.navidad.designados) || [];
   for (const [tipo, ev] of Object.entries(eventos)) {
     if (!ev || !dayset.has(ev.fecha)) continue;
     const guardias = (byDay.get(ev.fecha) || []).filter((a) => GUARDIA.has(a.codigo));

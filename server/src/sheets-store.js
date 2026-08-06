@@ -6,6 +6,14 @@
 //
 // `ss` debe ofrecer: listSheets, exists, read, overwrite, append, createSheet, deleteSheet,
 // renameSheet. `newId()` genera UUID (Utilities.getUuid en Apps Script).
+//
+// Contrato del adaptador, fijado tras un fallo que ningún test podía ver (2026-07-27):
+//  - `append(nombre, filas)` CREA la hoja si no existe (este módulo escribe luego la cabecera).
+//  - `overwrite` y `append` deben AMPLIAR la rejilla si hace falta. En Apps Script una hoja nace
+//    con 1000 filas × 26 columnas y `getRange` fuera de rango lanza: la pestaña mensual de la
+//    proyección necesita hasta 40 columnas, y una tabla append-only pasa de 1000 filas sola.
+//    El `ss` de los tests es un array de arrays sin límites, así que esto NO lo cubre ningún
+//    test: vive en server/Code.gs y se verifica a mano contra el Sheet real.
 
 import { TABLES, headerOf, recordToRow, rowsToRecords } from "./sheets-schema.js";
 
@@ -18,15 +26,31 @@ export function makeStore({ ss, withLock, newId }) {
     return t;
   }
 
-  /** Añade un registro (append-only). Genera `id` si no lo trae. Devuelve el id. */
-  function appendRecord(nameOrTable, record) {
+  /**
+   * Añade VARIOS registros (append-only) en una sola escritura: un lock, una comprobación de
+   * cabecera y un solo `ss.append`. Devuelve los ids generados, en orden.
+   *
+   * Existe porque `appendRecord` por fila no escala en Apps Script: aplicar un mes del generador
+   * son ~60-90 cambios, y cada uno tomaba el lock y RELEÍA la tabla entera solo para ver si
+   * faltaba la cabecera — con `asignaciones` creciendo ~700 filas/año y sin borrados, eso es
+   * coste (filas × cambios) contra el límite de ejecución. Y en lote la escritura es atómica
+   * frente a otros escritores, así que ya no puede quedar un mes medio aplicado cuyo estado
+   * VALIDADO nadie revierte.
+   */
+  function appendRecords(nameOrTable, records) {
     const t = table(nameOrTable);
+    if (!records.length) return [];
     return withLock(() => {
       if (ss.read(t.name).length === 0) ss.append(t.name, [headerOf(t)]); // cabecera si falta
-      const id = record.id || newId();
-      ss.append(t.name, [recordToRow(t, { ...record, id })]);
-      return id;
+      const conId = records.map((r) => ({ ...r, id: r.id || newId() }));
+      ss.append(t.name, conId.map((r) => recordToRow(t, r)));
+      return conId.map((r) => r.id);
     });
+  }
+
+  /** Añade un registro (append-only). Genera `id` si no lo trae. Devuelve el id. */
+  function appendRecord(nameOrTable, record) {
+    return appendRecords(nameOrTable, [record])[0];
   }
 
   /** Lee todos los registros de una tabla normalizada. */
@@ -71,5 +95,5 @@ export function makeStore({ ss, withLock, newId }) {
     });
   }
 
-  return { appendRecord, readRecords, readLatest, rebuildSheet };
+  return { appendRecord, appendRecords, readRecords, readLatest, rebuildSheet };
 }

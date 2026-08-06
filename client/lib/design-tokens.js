@@ -8,7 +8,7 @@ export const COLOR = {
   orange: "#C55A11", orangeLight: "#FCE4D6",
   yellow: "#FFE699", yellowLight: "#FFFDE7",
   red: "#C00000", redLight: "#FCE4D6",
-  gray: "#F5F7FA", grayMid: "#E0E7EF", grayDark: "#6B7280",
+  gray: "#F5F7FA", grayMid: "#E0E7EF", grayDark: "#6B7280", grayDarker: "#4B5563",
   bodyBg: "#F0F4F8", bodyText: "#1a1a2e",
   scrollThumb: "#C0CCD8", cellBorder: "#E0E7EF", cellText: "#333",
 };
@@ -26,7 +26,10 @@ export const SHADOW = {
 
 // Escala por año de residencia — más oscuro = más veterano (spec §3.3 grupo/nivel).
 export const ANO_COLORS = { R4: "#1F4E79", R3: "#2E75B6", R2: "#5BA3D0", R1: "#9DC3E6" };
-export const ANO_TEXT = { R4: "#fff", R3: "#fff", R2: "#fff", R1: "#1F4E79" };
+// R2 usa bodyText, no #fff: blueLight (#5BA3D0) queda en una franja intermedia donde ni el
+// blanco (2.8:1) ni el blueDark que usa R1 sobre un fondo más claro (aquí solo 3.1:1) llegan al
+// mínimo AA de 4.5:1 — corrección de contraste, 2026-08-01, ver docs/catalogo-diseno.html.
+export const ANO_TEXT = { R4: "#fff", R3: "#fff", R2: COLOR.bodyText, R1: "#1F4E79" };
 export const ANOS = ["R4", "R3", "R2", "R1"];
 
 // Códigos de guardia (spec §1: GP faltaba en el v1 — bug conocido, corregido aquí).
@@ -37,10 +40,13 @@ export const CODES_CYCLE = ["G", "GF", "GP", "3P", "V", "R", "B", ""];
 // Ciclo de estados del cuadrante (Fase 6.2, spec.md §2 — mismos valores que v2/domain/cuadrante.js
 // STATES). Un solo mapa por estado, no tres paralelos (color/fondo/etiqueta): así no pueden
 // desincronizarse entre sí si se añade o retoca un estado.
+// Colores de texto elegidos por contraste AA sobre su propio bg (2026-08-01, ver
+// docs/catalogo-diseno.html): BORRADOR usa grayDarker (grayDark solo daba 3.9:1), VALIDADO usa
+// blueDark en vez de blue (4.3:1 no alcanzaba), PUBLICADO usa green en vez de greenMid (2.3:1).
 export const ESTADO_CUADRANTE = {
-  BORRADOR: { color: COLOR.grayDark, bg: COLOR.grayMid, label: "📝 Borrador" },
-  VALIDADO: { color: COLOR.blue, bg: COLOR.bluePale, label: "✅ Validado" },
-  PUBLICADO: { color: COLOR.greenMid, bg: COLOR.greenLight, label: "📢 Publicado" },
+  BORRADOR: { color: COLOR.grayDarker, bg: COLOR.grayMid, label: "📝 Borrador" },
+  VALIDADO: { color: COLOR.blueDark, bg: COLOR.bluePale, label: "✅ Validado" },
+  PUBLICADO: { color: COLOR.green, bg: COLOR.greenLight, label: "📢 Publicado" },
 };
 
 export const DIAS_SEMANA = ["L", "M", "X", "J", "V", "S", "D"];

@@ -73,6 +73,19 @@ export function addYears(iso, years) {
   return toISO(targetYear, month, clampedDay);
 }
 
+/**
+ * Suma (o resta) meses conservando el día, con el mismo recorte que `addYears` cuando el mes
+ * destino es más corto (31-ene + 1 mes → 28-feb). La usa el compromiso de permanencia del
+ * voluntariado de 3P (INV-8), que se cuenta en meses y no en días.
+ */
+export function addMonths(iso, months) {
+  const { year, month, day } = parseISO(iso);
+  const total = year * 12 + (month - 1) + months;
+  const targetYear = Math.floor(total / 12);
+  const targetMonth = total - targetYear * 12 + 1; // siempre 1-12, también con `months` negativo
+  return toISO(targetYear, targetMonth, Math.min(day, daysInMonth(targetYear, targetMonth)));
+}
+
 /** Días del mes (mes 1-12). */
 export function daysInMonth(year, month) {
   if (!Number.isInteger(month) || month < 1 || month > 12) {
@@ -132,6 +145,65 @@ export function trimesterWindow(iso) {
     start: toISO(startYear, meses[0], 1),
     end: toISO(endYear, endMonth, daysInMonth(endYear, endMonth)),
   };
+}
+
+/**
+ * ¿Es festivo esa fecha? Los festivos son DATOS DE ENTRADA (S-4, §3.4): esta función no calcula
+ * nada, solo consulta la lista que le pasan. Acepta la lista como fechas ISO o como registros
+ * `{fecha}` (que es lo que devuelve la tabla `festivos`) para que el invocador no tenga que
+ * mapear antes.
+ * @param {string} iso
+ * @param {(string|{fecha:string})[]} festivos
+ */
+export function isHoliday(iso, festivos = []) {
+  parseISO(iso);
+  for (const f of festivos) {
+    if ((typeof f === "string" ? f : f && f.fecha) === iso) return true;
+  }
+  return false;
+}
+
+/**
+ * Puentes del mes (§3.4, literal): día laborable L-V no festivo cuyos DOS vecinos son cada uno
+ * festivo o fin de semana. Cubre el viernes tras un jueves festivo y el lunes ante un martes
+ * festivo.
+ *
+ * Ojo al borde: los vecinos del día 1 y del último día del mes caen FUERA del mes, así que la
+ * lista de festivos tiene que cubrir también esos dos días — por eso el invocador pide el rango
+ * con un día de margen a cada lado y no solo el mes.
+ * @returns {string[]} fechas ISO de los puentes, en orden
+ */
+export function bridgesOfMonth(year, month, festivos = []) {
+  const esNoLaborable = (iso) => isWeekend(iso) || isHoliday(iso, festivos);
+  return datesOfMonth(year, month).filter((d) => {
+    if (isWeekend(d) || isHoliday(d, festivos)) return false; // el puente es un día laborable
+    return esNoLaborable(addDays(d, -1)) && esNoLaborable(addDays(d, 1));
+  });
+}
+
+/**
+ * Puentes de un rango cualquiera de fechas, en orden. Existe porque la ventana que compara el
+ * eje `puentesLibres` de INV-3 es el AÑO DE RESIDENCIA (aniversario→aniversario), que cruza dos
+ * años naturales y ~13 meses: iterar `bridgesOfMonth` mes a mes en cada invocador es cómo se
+ * cuela un mes de menos en uno de ellos y el eje deja de cuadrar entre cliente y servidor.
+ *
+ * La lista de `festivos` tiene que cubrir un día por cada lado del rango, por el mismo motivo
+ * que en `bridgesOfMonth`: los vecinos del primer y del último día caen fuera.
+ * @returns {string[]} fechas ISO de los puentes dentro de [desde, hasta], ambos inclusive
+ */
+export function bridgesBetween(desde, hasta, festivos = []) {
+  const a = parseISO(desde);
+  const b = parseISO(hasta);
+  if (compareISO(desde, hasta) > 0) return [];
+  const out = [];
+  for (let year = a.year, month = a.month; year < b.year || (year === b.year && month <= b.month); ) {
+    for (const d of bridgesOfMonth(year, month, festivos)) {
+      if (compareISO(d, desde) >= 0 && compareISO(d, hasta) <= 0) out.push(d);
+    }
+    month += 1;
+    if (month > 12) { month = 1; year += 1; }
+  }
+  return out;
 }
 
 /** Comparación cronológica (-1/0/1). Valida ambas fechas: el orden lexicográfico solo es fiable en ISO estricto. */

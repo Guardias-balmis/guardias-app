@@ -15,7 +15,7 @@
 import { toISO, daysInMonth } from "../../v2/domain/calendar.js";
 import {
   quarterCloseWindow, validateQuarterClose,
-  yearCloseHistoryStart, buildYearCloseContext, validateResidencyYearClose,
+  yearCloseHistoryStart, yearCloseFestivosRange, buildYearCloseContext, validateResidencyYearClose,
 } from "../../v2/domain/equity.js";
 
 /**
@@ -42,12 +42,21 @@ export async function closeViolations({ api, mes, anio, residentes, asignaciones
     .filter(Boolean)
     .reduce((min, d) => (d < min ? d : min));
 
-  const [rAsig, rBloq] = await Promise.all([
+  // Los festivos solo los pide el cierre ANUAL, para derivar los puentes del eje `puentesLibres`
+  // (fase 3 de V-17): el trimestral mide únicamente `total`. El rango lo da el dominio y abarca
+  // el año de residencia entero, que cruza dos años naturales.
+  const rangoFestivos = yearCloseFestivosRange(residentes, mes, anio);
+
+  const [rAsig, rBloq, rFest] = await Promise.all([
     api.listAsignacionesRango(desde, monthEnd),
     api.listBloqueosRango(desde, monthEnd),
+    rangoFestivos ? api.listFestivosRango(rangoFestivos.desde, rangoFestivos.hasta) : Promise.resolve({ ok: true, festivos: [] }),
   ]);
   if (!rAsig.ok) return { ok: false, error: rAsig.error };
   if (!rBloq.ok) return { ok: false, error: rBloq.error };
+  // Un fallo al cargar los festivos NO se degrada a "no hay puentes": eso daría el eje por
+  // cuadrado sin haberlo mirado, que es exactamente lo que este módulo existe para no hacer.
+  if (!rFest.ok) return { ok: false, error: rFest.error };
 
   const previas = rAsig.asignaciones.filter((a) => a.fecha < monthStart);
   const bloqueos = rBloq.bloqueos;
@@ -65,6 +74,7 @@ export async function closeViolations({ api, mes, anio, residentes, asignaciones
       mes, anio, residentes, bloqueos,
       historicas: previas.filter((a) => a.fecha >= desdeAnual),
       asignacionesDelMes,
+      festivos: rFest.festivos,
     })));
   }
 

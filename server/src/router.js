@@ -13,7 +13,21 @@ import { verifyTokeninfo } from "./verify-token.js";
 const ASIG_KEY = (r) => `${r.fecha}|${r.residenteId}`;
 const PREF_KEY = (r) => `${r.residenteId}|${r.anio}|${r.mes}`;
 const CUAD_KEY = (r) => `${r.mes}|${r.anio}`;
+// Los periodos se corrigen REINSERTANDO las 4 filas (append-only), así que el estado actual es la
+// última fila por residente+año — nunca se reescribe ni se borra ninguna.
+const PERIODO_KEY = (r) => `${r.residenteId}|${r.anio}`;
+const EVENTO_TIPOS = new Set(["NAVIDAD", "DESPEDIDA"]); // los dos eventos del servicio (INV-10)
 const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA"]); // enum de motivos válidos (severidad mixta desde V-8: solo BAJA bloquea la asignación)
+// Códigos de asignación (spec.md §2 + `CODES_CYCLE` del cliente). El "" es el BORRADO explícito:
+// `readLatest("asignaciones", …, { emptyField: "codigo" })` lo usa para quitar una asignación sin
+// borrar la fila, así que la lista blanca tiene que admitirlo. Existe porque sin ella entraba
+// cualquier cadena y las erratas son MUDAS: una "g" minúscula no la reconoce ni `GUARDIA` (INV-1
+// da el día por descubierto) ni `tally` (no cuenta para nada), y nadie avisa.
+const ASIG_CODIGOS = new Set(["G", "GF", "GP", "3P", "V", "R", "B", ""]);
+// `origen` marca la guardia cedida o comprada, que INV-4 excluye de los seis ejes de INV-3.
+// `tally.js:15` lo evalúa por TRUTHINESS, así que una errata cualquiera —no solo un valor de otro
+// enum— saca la guardia del cómputo y de los totales de la pestaña publicada, en silencio.
+const ASIG_ORIGENES = new Set(["CEDIDA", "COMPRADA"]);
 
 /**
  * @param {string} rawBody  cuerpo crudo de la petición (JSON en text/plain)
@@ -45,12 +59,101 @@ export function handleRequest(rawBody, deps) {
 
       case "validar":
         return authed(req, deps, () => {
-          const violaciones = deps.domain.validateMonth(req.cuadrante);
+          // Mismo tratamiento que en `marcarValidado` (V-22): aquí los bloqueos los manda el
+          // cliente, que los saca de `listBloqueos` — y esa acción devuelve también las filas con
+          // fecha ilegible, para que se puedan cancelar. Esta acción no llama a los cierres de
+          // equidad, así que no hay riesgo de excepción; lo que se evita es que INV-5 dé un
+          // veredicto a suerte sobre una fecha que no se puede leer, y lo que se gana es que
+          // `Calendar.jsx` —que valida por aquí— diga qué fila hay que arreglar en vez de callarse.
+          const cuadrante = req.cuadrante || {};
+          const { usables, corruptas } = partitionBloqueos(deps, cuadrante.bloqueos || []);
+          const violaciones = [
+            ...bloqueoCorruptoViolations(corruptas),
+            ...deps.domain.validateMonth({ ...cuadrante, bloqueos: usables }),
+          ];
           return { ok: true, violaciones, bloqueantes: violaciones.filter((v) => v.severidad === "error").length };
         });
 
       case "listResidentes":
-        return authed(req, deps, () => ({ ok: true, residentes: deps.store.readRecords("residentes") }));
+        return authed(req, deps, () => ({ ok: true, residentes: allResidentes(deps) }));
+
+      // Corregir las fechas de un residente. Hasta ahora `fechaInicio`/`fechaFin` solo se escribían
+      // en el alta (`handleAlta`) y no había forma de tocarlas después, lo que dejaba sin salida
+      // dentro de la app el caso que V-21 tuvo que degradar a `aviso`: una `fechaFin` mal teclada
+      // hacía que INV-1 avisara de una asignación «a quien no es residente asignable» sin que nadie
+      // pudiera arreglar la causa. Append-only: se reinserta la fila con el MISMO id (readLatest
+      // resuelve), nunca se reescribe.
+      case "editarResidente":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "corregir las fechas de un residente");
+          if (denegado) return denegado;
+          const actual = allResidentes(deps).find((r) => r.id === req.residenteId);
+          if (!actual) return { ok: false, error: "el residente no existe" };
+
+          const fechaInicio = req.fechaInicio || actual.fechaInicio;
+          const fechaFin = req.fechaFin || actual.fechaFin;
+          const malRango = validRango({ desde: fechaInicio, hasta: fechaFin }, deps);
+          if (malRango.ok === false) return malRango;
+
+          // El email y el nombre NO se tocan aquí: el email es la llave del login y cambiarlo por
+          // este camino dejaría a alguien fuera de la app sin que se note hasta que intente entrar.
+          deps.store.appendRecord("residentes", { ...actual, fechaInicio, fechaFin });
+          return { ok: true, residenteId: req.residenteId, fechaInicio, fechaFin };
+        });
+
+      // Periodos formativos editados (nota [a] de la normativa: «los periodos generados son
+      // editables después»). Es el dato que permite expresar que una baja larga RETRASA la
+      // promoción — y por eso lo escribe quien reparte y no el propio residente: el retraso lo
+      // decide tutoría, no se deriva de la tabla `bloqueos` (una baja de dos semanas no retrasa
+      // nada, y adivinarlo cambiaría el nivel de alguien sin que nadie lo haya decidido).
+      case "guardarPeriodos":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "editar los periodos formativos de un residente");
+          if (denegado) return denegado;
+          if (!allResidentes(deps).some((r) => r.id === req.residenteId)) {
+            return { ok: false, error: "el residente no existe" };
+          }
+          if (!Array.isArray(req.periodos)) return { ok: false, error: "periodos debe ser una lista de 4" };
+
+          // Forma de la tabla → forma del dominio, para poder validar con el dominio. La traducción
+          // inversa la hace `allResidentes`; que las dos vivan en este fichero es a propósito.
+          const enDominio = req.periodos.map((p) => ({ year: Number(p.anio), start: p.fechaInicio, end: p.fechaFin }));
+          for (const p of enDominio) {
+            const malRango = validRango({ desde: p.start, hasta: p.end }, deps);
+            if (malRango.ok === false) return { ok: false, error: `periodo R${p.year}: ${malRango.error}` };
+          }
+          // `validateTrainingPeriods` existe justo para esto y no la llamaba NADIE (exactamente 4,
+          // años 1..4 en orden, sin solapes; los huecos SÍ se permiten, que es S-3: una baja
+          // retrasa la promoción, no des-promociona).
+          const errores = deps.domain.validateTrainingPeriods(enDominio);
+          if (errores.length) return { ok: false, error: errores.join("; ") };
+
+          // Las 4 filas de golpe (`appendRecords`, un solo lock) y con el id derivado de
+          // residente+año: reinsertar el mismo par SUSTITUYE por `readLatest`, sin borrar nada.
+          deps.store.appendRecords("periodos", enDominio.map((p) => ({
+            id: `${req.residenteId}|${p.year}`, residenteId: req.residenteId,
+            anio: p.year, fechaInicio: p.start, fechaFin: p.end,
+          })));
+          return { ok: true, residenteId: req.residenteId, periodos: enDominio };
+        });
+
+      // Volver a los periodos derivados de las fechas: reinserta las 4 filas con el rango que
+      // `defaultTrainingPeriods` calcularía. Sin esto, unos periodos mal editados serían
+      // irreversibles (la tabla es append-only y `allResidentes` exige las 4), y eso es un bloqueo
+      // sin salida dentro de la herramienta — lo mismo que V-16 tuvo que arreglar de urgencia.
+      case "restaurarPeriodos":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "restaurar los periodos formativos de un residente");
+          if (denegado) return denegado;
+          const actual = allResidentes(deps).find((r) => r.id === req.residenteId);
+          if (!actual) return { ok: false, error: "el residente no existe" };
+          const derivados = deps.domain.periodsOfResident({ fechaInicio: actual.fechaInicio, fechaFin: actual.fechaFin });
+          deps.store.appendRecords("periodos", derivados.map((p) => ({
+            id: `${req.residenteId}|${p.year}`, residenteId: req.residenteId,
+            anio: p.year, fechaInicio: p.start, fechaFin: p.end,
+          })));
+          return { ok: true, residenteId: req.residenteId, periodos: derivados };
+        });
 
       case "listAsignaciones":
         return authed(req, deps, () => {
@@ -65,7 +168,8 @@ export function handleRequest(rawBody, deps) {
       // aunque empiece en un mes anterior) y para el contaje acumulado del generador (§4).
       case "listAsignacionesRango":
         return authed(req, deps, () => {
-          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+          const rango = validRango(req, deps);
+          if (rango.ok === false) return rango;
           const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
           return { ok: true, asignaciones: all.filter((a) => a.fecha >= req.desde && a.fecha <= req.hasta) };
         });
@@ -82,14 +186,24 @@ export function handleRequest(rawBody, deps) {
           } catch (e) {
             return { ok: false, error: "cambio con fecha inválida: " + e.message };
           }
+          // Listas blancas de `codigo` y `origen`: la tabla es append-only y el Sheet se edita a
+          // mano, así que lo que entre mal se queda para siempre y encima no se nota (ver el
+          // comentario de ASIG_CODIGOS/ASIG_ORIGENES).
+          const malCodigo = req.cambios.find((c) => !ASIG_CODIGOS.has(c.codigo || ""));
+          if (malCodigo) return { ok: false, error: `código de asignación inválido: ${JSON.stringify(malCodigo.codigo)} (válidos: ${[...ASIG_CODIGOS].filter(Boolean).join(", ")})` };
+          const malOrigen = req.cambios.find((c) => c.origen !== undefined && c.origen !== "" && !ASIG_ORIGENES.has(c.origen));
+          if (malOrigen) return { ok: false, error: `origen inválido: ${JSON.stringify(malOrigen.origen)} (válidos: ${[...ASIG_ORIGENES].join(", ")})` };
           const meses = [...new Map(fechas.map((f) => [`${f.year}-${f.month}`, f])).values()]
             .map((f) => ({ mes: f.month, anio: f.year, estado: currentCuadranteEstado(deps, f.month, f.year) }));
           const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
           if (publicado) return { ok: false, error: `el cuadrante de ${publicado.mes}/${publicado.anio} está PUBLICADO y no admite ediciones` };
 
-          for (const c of req.cambios) {
-            deps.store.appendRecord("asignaciones", { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen });
-          }
+          // Una sola escritura para todo el lote (appendRecords): un mes del generador son
+          // ~60-90 cambios y fila a fila era un lock y una relectura íntegra de la tabla por cada
+          // uno. Además así el lote es atómico y no puede quedar medio aplicado.
+          deps.store.appendRecords("asignaciones", req.cambios.map((c) => (
+            { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen }
+          )));
           for (const m of meses) {
             const siguiente = deps.domain.stateAfterEdit(m.estado);
             if (siguiente !== m.estado) writeCuadranteEstado(deps, session, m.mes, m.anio, siguiente);
@@ -104,22 +218,51 @@ export function handleRequest(rawBody, deps) {
           return { ok: true, prefs: mine || null };
         });
 
+      // Lista blanca de columnas, no spread del cliente: con `...req.prefs` al final, un residente
+      // podía escribir preferencias EN NOMBRE de otro (su `residenteId` pisaba el de la sesión) y
+      // colar un `id` propio, que el store honra. Invertir el orden del spread no bastaría: el `id`
+      // seguiría pasando, y de hecho la pantalla ya reenvía el suyo y duplica ids en producción.
       case "guardarPreferencias":
         return authed(req, deps, (session) => {
           if (!req.prefs || typeof req.prefs !== "object") return { ok: false, error: "prefs inválido" };
-          deps.store.appendRecord("preferencias", { residenteId: session.sub, anio: req.anio, mes: req.mes, ...req.prefs });
+          if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
+          const { maxGuardias, preferDobles, fechasEvitar, notas } = req.prefs;
+          deps.store.appendRecord("preferencias", {
+            residenteId: session.sub, anio: req.anio, mes: req.mes,
+            maxGuardias, preferDobles, fechasEvitar, notas,
+          });
           return { ok: true };
         });
 
+      // `residenteId` es OPCIONAL y solo lo admite quien tiene el permiso del ciclo (V-16): sin
+      // él, la ausencia es siempre la de quien la pide (session.sub, como hasta ahora).
+      //
+      // La ausencia ajena existe porque la tabla `bloqueos` es la que mandan los invariantes y
+      // hasta ahora nadie podía escribir en ella por otro: ante una baja que el residente no ha
+      // declarado —y que precisamente por estar de baja puede no poder declarar—, el único gesto
+      // posible era pintar una «B» en la rejilla, que es un código de asignación y no lo lee
+      // NINGÚN invariante. Es decir: INV-5 seguía dejando asignarle guardias.
       case "crearBloqueo":
         return authed(req, deps, (session) => {
           if (!BLOQ_MOTIVOS.has(req.motivo)) return { ok: false, error: "motivo inválido" };
-          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+          const rango = validRango(req, deps);
+          if (rango.ok === false) return rango;
+
+          let residenteId = session.sub;
+          if (req.residenteId && req.residenteId !== session.sub) {
+            const denegado = requireCicloPermiso(deps, session, "registrar la ausencia de otro residente");
+            if (denegado) return denegado;
+            if (!allResidentes(deps).some((r) => r.id === req.residenteId)) {
+              return { ok: false, error: "el residente no existe" };
+            }
+            residenteId = req.residenteId;
+          }
+
           const id = deps.store.appendRecord("bloqueos", {
-            residenteId: session.sub, desde: req.desde, hasta: req.hasta, motivo: req.motivo,
+            residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo,
             provincia: req.provincia, guardiasEnCentroExterno: req.guardiasEnCentroExterno, activo: true,
           });
-          return { ok: true, id };
+          return { ok: true, id, residenteId };
         });
 
       case "misBloqueos":
@@ -137,28 +280,82 @@ export function handleRequest(rawBody, deps) {
       // las que solapan el mes que se está validando.
       case "listBloqueosRango":
         return authed(req, deps, () => {
-          if (!req.desde || !req.hasta || req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
-          return { ok: true, bloqueos: bloqueosInRange(allBloqueos(deps), req.desde, req.hasta) };
+          const rango = validRango(req, deps);
+          if (rango.ok === false) return rango;
+          return { ok: true, bloqueos: bloqueosInRange(deps, allBloqueos(deps), rango.desde, rango.hasta) };
         });
 
-      case "cancelarBloqueo":
+      // FESTIVOS (S-4: datos de entrada, nunca derivados). Lectura por RANGO y abierta a cualquier
+      // sesión: la necesitan el validador (INV-12), los puentes y el prompt del generador. El
+      // rango se pide con margen porque los vecinos del día 1 y del último día del mes deciden si
+      // son puente.
+      case "listFestivosRango":
+        return authed(req, deps, () => {
+          const rango = validRango(req, deps);
+          if (rango.error) return rango;
+          return { ok: true, festivos: festivosInRange(deps, rango.desde, rango.hasta) };
+        });
+
+      // Carga en LOTE (una escritura, un lock): un año de festivos se pega de golpe. Mismo permiso
+      // que el ciclo del cuadrante (V-16), porque es dato compartido de todo el servicio.
+      case "crearFestivos":
         return authed(req, deps, (session) => {
-          const actuales = deps.store.readLatest("bloqueos", (r) => r.id);
-          const propio = actuales.find((b) => b.id === req.id && b.residenteId === session.sub);
-          if (!propio) return { ok: false, error: "bloqueo no encontrado o ajeno" };
-          deps.store.appendRecord("bloqueos", { ...propio, activo: false });
+          const denegado = requireCicloPermiso(deps, session, "cargar festivos");
+          if (denegado) return denegado;
+          if (!Array.isArray(req.festivos) || req.festivos.length === 0) return { ok: false, error: "festivos vacío" };
+          let filas;
+          try {
+            filas = req.festivos.map((f) => {
+              deps.domain.parseISO(f.fecha);
+              return { fecha: f.fecha, nombre: f.nombre || "", ambito: f.ambito || "", activo: true };
+            });
+          } catch (e) {
+            return { ok: false, error: "festivo con fecha inválida: " + e.message };
+          }
+          const ids = deps.store.appendRecords("festivos", filas);
+          return { ok: true, ids, cargados: ids.length };
+        });
+
+      // Anular una fecha mal cargada: reinserción con activo=false, jamás borrado (append-only).
+      case "anularFestivo":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "anular un festivo");
+          if (denegado) return denegado;
+          const actual = allFestivos(deps).find((f) => f.id === req.id);
+          if (!actual) return { ok: false, error: "festivo no encontrado" };
+          deps.store.appendRecord("festivos", { ...actual, activo: false });
           return { ok: true };
         });
 
+      // Simétrica de `crearBloqueo`: quien puede registrar la ausencia de otro tiene que poder
+      // corregirla. Sin esto, una baja registrada por error en el residente equivocado sería
+      // irreversible —la tabla es append-only y el afectado no la creó, así que tampoco podía
+      // cancelarla él—, y quedaría bloqueándole las asignaciones para siempre (INV-5).
+      case "cancelarBloqueo":
+        return authed(req, deps, (session) => {
+          const actuales = deps.store.readLatest("bloqueos", (r) => r.id);
+          const bloqueo = actuales.find((b) => b.id === req.id);
+          if (!bloqueo) return { ok: false, error: "bloqueo no encontrado" };
+          if (bloqueo.residenteId !== session.sub) {
+            const denegado = requireCicloPermiso(deps, session, "cancelar la ausencia de otro residente");
+            if (denegado) return denegado;
+          }
+          deps.store.appendRecord("bloqueos", { ...bloqueo, activo: false });
+          return { ok: true };
+        });
+
+      // Devuelve el periodo pedido Y el SIGUIENTE en la misma respuesta: el mandato se decide
+      // antes de que empiece, así que quien puede ofrecerse necesita ver el año que viene sin
+      // tener que adivinar que existe un selector de año (decisión V-16).
       case "estadoResponsable":
         return authed(req, deps, (session) => {
           if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
-          const { periodoInicio, periodoFin } = mandatoPeriod(req.anio);
-          const residentes = deps.store.readRecords("residentes");
-          const elegibles = deps.domain.eligibleCandidates(residentes, periodoInicio);
-          const voluntarios = activeVolunteers(deps, periodoInicio);
-          const mandato = currentMandate(deps, periodoInicio);
-          return { ok: true, periodoInicio, periodoFin, elegibles, voluntarios, meHeOfrecido: voluntarios.includes(session.sub), mandato };
+          const residentes = allResidentes(deps);
+          return {
+            ok: true,
+            ...periodoResponsable(deps, req.anio, session, residentes),
+            siguiente: periodoResponsable(deps, req.anio + 1, session, residentes),
+          };
         });
 
       case "ofrecerseResponsable":
@@ -166,7 +363,7 @@ export function handleRequest(rawBody, deps) {
           if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
           const { periodoInicio } = mandatoPeriod(req.anio);
           if (currentMandate(deps, periodoInicio)) return { ok: false, error: "el responsable de ese periodo ya está decidido" };
-          const residentes = deps.store.readRecords("residentes");
+          const residentes = allResidentes(deps);
           const elegibles = deps.domain.eligibleCandidates(residentes, periodoInicio);
           if (!elegibles.includes(session.sub)) return { ok: false, error: "no tienes nivel R3 en ese periodo" };
           deps.store.appendRecord("voluntariosResponsable", { residenteId: session.sub, periodoInicio, activo: true });
@@ -182,12 +379,19 @@ export function handleRequest(rawBody, deps) {
           return { ok: true };
         });
 
+      // El sorteo escribe una fila de mandato append-only e IRREVERSIBLE para todo un año: no
+      // puede quedar al alcance de cualquier sesión (un R1 podía quemar el mandato antes de que
+      // nadie se ofreciera). Mismo permiso que las transiciones del cuadrante (V-16): el
+      // Responsable en mandato o, si no hay ninguno —que es justo cuando hay que sortear—,
+      // cualquier Mayor.
       case "ejecutarSorteoResponsable":
-        return authed(req, deps, () => {
+        return authed(req, deps, (session) => {
           if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
+          const denegado = requireCicloPermiso(deps, session, "lanzar el sorteo del Responsable");
+          if (denegado) return denegado;
           const { periodoInicio, periodoFin } = mandatoPeriod(req.anio);
           if (currentMandate(deps, periodoInicio)) return { ok: false, error: "el responsable de ese periodo ya está decidido" };
-          const residentes = deps.store.readRecords("residentes");
+          const residentes = allResidentes(deps);
           const elegibles = deps.domain.eligibleCandidates(residentes, periodoInicio);
           if (elegibles.length === 0) return { ok: false, error: "no hay ningún R3 elegible para ese periodo" };
           const voluntarios = activeVolunteers(deps, periodoInicio);
@@ -208,6 +412,165 @@ export function handleRequest(rawBody, deps) {
           return { ok: true, mandato: { id, ...record } };
         });
 
+      // TERCER PUESTO (INV-8, decisión V-18). Autoservicio puro, como el voluntariado del
+      // Responsable: el 3P «será siempre voluntario» (normativa p.2), así que nadie apunta a
+      // nadie — ni siquiera el Responsable. Abierta a cualquier sesión: el validador necesita la
+      // lista para INV-8a y la pantalla para saber si ya estás dentro.
+      case "estadoVoluntariado3P":
+        return authed(req, deps, (session) => {
+          const voluntarios = activeThirdPostVolunteers(deps);
+          const mio = voluntarios.find((v) => v.residenteId === session.sub) || null;
+          return {
+            ok: true,
+            voluntarios,
+            permanenciaMeses: deps.domain.THIRD_POST_PERMANENCIA_MESES,
+            mio: mio && {
+              desde: mio.desde,
+              compromisoHasta: deps.domain.thirdPostCommitmentEnd(mio.desde),
+              puedoRetirarme: deps.domain.canWithdrawThirdPost(mio.desde, deps.today),
+            },
+          };
+        });
+
+      case "ofrecerse3P":
+        return authed(req, deps, (session) => {
+          // El compromiso de permanencia se acepta explícitamente y queda registrado: es la
+          // condición que después impide retirarse, y una regla que restringe sin que conste
+          // aceptada no se le puede oponer a nadie dentro de diez años.
+          if (req.compromisoAceptado !== true) return { ok: false, error: "hay que aceptar el compromiso de permanencia para apuntarse al tercer puesto" };
+          if (activeThirdPostVolunteers(deps).some((v) => v.residenteId === session.sub)) {
+            return { ok: false, error: "ya estás apuntado al tercer puesto" };
+          }
+          deps.store.appendRecord("voluntarios3P", { residenteId: session.sub, desde: deps.today, compromisoAceptado: true, activo: true });
+          return { ok: true, desde: deps.today, compromisoHasta: deps.domain.thirdPostCommitmentEnd(deps.today) };
+        });
+
+      case "retirarVoluntariado3P":
+        return authed(req, deps, (session) => {
+          const mio = activeThirdPostVolunteers(deps).find((v) => v.residenteId === session.sub);
+          if (!mio) return { ok: false, error: "no estás apuntado al tercer puesto" };
+          if (!deps.domain.canWithdrawThirdPost(mio.desde, deps.today)) {
+            return { ok: false, error: `el compromiso de permanencia dura hasta el ${deps.domain.thirdPostCommitmentEnd(mio.desde)}: hasta entonces no puedes retirarte del tercer puesto` };
+          }
+          // Append-only: se reinserta con activo=false, la fila del alta se queda (y con ella el
+          // `desde`, que es lo que documenta que el compromiso se cumplió). `hasta` deja escrito
+          // CUÁNDO se retiró: sin él la fila de baja repite el `desde` y esa fecha se pierde.
+          deps.store.appendRecord("voluntarios3P", { residenteId: session.sub, desde: mio.desde, hasta: deps.today, compromisoAceptado: true, activo: false });
+          return { ok: true };
+        });
+
+      // EVENTOS DEL SERVICIO (INV-10, decisión V-20). Dato de entrada como los festivos: la
+      // fecha la pone el servicio cada año. Leerlos está abierto (los necesita el validador);
+      // crearlos y anularlos usa el permiso del ciclo (V-16), porque es dato de todo el equipo.
+      case "listEventos":
+        return authed(req, deps, () => ({ ok: true, eventos: activeEventos(deps) }));
+
+      case "crearEvento":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "registrar un evento del servicio");
+          if (denegado) return denegado;
+          if (!EVENTO_TIPOS.has(req.tipo)) return { ok: false, error: "tipo de evento inválido (NAVIDAD o DESPEDIDA)" };
+          try { deps.domain.parseISO(req.fecha); } catch (e) { return { ok: false, error: "fecha inválida: " + e.message }; }
+          const voluntarios = Array.isArray(req.voluntarios) ? req.voluntarios : [];
+          const id = deps.store.appendRecord("eventos", { tipo: req.tipo, fecha: req.fecha, voluntarios, designados: [], activo: true });
+          return { ok: true, id };
+        });
+
+      case "anularEvento":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "anular un evento del servicio");
+          if (denegado) return denegado;
+          const actual = deps.store.readLatest("eventos", (r) => r.id).find((e) => e.id === req.id);
+          if (!actual) return { ok: false, error: "evento no encontrado" };
+          deps.store.appendRecord("eventos", { ...actual, activo: false });
+          return { ok: true };
+        });
+
+      // El «a sorteo» de la normativa, hecho de verdad y reproducible: misma mecánica que el
+      // sorteo del Responsable (INV-14, decisión V-7a) — semilla generada por la app, sorteo
+      // puro sobre (candidatos, semilla), y la fila queda en `sorteos` para recomputarlo. Un
+      // booleano «hubo sorteo» no prueba nada; esto sí.
+      case "sortearEvento":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "sortear un evento del servicio");
+          if (denegado) return denegado;
+          const evento = activeEventos(deps).find((e) => e.id === req.id);
+          if (!evento) return { ok: false, error: "evento no encontrado" };
+          if (evento.sorteoId) return { ok: false, error: "ese evento ya está sorteado" };
+
+          const residentes = allResidentes(deps);
+          const r2 = residentes
+            .filter((r) => deps.domain.levelOn(deps.domain.periodsOfResident(r), evento.fecha) === "R2")
+            .map((r) => r.id);
+          // Si se ofrecen 2 o más voluntarios se sortea SOLO entre ellos, mismo criterio que
+          // V-7(b) para el Responsable: la normativa cubre el sorteo, no el «gana el primero».
+          const ofrecidos = (evento.voluntarios || []).filter((id) => r2.includes(id));
+          const candidatos = ofrecidos.length >= 2 ? ofrecidos : r2;
+          if (candidatos.length < 2) return { ok: false, error: `hacen falta al menos 2 R2 para sortear el evento (hay ${candidatos.length})` };
+
+          const semilla = deps.newSeed();
+          const primero = deps.domain.drawResponsible(candidatos, semilla);
+          const segundo = deps.domain.drawResponsible(candidatos.filter((id) => id !== primero), semilla);
+          const designados = [primero, segundo];
+
+          const sorteoId = deps.store.appendRecord("sorteos", {
+            fecha: deps.today, motivo: `EVENTO_${evento.tipo}_${evento.fecha}`, semilla, candidatos, resultado: designados,
+          });
+          deps.store.appendRecord("eventos", { ...evento, designados, sorteoId });
+          return { ok: true, designados, sorteoId, semilla };
+        });
+
+      // IMAGINARIA (INV-13, decisión V-20). Es una HERRAMIENTA, no un validador: dice a quién
+      // llamar. La cola se DERIVA del historial de coberturas, nunca se almacena.
+      case "colaImaginaria":
+        return authed(req, deps, () => {
+          if (req.grupo !== "MAYOR" && req.grupo !== "PEQUENO") return { ok: false, error: "grupo inválido (MAYOR o PEQUENO)" };
+          try { deps.domain.parseISO(req.fecha); } catch (e) { return { ok: false, error: "fecha inválida: " + e.message }; }
+          // Las asignaciones de la víspera y del día siguiente deciden a quién se aparta, así
+          // que el rango es fecha±1, no el mes: la incidencia puede caer en un día 1 o en un 31.
+          const todas = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
+          const desde = deps.domain.addDays(req.fecha, -1);
+          const hasta = deps.domain.addDays(req.fecha, 1);
+          return {
+            ok: true,
+            cola: deps.domain.imaginariaQueue({
+              residentes: allResidentes(deps),
+              coberturas: activeImaginaria(deps),
+              asignaciones: todas.filter((a) => a.fecha >= desde && a.fecha <= hasta),
+              grupo: req.grupo, fechaIncidencia: req.fecha,
+            }),
+          };
+        });
+
+      case "registrarImaginaria":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "registrar una cobertura de imaginaria");
+          if (denegado) return denegado;
+          if (req.grupo !== "MAYOR" && req.grupo !== "PEQUENO") return { ok: false, error: "grupo inválido (MAYOR o PEQUENO)" };
+          try { deps.domain.parseISO(req.fechaIncidencia); } catch (e) { return { ok: false, error: "fecha inválida: " + e.message }; }
+          if (!allResidentes(deps).some((r) => r.id === req.residenteId)) {
+            return { ok: false, error: "el residente no existe" };
+          }
+          // NO se exige que sea el primero de la cola: la incidencia se resuelve por teléfono y
+          // puede haber mil motivos legítimos para saltarse el orden (nadie cogía, se cambió).
+          // Lo que importa es que la cobertura quede registrada, que es lo que mueve la cola.
+          const id = deps.store.appendRecord("imaginaria", {
+            grupo: req.grupo, fechaIncidencia: req.fechaIncidencia, residenteId: req.residenteId,
+            registradaEn: deps.today, activo: true,
+          });
+          return { ok: true, id };
+        });
+
+      case "anularImaginaria":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "anular una cobertura de imaginaria");
+          if (denegado) return denegado;
+          const actual = deps.store.readLatest("imaginaria", (r) => r.id).find((c) => c.id === req.id);
+          if (!actual) return { ok: false, error: "cobertura no encontrada" };
+          deps.store.appendRecord("imaginaria", { ...actual, activo: false });
+          return { ok: true };
+        });
+
       case "listResponsables":
         return authed(req, deps, () => ({
           ok: true,
@@ -217,7 +580,10 @@ export function handleRequest(rawBody, deps) {
       case "estadoCuadrante":
         return authed(req, deps, () => {
           if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
-          return { ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio) };
+          // `sinResponsable` viaja aquí y no en una acción aparte porque el cliente ya llama a
+          // estadoCuadrante al abrir el mes: es lo que le permite avisar de que nadie tiene el
+          // mandato y habilitar el ciclo a un Mayor (decisión V-16) sin una petición de más.
+          return { ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio), sinResponsable: mandatoVigente(deps) === null };
         });
 
       // BORRADOR->VALIDADO (Fase 6.2, decisión V-9/V-10): solo el Responsable en mandato, y
@@ -226,17 +592,20 @@ export function handleRequest(rawBody, deps) {
       // cliente pueda falsear").
       case "marcarValidado":
         return authed(req, deps, (session) => {
-          const denegado = requireResponsable(session, "validar el cuadrante");
+          const denegado = requireCicloPermiso(deps, session, "validar el cuadrante");
           if (denegado) return denegado;
           const estadoActual = validCuadranteMesAnio(req, deps);
           if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
           if (estadoActual === "PUBLICADO") return { ok: false, error: "el cuadrante ya está publicado" };
 
-          // Una sola lectura del store para las dos comprobaciones (mes + cierres de equidad).
+          // Una sola lectura del store para las tres comprobaciones (mes, cierres de equidad,
+          // tercer puesto).
           const snap = monthSnapshot(deps);
           const violaciones = [
+            ...bloqueoCorruptoViolations(snap.bloqueosCorruptos),
             ...deps.domain.validateMonth(buildCuadranteCtx(deps, req.mes, req.anio, snap)),
             ...closeViolations(deps, req.mes, req.anio, snap),
+            ...deps.domain.validateThirdPost(buildThirdPostCtx(deps, req.mes, req.anio, snap)),
           ];
           if (!deps.domain.canValidate(violaciones)) {
             return { ok: false, error: "el cuadrante tiene errores, no se puede validar", violaciones };
@@ -245,12 +614,16 @@ export function handleRequest(rawBody, deps) {
           return { ok: true, estado: "VALIDADO", violaciones };
         });
 
-      // Fase 7.1 (decisión V-11a): publicar proyecta de verdad al Sheet legible (pestaña
-      // mensual + Resumen) en el MISMO paso — "publicar" pasa a significar publicar de
-      // verdad. La proyección ocurre ANTES de escribir el estado: ver projectCuadranteToSheets.
+      // Fase 7.1 (decisión V-11a): publicar proyecta de verdad al Sheet legible en el MISMO paso
+      // — "publicar" pasa a significar publicar de verdad. Desde la Fase 7.2 son TRES hojas
+      // (mensual + Resumen del curso + Contaje Trimestral del curso), así que la ventana en la que
+      // el Sheet puede quedar a medias es de tres `rebuildSheet` y no de dos. Sigue sin ser una
+      // transacción a propósito: cada uno es idempotente (shadow-swap) y volver a pulsar Publicar
+      // lo sana, que es lo único que puede hacer alguien sin administrador. La proyección ocurre
+      // ANTES de escribir el estado: ver projectCuadranteToSheets.
       case "publicarCuadrante":
         return authed(req, deps, (session) => {
-          const denegado = requireResponsable(session, "publicar el cuadrante");
+          const denegado = requireCicloPermiso(deps, session, "publicar el cuadrante");
           if (denegado) return denegado;
           const estadoActual = validCuadranteMesAnio(req, deps);
           if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
@@ -262,7 +635,7 @@ export function handleRequest(rawBody, deps) {
 
       case "despublicarCuadrante":
         return authed(req, deps, (session) => {
-          const denegado = requireResponsable(session, "despublicar el cuadrante");
+          const denegado = requireCicloPermiso(deps, session, "despublicar el cuadrante");
           if (denegado) return denegado;
           const estadoActual = validCuadranteMesAnio(req, deps);
           if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
@@ -297,7 +670,7 @@ function handleLogin(req, deps) {
   const v = verifyIdentity(req, deps);
   if (!v.ok) return { ok: false, error: v.reason };
 
-  const residente = deps.store.readRecords("residentes").find((r) => (r.email || "").toLowerCase() === v.email);
+  const residente = allResidentes(deps).find((r) => (r.email || "").toLowerCase() === v.email);
   if (!residente) {
     // El email SÍ quedó verificado con Google (aud/iss/email_verified/exp ya comprobados);
     // se emite un token de corta vida para que el cliente pueda completar el alta sin
@@ -329,7 +702,7 @@ function handleAlta(req, deps) {
 
   if (!req.nombre || !req.fechaInicio || !req.fechaFin) return { ok: false, error: "nombre, fechaInicio y fechaFin son obligatorios" };
 
-  const yaExiste = deps.store.readRecords("residentes").some((r) => (r.email || "").toLowerCase() === email);
+  const yaExiste = allResidentes(deps).some((r) => (r.email || "").toLowerCase() === email);
   if (yaExiste) return { ok: false, error: "ese email ya está vinculado a un residente" };
 
   const id = deps.store.appendRecord("residentes", { nombre: req.nombre, email, fechaInicio: req.fechaInicio, fechaFin: req.fechaFin });
@@ -341,21 +714,162 @@ function monthPrefix(anio, mes) {
   return `${anio}-${String(mes).padStart(2, "0")}`;
 }
 
+/**
+ * Rango [desde,hasta] validado como ISO de verdad, no por orden lexicográfico. Devuelve
+ * `{desde,hasta}` si está bien, o el propio `{ok:false,error}` que debe devolver la acción.
+ *
+ * Es el ÚNICO sitio donde se valida un rango de fechas de entrada: lo comparten `crearBloqueo`,
+ * `listBloqueosRango`, `listAsignacionesRango` y `listFestivosRango`/`listEventosRango`. Las tres
+ * primeras tenían su propio `!desde || !hasta || desde > hasta` en línea, que es una comparación
+ * LEXICOGRÁFICA de lo que mandara el cliente y colaba cualquier cosa cuyo primer carácter ordenase
+ * por debajo: `"30/02/2027"`, `"2027-13-45"`, `"9999"` y hasta un objeto entraron en la sonda del
+ * 2026-08-02. En una tabla append-only sobre un Sheet editable a mano eso no es un detalle: una
+ * fila BAJA con `desde` no-ISO se descarta sola del rango de `absences` —que compara cadenas a
+ * propósito, V-19— y **desactiva INV-5 en silencio**. Medido: con `desde` válida, validar el mes
+ * emitía 31 violaciones de INV-5 sobre la baja; con `desde="30/02/2026"`, cero.
+ */
+function validRango(req, deps) {
+  if (!req.desde || !req.hasta) return { ok: false, error: "rango de fechas inválido" };
+  try {
+    deps.domain.parseISO(req.desde);
+    deps.domain.parseISO(req.hasta);
+  } catch (e) {
+    return { ok: false, error: "rango con fecha inválida: " + e.message };
+  }
+  if (req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
+  return { desde: req.desde, hasta: req.hasta };
+}
+
+/** Estado actual de la tabla de festivos (última reinserción gana). */
+function allFestivos(deps) {
+  return deps.store.readLatest("festivos", (r) => r.id);
+}
+
+/** Festivos ACTIVOS dentro de [desde,hasta]. */
+function festivosInRange(deps, desde, hasta) {
+  return allFestivos(deps).filter((f) => f.activo === true && f.fecha >= desde && f.fecha <= hasta);
+}
+
+/** Eventos del servicio vigentes (última reinserción gana; el sorteo reinserta la fila). */
+function activeEventos(deps) {
+  return deps.store.readLatest("eventos", (r) => r.id).filter((e) => e.activo === true);
+}
+
+/** Coberturas de imaginaria vigentes: son las que mueven la cola derivada. */
+function activeImaginaria(deps) {
+  return deps.store.readLatest("imaginaria", (r) => r.id).filter((c) => c.activo === true);
+}
+
+/**
+ * Los residentes, con sus periodos formativos EDITADOS ya montados en `residente.periodos`.
+ *
+ * Lector único a propósito, y es el punto entero de la fase 2 de V-24: `periodsOfResident` solo
+ * respeta los periodos editados si el residente los TRAE, así que hidratar en unas acciones y no en
+ * otras sería peor que no hidratar — daría un nivel distinto según por qué endpoint entres. Había
+ * trece `readRecords("residentes")` sueltos en este fichero.
+ *
+ * La tabla guarda `{id, residenteId, anio, fechaInicio, fechaFin}` y el dominio consume
+ * `{year, start, end}`: la traducción de forma vive aquí y solo aquí. Nadie la había escrito, y era
+ * el fallo silencioso más probable de este punto — unos `periodos` con las claves equivocadas no
+ * lanzan, simplemente hacen que `levelOn` lea `undefined` y devuelva basura.
+ *
+ * Un residente sin las 4 filas NO recibe la clave, así que `periodsOfResident` sigue derivando de
+ * las fechas: es el caso normal y el que tiene todo el mundo hoy. Las incompletas se ignoran
+ * ENTERAS en vez de montar unos periodos a medias que nadie podría diagnosticar; quien las escribe
+ * (`guardarPeriodos`) ya no deja que eso ocurra, pero el Sheet se edita a mano.
+ */
+function allResidentes(deps) {
+  const porResidente = new Map();
+  for (const f of deps.store.readLatest("periodos", PERIODO_KEY)) {
+    if (!porResidente.has(f.residenteId)) porResidente.set(f.residenteId, []);
+    porResidente.get(f.residenteId).push({ year: Number(f.anio), start: f.fechaInicio, end: f.fechaFin });
+  }
+  // `readLatest` y no `readRecords`: `residentes` es append-only como todo lo demás, y hasta que
+  // existió `editarResidente` nadie reinsertaba una fila, así que leer todas y coger la primera
+  // daba igual. Con la corrección de fechas ya no: `readRecords` devolvería la fila VIEJA y la
+  // edición no tendría ningún efecto visible. Lo destapó el test, no la lectura del código.
+  return deps.store.readLatest("residentes", (r) => r.id).map((r) => {
+    const suyos = (porResidente.get(r.id) || []).sort((a, b) => a.year - b.year);
+    if (suyos.length !== 4) return r;
+    return { ...r, periodos: suyos };
+  });
+}
+
 /** Estado actual de la tabla de bloqueos (última reinserción gana, como cancelarBloqueo). */
 function allBloqueos(deps) {
   return deps.store.readLatest("bloqueos", (r) => r.id);
 }
 
-/** Bloqueos activos que solapan [desde,hasta]. Puro: filtra una lista ya leída. */
-function bloqueosInRange(bloqueos, desde, hasta) {
-  return bloqueos.filter((b) => b.activo === true && b.desde <= hasta && b.hasta >= desde);
+/**
+ * Parte las ausencias ACTIVAS en las que se pueden usar y las que tienen una fecha que no es ISO.
+ *
+ * `crearBloqueo` ya no deja entrar una fecha mala, pero el Sheet es datastore y entregable a la
+ * vez —se edita a mano— y las tablas son append-only, así que una fila corrupta puede estar ya
+ * escrita y no se va a borrar nunca. Sin partirla, el problema NO es que el validador reviente
+ * (`validateMonth` solo compara cadenas y nunca lanza por esto): es que **el veredicto de INV-5
+ * sale a suerte**, según por dónde ordene la basura. Medido el 2026-08-02 con una guardia
+ * asignada encima de la baja:
+ *  - `hasta="no-es-fecha"` o `hasta="30/02/2028"` → INV-5 emite, pero por casualidad: la cadena
+ *    basura ordena por encima del día, así que el rango "contiene" la fecha de puro accidente;
+ *  - `desde="30/02/2027"` → INV-5 emite CERO. `absences` descarta la fila del rango —compara
+ *    cadenas a propósito, V-19— y la baja médica deja de proteger EN SILENCIO.
+ * Y los cierres de equidad de INV-3, que sí hacen aritmética de fechas, hacían que
+ * `marcarValidado` respondiera «Fecha ISO inválida: "…"» sin decir de qué tabla, de quién ni cuál.
+ *
+ * La política (decisión V-22): apartarla del contexto —para que ningún invariante la juzgue con
+ * una fecha inventada— y emitir un `error` que la nombre. Es `error` y no `aviso` porque no es una regla nueva que
+ * bloquea: es INV-5 diciendo que no puede comprobarse, ya bloqueaba antes con un mensaje ciego, y
+ * SÍ tiene salida dentro de la herramienta —cancelar la fila y recrearla, y desde V-19 eso vale
+ * también para la ausencia de otro—. Por eso las lecturas de UI la siguen mostrando (ver
+ * `activeBloqueosInMonth`): apartarla también de ahí la volvería incancelable.
+ */
+function partitionBloqueos(deps, bloqueos) {
+  const usables = [];
+  const corruptas = [];
+  for (const b of deps.domain.absences(bloqueos)) { // solo activas: una cancelada ya no molesta
+    try {
+      deps.domain.parseISO(b.desde);
+      deps.domain.parseISO(b.hasta);
+      usables.push(b);
+    } catch (e) {
+      corruptas.push({ bloqueo: b, motivo: e.message });
+    }
+  }
+  return { usables, corruptas };
 }
 
-/** Bloqueos activos (de cualquier residente) que solapan el mes dado. */
+/** Un `error` por ausencia con fecha ilegible, nombrando la fila para que se pueda cancelar. */
+function bloqueoCorruptoViolations(corruptas) {
+  return corruptas.map(({ bloqueo, motivo }) => ({
+    invariante: "INV-5",
+    severidad: "error",
+    residenteId: bloqueo.residenteId,
+    detalle: `Ausencia ${bloqueo.motivo || "(sin motivo)"} con fecha ilegible (${bloqueo.desde} → ${bloqueo.hasta}): ${motivo}. `
+      + `Mientras siga así no se puede comprobar si hay guardias asignadas sobre ella; cancélala (id ${bloqueo.id}) y vuelve a crearla.`,
+  }));
+}
+
+/**
+ * Bloqueos activos que solapan [desde,hasta]. El filtro no vive aquí: lo hace el lector único
+ * del dominio (`absences`), que es también quien descarta las filas canceladas. Antes el
+ * `activo === true` de esta función era la ÚNICA defensa contra que un bloqueo cancelado
+ * volviera a bloquear asignaciones, y bastaba con que un invocador nuevo no pasara por aquí.
+ */
+function bloqueosInRange(deps, bloqueos, desde, hasta) {
+  return deps.domain.absences(bloqueos, { desde, hasta });
+}
+
+/**
+ * Bloqueos activos (de cualquier residente) que solapan el mes dado, MÁS las filas con fecha
+ * ilegible. Las corruptas se añaden en todos los meses a propósito: con la fecha ilegible no se
+ * puede saber en cuál caen, y esconderlas las volvería incancelables desde la UI, que es la única
+ * salida que tiene quien se las encuentre (ver `partitionBloqueos`).
+ */
 function activeBloqueosInMonth(deps, anio, mes) {
   const prefix = monthPrefix(anio, mes);
+  const { usables, corruptas } = partitionBloqueos(deps, allBloqueos(deps));
   // Tope superior lexicográfico holgado: "-31" existe en ISO aunque el mes tenga 28/30 días.
-  return bloqueosInRange(allBloqueos(deps), `${prefix}-01`, `${prefix}-31`);
+  return [...bloqueosInRange(deps, usables, `${prefix}-01`, `${prefix}-31`), ...corruptas.map((c) => c.bloqueo)];
 }
 
 /**
@@ -365,10 +879,54 @@ function activeBloqueosInMonth(deps, anio, mes) {
  * dos veces, y en Apps Script cada lectura es una llamada real a Sheets.
  */
 function monthSnapshot(deps) {
+  // Las ausencias con fecha ilegible se apartan aquí y viajan en `bloqueosCorruptos`: si entraran
+  // en el contexto, INV-5 las juzgaría por comparación de cadenas (veredicto a suerte) y los
+  // cierres de equidad tumbarían la petición con un «Fecha ISO inválida» que no dice de qué fila
+  // habla (decisión V-22, ver `partitionBloqueos`).
+  const { usables, corruptas } = partitionBloqueos(deps, allBloqueos(deps));
   return {
-    residentes: deps.store.readRecords("residentes"),
+    residentes: allResidentes(deps),
     asignaciones: deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }),
-    bloqueos: allBloqueos(deps),
+    bloqueos: usables,
+    bloqueosCorruptos: corruptas,
+    festivos: allFestivos(deps).filter((f) => f.activo === true),
+    eventos: activeEventos(deps),
+  };
+}
+
+/**
+ * Contexto de `validateThirdPost` (INV-8) para un mes, reconstruido desde el store igual que
+ * `buildCuadranteCtx`. Hasta la decisión V-18 este invariante estaba implementado y probado
+ * desde la Fase 3 pero **no lo invocaba nadie** —mismo caso que el cierre anual de INV-3 antes
+ * de P-8—, y le faltaba además la tabla de voluntarios: con la lista vacía, INV-8a marcaba
+ * TODO 3P como no-voluntario, que es la razón por la que no se podía cablear antes.
+ *
+ * El rango del historial lo decide el dominio (`thirdPostHistoryStart`) y no este fichero: el
+ * ciclo L-D de INV-8b arranca el día en que cada residente se apuntó, que puede ser de hace
+ * año y medio, y adivinarlo aquí es el error que ya costó la regresión del contrato C-2.
+ */
+function buildThirdPostCtx(deps, mes, anio, snap) {
+  const prefix = monthPrefix(anio, mes);
+  const monthStart = `${prefix}-01`;
+  const voluntarios = activeThirdPostVolunteers(deps);
+  const desde = deps.domain.thirdPostHistoryStart(voluntarios, snap.residentes, mes, anio);
+
+  // historial3P: solo los 3P ANTERIORES al mes, por residente y en orden. Los del propio mes
+  // van por `asignaciones`, y meterlos también aquí los contaría dos veces en el ciclo.
+  const historial3P = {};
+  if (desde) {
+    for (const a of snap.asignaciones) {
+      if (a.codigo !== "3P" || a.fecha < desde || a.fecha >= monthStart) continue;
+      (historial3P[a.residenteId] = historial3P[a.residenteId] || []).push(a.fecha);
+    }
+    for (const id of Object.keys(historial3P)) historial3P[id].sort();
+  }
+
+  return {
+    mes, anio, residentes: snap.residentes,
+    asignaciones: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
+    voluntarios3P: voluntarios, // con `desde`: el ciclo de 8b arranca en el alta de cada uno (V-18b)
+    historial3P,
   };
 }
 
@@ -376,7 +934,8 @@ function monthSnapshot(deps) {
  * Violaciones de los cierres de equidad de INV-3 que caen en el mes validado, cada uno con la
  * severidad que le da spec.md §5: el TRIMESTRAL (agosto/noviembre/febrero/mayo; solo el eje
  * `total`, severidad aviso — P-8, decisión V-13) y el ANUAL (solo si algún residente cierra su
- * año de residencia ese mes; los seis ejes, severidad error). Devuelve [] cuando el mes no
+ * año de residencia ese mes; los seis ejes, severidad aviso como todo lo de equidad desde
+ * V-14). Devuelve [] cuando el mes no
  * cierra ninguno de los dos, que es lo normal en 8 de cada 12 meses.
  *
  * Los rangos que hay que leer los decide el dominio (`quarterCloseWindow`,
@@ -395,17 +954,21 @@ function closeViolations(deps, mes, anio, snap) {
     violaciones.push(...deps.domain.validateQuarterClose({
       mes, anio, residentes: snap.residentes,
       asignaciones: snap.asignaciones.filter((a) => a.fecha >= trimestre.start && a.fecha <= trimestre.end),
-      bloqueos: bloqueosInRange(snap.bloqueos, trimestre.start, trimestre.end),
+      bloqueos: bloqueosInRange(deps, snap.bloqueos, trimestre.start, trimestre.end),
     }));
   }
 
   const desdeAnual = deps.domain.yearCloseHistoryStart(snap.residentes, mes, anio);
   if (desdeAnual) {
+    // El eje `puentesLibres` mira el año de residencia entero (fase 3 de V-17), que cruza dos
+    // años naturales: el rango de festivos lo da el dominio, no se recorta aquí.
+    const rangoFestivos = deps.domain.yearCloseFestivosRange(snap.residentes, mes, anio);
     violaciones.push(...deps.domain.validateResidencyYearClose(deps.domain.buildYearCloseContext({
       mes, anio, residentes: snap.residentes,
       historicas: snap.asignaciones.filter((a) => a.fecha >= desdeAnual && a.fecha < monthStart),
       asignacionesDelMes: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
-      bloqueos: bloqueosInRange(snap.bloqueos, desdeAnual, monthEnd),
+      bloqueos: bloqueosInRange(deps, snap.bloqueos, desdeAnual, monthEnd),
+      festivos: (snap.festivos || []).filter((f) => f.fecha >= rangoFestivos.desde && f.fecha <= rangoFestivos.hasta),
     })));
   }
 
@@ -437,9 +1000,41 @@ function writeCuadranteEstado(deps, session, mes, anio, estado) {
   deps.store.appendRecord("cuadrantes", { mes, anio, estado, actorId: session.sub, fecha: deps.today });
 }
 
-/** Exige que la sesión sea del Responsable en mandato (Fase 6.2, decisión V-9c); si no, el error a devolver. */
-function requireResponsable(session, accion) {
-  return session.rol === "responsable" ? null : { ok: false, error: `solo el Responsable puede ${accion}` };
+/** El mandato de Responsable que cubre `today`, o null si no hay ninguno vigente (INV-14). */
+function mandatoVigente(deps) {
+  return deps.store.readLatest("responsables", (r) => r.periodoInicio)
+    .find((m) => m.periodoInicio <= deps.today && deps.today < m.periodoFin) || null;
+}
+
+/**
+ * Permiso para mover el ciclo del cuadrante (validar/publicar/despublicar).
+ *
+ * Regla base (decisión V-9c): lo hace el Responsable en mandato. Añadido de la decisión V-16:
+ * si NO hay mandato vigente el ciclo no se queda bloqueado — cualquier residente Mayor (R3/R4
+ * a día de hoy, derivado de fechas como todo lo demás) puede moverlo, y el cliente avisa de que
+ * no hay Responsable designado. El motivo es el de siempre: la app tiene que funcionar sin
+ * administrador, y en algún enero de los próximos diez años nadie lanzará el sorteo. Un cuadrante
+ * que no se puede publicar porque falta una fila en una tabla es peor que uno publicado por el
+ * R4 que estaba delante.
+ *
+ * Ojo con `session.rol`: se calcula en el login y viaja firmado dentro del token, así que puede
+ * ser de hace horas. La existencia del mandato se relee AQUÍ del store en cada llamada — si el
+ * sorteo se resolvió a mitad de la sesión de alguien, el permiso deja de ser el de su token.
+ */
+function requireCicloPermiso(deps, session, accion) {
+  const mandato = mandatoVigente(deps);
+  if (mandato) {
+    return mandato.residenteId === session.sub ? null : { ok: false, error: `solo el Responsable puede ${accion}` };
+  }
+  // Hidratado: `groupOnDate` deriva MAYOR/PEQUENO de los periodos, así que el permiso del ciclo
+  // (V-16) depende de los editados. Leerlo crudo aquí sería justo la incoherencia por acción que
+  // la fase 2 de V-24 viene a quitar — alguien sería Mayor para validar y Pequeño para el resto.
+  const residente = allResidentes(deps).find((r) => r.id === session.sub);
+  const grupo = residente ? deps.domain.groupOnDate(residente, deps.today) : null;
+  if (grupo !== "MAYOR") {
+    return { ok: false, error: `no hay Responsable designado para este periodo: hasta que se decida, solo un R3 o R4 puede ${accion}` };
+  }
+  return null;
 }
 
 /**
@@ -452,11 +1047,21 @@ function requireResponsable(session, accion) {
 function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps)) {
   const prefix = monthPrefix(anio, mes);
   const monthStart = `${prefix}-01`;
-  const bloqueos = bloqueosInRange(snap.bloqueos, monthStart, `${prefix}-31`);
+  const bloqueos = bloqueosInRange(deps, snap.bloqueos, monthStart, `${prefix}-31`);
   const asignacionesDelMes = snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
   const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
   const historicas = desdeRotacion ? snap.asignaciones.filter((a) => a.fecha >= desdeRotacion && a.fecha < monthStart) : [];
-  return deps.domain.buildMonthContext({ mes, anio, residentes: snap.residentes, historicas, asignacionesDelMes, bloqueos });
+  // Con margen hacia atrás: el vecino del día 1 cae en el mes anterior y decide si es puente
+  // (§3.4). Se cogen los festivos desde el 1 del mes anterior —de más, y son inertes: isHoliday
+  // compara fechas exactas y bridgesOfMonth solo mira día±1— en vez de restar un día, para no
+  // necesitar aritmética de fechas aquí. El filtro por mes SÍ importa: si la lista llegara
+  // completa, un año sin cargar dejaría de disparar el aviso de "no hay festivos cargados".
+  const mesAnterior = mes === 1 ? `${anio - 1}-12` : `${anio}-${String(mes - 1).padStart(2, "0")}`;
+  const mesSiguiente = mes === 12 ? `${anio + 1}-01` : `${anio}-${String(mes + 1).padStart(2, "0")}`;
+  const festivos = (snap.festivos || []).filter((f) => f.fecha >= `${mesAnterior}-01` && f.fecha <= `${mesSiguiente}-01`);
+  // Los eventos van SIN filtrar por mes: `buildMonthContext` se queda con los del año académico,
+  // que es lo que empareja la Navidad de diciembre con la despedida del mayo siguiente.
+  return deps.domain.buildMonthContext({ mes, anio, residentes: snap.residentes, historicas, asignacionesDelMes, bloqueos, festivos, eventos: snap.eventos || [] });
 }
 
 /**
@@ -478,7 +1083,7 @@ function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps)) {
  * y de bajo impacto (~15 usuarios, latencia de Apps Script) frente a la complejidad de evitarla.
  */
 function projectCuadranteToSheets(deps, mes, anio) {
-  const residentes = deps.store.readRecords("residentes");
+  const residentes = allResidentes(deps);
   const prefix = monthPrefix(anio, mes);
   const asignacionesDelMes = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" })
     .filter((a) => a.fecha.startsWith(prefix));
@@ -488,10 +1093,46 @@ function projectCuadranteToSheets(deps, mes, anio) {
 
   const otrosPublicados = deps.store.readLatest("cuadrantes", CUAD_KEY).filter((r) => r.estado === "PUBLICADO");
   const publishedMonths = [...otrosPublicados.map((r) => ({ mes: r.mes, anio: r.anio })), { mes, anio }];
-  const resumen = deps.domain.buildResumenRows({ residentes, publishedMonths });
+
+  // Las dos hojas agregadas son del CURSO académico del mes que se publica (decisión V-25), y lo
+  // llevan en el nombre: publicar una corrección de un curso anterior republica LA HOJA DE ESE
+  // CURSO, sin tocar la del actual. Con un nombre fijo se habrían pisado.
+  const curso = deps.domain.academicYearOf(deps.domain.toISO(anio, mes, 1));
+  const resumen = deps.domain.buildResumenRows({ residentes, publishedMonths, curso });
   deps.store.rebuildSheet(resumen.sheetName, resumen.rows);
 
-  return { mensual: mensual.sheetName, resumen: resumen.sheetName };
+  const contaje = deps.domain.buildContajeTrimestralRows({ residentes, publishedMonths, curso });
+  deps.store.rebuildSheet(contaje.sheetName, contaje.rows);
+
+  return { mensual: mensual.sheetName, resumen: resumen.sheetName, contaje: contaje.sheetName };
+}
+
+/**
+ * Estado del mandato de un periodo: quién es elegible (R3 en el 1 de enero, derivado), quién se
+ * ha ofrecido, si ya está decidido. Extraído porque `estadoResponsable` lo devuelve para dos
+ * periodos (el pedido y el siguiente) y reimplementarlo dos veces es cómo se desincronizan.
+ */
+function periodoResponsable(deps, anio, session, residentes) {
+  const { periodoInicio, periodoFin } = mandatoPeriod(anio);
+  const voluntarios = activeVolunteers(deps, periodoInicio);
+  return {
+    anio, periodoInicio, periodoFin,
+    elegibles: deps.domain.eligibleCandidates(residentes, periodoInicio),
+    voluntarios,
+    meHeOfrecido: voluntarios.includes(session.sub),
+    mandato: currentMandate(deps, periodoInicio),
+  };
+}
+
+/**
+ * Voluntarios ACTIVOS del tercer puesto (última reinserción gana, como `activeVolunteers`).
+ * Devuelve los registros, no solo los ids: `desde` es lo que necesitan el compromiso de
+ * permanencia y `thirdPostHistoryStart` (el ciclo de INV-8b arranca ahí, no en el mes).
+ */
+function activeThirdPostVolunteers(deps) {
+  return deps.store.readLatest("voluntarios3P", (r) => r.residenteId)
+    .filter((v) => v.activo === true)
+    .map((v) => ({ residenteId: v.residenteId, desde: v.desde }));
 }
 
 /** Mandato enero→enero (INV-14) para el año dado: [YYYY-01-01, (YYYY+1)-01-01). */
@@ -511,10 +1152,22 @@ function currentMandate(deps, periodoInicio) {
   return deps.store.readLatest("responsables", (r) => r.periodoInicio).find((r) => r.periodoInicio === periodoInicio) || null;
 }
 
-/** Valida la sesión y ejecuta `fn(payload)`, o devuelve el error de sesión. */
+/**
+ * Valida la sesión y ejecuta `fn(payload)`, o devuelve el error de sesión.
+ *
+ * El `pendingToken` de `handleLogin` (emitido a un email que Google verificó pero que NO está
+ * vinculado a ningún residente) va firmado con el MISMO secreto que una sesión, así que sin la
+ * segunda comprobación valdría como sesión completa: y como el endpoint es ANYONE_ANONYMOUS y el
+ * client_id es público, cualquiera con una cuenta de Google podía conseguir uno abriendo la web.
+ * Se exige un `sub` (id de residente) en POSITIVO, no se descarta `pending` en negativo: así
+ * cualquier clase futura de token sin sujeto queda fuera por defecto en vez de por enumeración.
+ */
 function authed(req, deps, fn) {
   const s = verifySession(req.session, { now: deps.now, secret: deps.sessionSecret, crypto: deps.crypto });
   if (!s.valid) return { ok: false, error: `sesión ${s.reason}` };
+  if (typeof s.payload.sub !== "string" || !s.payload.sub) {
+    return { ok: false, error: "el token no identifica a ningún residente (¿es un token de alta?)" };
+  }
   return fn(s.payload);
 }
 
@@ -524,7 +1177,8 @@ function authed(req, deps, fn) {
  * una corrección posterior (misma clave), la fila vieja no debe seguir concediendo el rol.
  */
 function resolveRol(store, residenteId, today) {
-  const mandatos = store.readLatest("responsables", (r) => r.periodoInicio);
-  const activo = mandatos.some((m) => m.residenteId === residenteId && m.periodoInicio <= today && today < m.periodoFin);
-  return activo ? "responsable" : "residente";
+  // Una sola definición de "el mandato que cubre hoy": la comparten el rol del token y el
+  // permiso del ciclo (requireCicloPermiso), que si no podrían discrepar.
+  const mandato = mandatoVigente({ store, today });
+  return mandato && mandato.residenteId === residenteId ? "responsable" : "residente";
 }

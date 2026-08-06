@@ -12,8 +12,44 @@ export const TABLES = {
   periodos: { name: "periodos", columns: [col("id"), col("residenteId"), col("anio", "number"), col("fechaInicio", "date"), col("fechaFin", "date")] },
   bloqueos: { name: "bloqueos", columns: [col("id"), col("residenteId"), col("desde", "date"), col("hasta", "date"), col("motivo"), col("provincia"), col("guardiasEnCentroExterno", "bool"), col("activo", "bool")] },
   asignaciones: { name: "asignaciones", columns: [col("id"), col("fecha", "date"), col("residenteId"), col("codigo"), col("puesto"), col("origen")] },
+  // Festivos: DATO DE ENTRADA, nunca derivado ni delegado a la IA (S-4; el cliente v1 le pedía
+  // al modelo "identifícalos tú"). `anio` NO se almacena, se deriva de `fecha` (§1). `activo`
+  // permite corregir una fecha mal cargada reinsertando la fila con activo=false, igual que
+  // `bloqueos` — la tabla no se reescribe nunca. `ambito` (NACIONAL/AUTONOMICO/LOCAL) es
+  // informativo: los locales de Alicante son festivos reales y cambian de fecha cada año, así
+  // que sin ellos INV-12 avisaría en falso sobre GF correctas.
+  festivos: { name: "festivos", columns: [col("id"), col("fecha", "date"), col("nombre"), col("ambito"), col("activo", "bool")] },
+  // Eventos del servicio (INV-10, decisión V-20): comida de Navidad y despedida de R4. Son
+  // DATOS DE ENTRADA como los festivos —la fecha la pone el servicio cada año, no se deriva de
+  // nada— y por eso la tabla se parece a `festivos`: append-only, `activo` para corregir por
+  // reinserción. `designados` se ALMACENA (no se deriva de quién tuviera guardia ese día):
+  // validar la despedida de mayo necesita saber quién cubrió la Navidad del diciembre anterior,
+  // y guardarlo evita que junio tenga que leer las asignaciones de diciembre. La contrapartida,
+  // aceptada: si alguien cambia la guardia del día de Navidad después, esta lista no se entera.
+  // `sorteoId` apunta a la tabla `sorteos` (la misma de INV-14): es lo que hace comprobable el
+  // «a sorteo» de la normativa en vez de un booleano que nadie puede verificar.
+  eventos: { name: "eventos", columns: [col("id"), col("tipo"), col("fecha", "date"), col("voluntarios", "json"), col("designados", "json"), col("sorteoId"), col("activo", "bool")] },
+  // Imaginaria (INV-13, decisión V-20). NO se almacena la cola: se registra cada cobertura real
+  // y la cola se DERIVA de ese historial (§1, «derivar > almacenar»), igual que el nivel R1-R4.
+  // Una guardia de incidencia cedida o comprada no genera fila, y por eso no mueve a nadie en la
+  // cola — literal de la normativa p.4.
+  imaginaria: { name: "imaginaria", columns: [col("id"), col("grupo"), col("fechaIncidencia", "date"), col("residenteId"), col("registradaEn", "date"), col("activo", "bool")] },
   responsables: { name: "responsables", columns: [col("id"), col("periodoInicio", "date"), col("periodoFin", "date"), col("residenteId"), col("metodo"), col("voluntarios", "json"), col("semilla"), col("candidatos", "json"), col("fechaSorteo", "date")] },
   voluntariosResponsable: { name: "voluntariosResponsable", columns: [col("id"), col("residenteId"), col("periodoInicio", "date"), col("activo", "bool")] },
+  // Voluntarios del TERCER PUESTO (INV-8a, decisión V-18). Se parece a voluntariosResponsable
+  // —append-only, `activo` para retirarse reinsertando— pero NO lleva `periodoInicio`: el 3P no
+  // se elige por periodos comunes, cada residente se apunta el día que quiere y su ciclo L-D
+  // (INV-8b) arranca ahí. Por eso `desde` es la fecha de alta real y no un borde de calendario:
+  // es lo que `thirdPostHistoryStart` usa para saber desde cuándo leer el historial, y lo que
+  // fija el compromiso de permanencia de 4 meses (`thirdPostCommitmentEnd`). Se guarda además
+  // `compromisoAceptado` porque el compromiso se acepta explícitamente al apuntarse: sin dejar
+  // constancia, negarle a alguien la retirada sería una regla que nadie aceptó.
+  // `hasta` solo lo escribe la retirada, y hoy no lo lee ningún invariante: existe porque sin él
+  // la fila de baja es indistinguible de la de alta y la fecha en que alguien dejó el 3P se
+  // perdería para siempre en una tabla cuyo sentido es que el historial no se borra nunca. Lo
+  // necesitará quien arregle la laguna anotada en §7: INV-8a juzga un mes pasado con la lista de
+  // HOY, así que a quien se retiró en diciembre le avisa en falso por los 3P que hizo en julio.
+  voluntarios3P: { name: "voluntarios3P", columns: [col("id"), col("residenteId"), col("desde", "date"), col("hasta", "date"), col("compromisoAceptado", "bool"), col("activo", "bool")] },
   sorteos: { name: "sorteos", columns: [col("id"), col("fecha", "date"), col("motivo"), col("semilla"), col("candidatos", "json"), col("resultado", "json")] },
   // Fase 4: diasPreferidos/diasEvitar (día de semana genérico) y rotDe/rotHasta/vacDe/vacHasta
   // (número de día suelto) del v1 se sustituyen por fechas concretas (BLANDO) y por la tabla

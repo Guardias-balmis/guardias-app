@@ -13,18 +13,25 @@ import nodeCrypto from "node:crypto";
 import { buildBundle, buildServerBundle, transformModule } from "../../../build/build-gas.mjs";
 
 // Fuente ESM
-import { weekday, trimesterWindow } from "../calendar.js";
-import { levelOn } from "../residents.js";
+import { weekday, trimesterWindow, bridgesBetween } from "../calendar.js";
+import { absences, isNearbyRotation, BLOQUEA_ASIGNACION, AUSENCIA_SIMULTANEA } from "../absences.js";
+import { imaginariaQueue, nextForImaginaria } from "../imaginaria.js";
+import { levelOn, groupOnDate } from "../residents.js";
 import { tally } from "../tally.js";
 import { validateMonth, buildMonthContext } from "../validate.js";
-import { validateThirdPost } from "../thirdpost.js";
+import {
+  validateThirdPost, thirdPostHistoryStart, thirdPostCommitmentEnd,
+  canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES,
+} from "../thirdpost.js";
 import {
   validateResidencyYearClose, validateQuarterClose, quarterCloseWindow,
-  yearCloseHistoryStart, buildYearCloseContext,
+  yearCloseHistoryStart, yearCloseFestivosRange, buildYearCloseContext,
 } from "../equity.js";
 import { canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings } from "../cuadrante.js";
-import { buildMonthSheetRows, buildResumenRows } from "../projection.js";
+import { buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows, cursoLabel } from "../projection.js";
+import { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible } from "../responsible.js";
 import { handleRequest as esmHandleRequest } from "../../../server/src/router.js";
+import { makeStore as esmMakeStore } from "../../../server/src/sheets-store.js";
 import { issueSession } from "../../../server/src/session.js";
 
 // ── Fixtures deterministas que ejercitan cada función pública ──
@@ -55,6 +62,15 @@ const TP_CTX = {
   voluntarios3P: [], historial3P: {},
   asignaciones: [{ residenteId: "r4-david", fecha: "2026-10-17", codigo: "3P" }],
 };
+const TP_VOLUNTARIOS = [{ residenteId: "r4-david", desde: "2026-08-01" }];
+// Incluye una fila CANCELADA a propósito: que el bundle también la descarte es lo que garantiza
+// que un bloqueo anulado no vuelva a bloquear asignaciones solo en Apps Script.
+const IMG_COB = [{ residenteId: "ANA", grupo: "MAYOR", fechaIncidencia: "2026-06-10" }];
+const ABS_BLOQUEOS = [
+  { residenteId: "ANA", desde: "2026-07-01", hasta: "2026-07-31", motivo: "BAJA" },
+  { residenteId: "IVAN", desde: "2026-07-10", hasta: "2026-07-20", motivo: "ROTACION", provincia: "Valencia" },
+  { residenteId: "ANA", desde: "2026-07-05", hasta: "2026-07-09", motivo: "VACACIONES", activo: false },
+];
 const EQ_CTX = {
   mes: 5, anio: 2027,
   residentes: [
@@ -67,6 +83,25 @@ const EQ_CTX = {
   },
   asignaciones: [],
 };
+// El 8-dic-2026 es martes y el 6-dic domingo → el lunes 7 es puente. Cae en el año natural
+// ANTERIOR al del cierre de mayo-2027: ejercita el cruce de dos años del eje `puentesLibres`.
+const EQ_FESTIVOS = ["2026-12-06", "2026-12-08", "2026-12-25", "2027-01-01"];
+// Meses publicados que tocan T1 (julio) y T3 (dic-2026 + feb-2027, que cruza el año natural):
+// si el bundle agrupara los trimestres por año de calendario en vez de por mes, esto lo cazaría.
+const PUB_MESES = [{ mes: 7, anio: 2026 }, { mes: 12, anio: 2026 }, { mes: 2, anio: 2027 }];
+
+// INV-14: en 2027-01-01 ambos residentes de EQ_CTX son R3, así que son los dos elegibles.
+// `RESP_MAL` cambia el titular por uno que NO es R3 en esa fecha y rompe el enero-a-enero, para
+// que la paridad cubra también la rama de violación (el sorteo reproducible y la rama VOLUNTARIO
+// las cubren `RESP_OK` y `resolveMethod` en runAll).
+const RESP_SEMILLA = "2027-01-01|sorteo";
+const RESP_OK = {
+  periodoInicio: "2027-01-01", periodoFin: "2028-01-01", metodo: "SORTEO",
+  voluntarios: [], candidatos: ["r3a", "r3b"], semilla: RESP_SEMILLA,
+};
+const RESP_MAL = { ...RESP_OK, residenteId: "r1nuevo", periodoFin: "2027-12-31" };
+const RESP_RESIDENTES = [...EQ_CTX.residentes, { id: "r1nuevo", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }];
+
 // Cierre de T2 (nov-2026) con diferencia 2 en totales → un aviso (P-8, decisión V-13).
 const QC_CTX = {
   mes: 11, anio: 2026,
@@ -80,21 +115,44 @@ const QC_CTX = {
 
 // Ejecuta toda la API pública sobre una implementación (ESM namespace o el Domain del bundle).
 function runAll(api) {
-  const ctx = api.buildMonthContext({ mes: MONTH_CTX.mes, anio: MONTH_CTX.anio, residentes: MONTH_CTX.residentes, asignacionesDelMes: MONTH_CTX.asignaciones, bloqueos: [] });
+  const ctx = api.buildMonthContext({
+    mes: MONTH_CTX.mes, anio: MONTH_CTX.anio, residentes: MONTH_CTX.residentes,
+    asignacionesDelMes: MONTH_CTX.asignaciones, bloqueos: [],
+    eventos: [{ tipo: "NAVIDAD", fecha: "2026-12-18", designados: ["ANA"], voluntarios: [], sorteoId: "s1", activo: true }],
+  });
   const violaciones = api.validateMonth(MONTH_CTX);
   return {
     weekday: api.weekday("2026-06-01"),
     level: api.levelOn(PERIODS, "2026-07-16"),
+    grupoEnFecha: ["2026-07-16", "2028-01-01"].map((f) => api.groupOnDate({ fechaInicio: "2024-05-07", fechaFin: "2028-05-07" }, f)),
     tally: api.tally(TALLY_ASGS, { start: "2026-06-01", end: "2026-06-30" }),
     month: violaciones,
     thirdpost: api.validateThirdPost(TP_CTX),
+    thirdPostHistoryStart: [
+      api.thirdPostHistoryStart(TP_VOLUNTARIOS, TP_CTX.residentes, TP_CTX.mes, TP_CTX.anio),
+      api.thirdPostHistoryStart([], TP_CTX.residentes, TP_CTX.mes, TP_CTX.anio),
+    ],
+    thirdPostCommitment: [api.thirdPostCommitmentEnd("2026-10-31"), api.canWithdrawThirdPost("2026-10-31", "2027-02-27"), api.THIRD_POST_PERMANENCIA_MESES],
     equity: api.validateResidencyYearClose(EQ_CTX),
     trimesterWindow: api.trimesterWindow("2027-01-15"),
     quarterCloseWindow: [api.quarterCloseWindow(11, 2026), api.quarterCloseWindow(10, 2026)],
     quarterClose: api.validateQuarterClose(QC_CTX),
     yearCloseStart: [api.yearCloseHistoryStart(EQ_CTX.residentes, 5, 2027), api.yearCloseHistoryStart(EQ_CTX.residentes, 10, 2026)],
-    yearCloseCtx: api.buildYearCloseContext({ mes: 5, anio: 2027, residentes: EQ_CTX.residentes, historicas: QC_CTX.asignaciones, asignacionesDelMes: [] }),
+    yearCloseCtx: api.buildYearCloseContext({ mes: 5, anio: 2027, residentes: EQ_CTX.residentes, historicas: QC_CTX.asignaciones, asignacionesDelMes: [], festivos: EQ_FESTIVOS }),
+    yearCloseFestivosRange: [api.yearCloseFestivosRange(EQ_CTX.residentes, 5, 2027), api.yearCloseFestivosRange(EQ_CTX.residentes, 10, 2026)],
+    bridgesBetween: api.bridgesBetween("2026-05-27", "2027-05-26", EQ_FESTIVOS),
     monthContext: ctx,
+    absences: [
+      api.absences(ABS_BLOQUEOS, { motivos: api.BLOQUEA_ASIGNACION, fecha: "2026-07-15" }),
+      api.absences(ABS_BLOQUEOS, { motivos: api.AUSENCIA_SIMULTANEA, desde: "2026-07-01", hasta: "2026-07-31" }),
+      api.absences(ABS_BLOQUEOS, { residenteId: "ANA" }),
+    ],
+    isNearbyRotation: ABS_BLOQUEOS.map(api.isNearbyRotation),
+    imaginaria: [
+      api.imaginariaQueue({ residentes: MONTH_CTX.residentes, coberturas: IMG_COB, asignaciones: MONTH_CTX.asignaciones, grupo: "MAYOR", fechaIncidencia: "2026-07-16" }),
+      api.imaginariaQueue({ residentes: MONTH_CTX.residentes, coberturas: IMG_COB, asignaciones: [], grupo: "PEQUENO", fechaIncidencia: "2026-07-16" }),
+    ],
+    nextForImaginaria: api.nextForImaginaria({ residentes: MONTH_CTX.residentes, coberturas: IMG_COB, asignaciones: [], grupo: "MAYOR", fechaIncidencia: "2026-07-16" }),
     canValidate: [api.canValidate([]), api.canValidate(violaciones)],
     equityWarnings: api.equityWarnings([...violaciones, ...api.validateQuarterClose(QC_CTX)]),
     canPublish: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canPublish),
@@ -102,15 +160,37 @@ function runAll(api) {
     canEdit: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.canEdit),
     stateAfterEdit: ["BORRADOR", "VALIDADO", "PUBLICADO"].map(api.stateAfterEdit),
     monthSheet: api.buildMonthSheetRows({ anio: MONTH_CTX.anio, mes: MONTH_CTX.mes, residentes: MONTH_CTX.residentes, asignaciones: MONTH_CTX.asignaciones }),
-    resumen: api.buildResumenRows({ residentes: MONTH_CTX.residentes, publishedMonths: [{ mes: MONTH_CTX.mes, anio: MONTH_CTX.anio }] }),
+    // Las dos hojas agregadas son del CURSO académico (V-25): julio-2026 pertenece al 2026-27.
+    resumen: api.buildResumenRows({ residentes: MONTH_CTX.residentes, publishedMonths: PUB_MESES, curso: 2026 }),
+    contaje: api.buildContajeTrimestralRows({ residentes: MONTH_CTX.residentes, publishedMonths: PUB_MESES, curso: 2026 }),
+    cursoLabel: [api.cursoLabel(2026), api.cursoLabel(2099)],
+    // INV-14 (`responsible.js`). El sorteo se recomputa aquí y su ganador alimenta
+    // `validateResponsible`, que es como lo encadena el router (:286-296): si el bundle no
+    // trae el módulo, el `api.*` es undefined y esto revienta en vez de pasar en verde.
+    responsible: (() => {
+      const elegibles = api.eligibleCandidates(RESP_RESIDENTES, "2027-01-01");
+      const sorteo = api.resolveMethod(elegibles, []);
+      const unVoluntario = api.resolveMethod(elegibles, ["r3b"]);
+      const ganador = api.drawResponsible(sorteo.candidatos, RESP_SEMILLA);
+      return {
+        elegibles, sorteo, unVoluntario, ganador,
+        ok: api.validateResponsible({ ...RESP_OK, residenteId: ganador }, { residentes: RESP_RESIDENTES }),
+        mal: api.validateResponsible(RESP_MAL, { residentes: RESP_RESIDENTES }),
+      };
+    })(),
   };
 }
 
 const esm = {
-  weekday, levelOn, tally, validateMonth, validateThirdPost, validateResidencyYearClose,
-  trimesterWindow, validateQuarterClose, quarterCloseWindow, yearCloseHistoryStart, buildYearCloseContext,
+  weekday, levelOn, groupOnDate, tally, validateMonth, validateThirdPost, validateResidencyYearClose,
+  thirdPostHistoryStart, thirdPostCommitmentEnd, canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES,
+  trimesterWindow, validateQuarterClose, quarterCloseWindow, yearCloseHistoryStart, yearCloseFestivosRange,
+  buildYearCloseContext, bridgesBetween,
   buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings,
-  buildMonthSheetRows, buildResumenRows,
+  buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows, cursoLabel,
+  absences, isNearbyRotation, BLOQUEA_ASIGNACION, AUSENCIA_SIMULTANEA,
+  imaginariaQueue, nextForImaginaria,
+  eligibleCandidates, resolveMethod, drawResponsible, validateResponsible,
 };
 
 // Carga el bundle en un ámbito global único, como hace Apps Script al concatenar los .gs.
@@ -122,7 +202,7 @@ function loadBundle(code) {
 
 test("el bundle expone la API pública esperada", () => {
   const Domain = loadBundle(buildBundle());
-  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "buildYearCloseContext", "yearCloseHistoryStart", "validateQuarterClose", "quarterCloseWindow", "trimesterWindow", "validateThirdPost", "levelOn", "groupOf", "weekday", "canValidate", "equityWarnings", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows"]) {
+  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "buildYearCloseContext", "yearCloseHistoryStart", "validateQuarterClose", "quarterCloseWindow", "trimesterWindow", "validateThirdPost", "thirdPostHistoryStart", "levelOn", "groupOf", "groupOnDate", "periodsOfResident", "weekday", "bridgesBetween", "absences", "isNearbyRotation", "imaginariaQueue", "nextForImaginaria", "eligibleCandidates", "resolveMethod", "drawResponsible", "validateResponsible", "canValidate", "equityWarnings", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows", "buildContajeTrimestralRows", "cursoLabel"]) {
     assert.equal(typeof Domain[fn], "function", `Domain.${fn} debe ser función`);
   }
 });
@@ -178,6 +258,58 @@ test("PARIDAD servidor: Server.handleRequest del bundle == fuente ESM", () => {
   };
   const body = JSON.stringify({ action: "validar", session, cuadrante });
   assert.equal(JSON.stringify(Server.handleRequest(body, deps)), JSON.stringify(esmHandleRequest(body, deps)));
+});
+
+// `Server.makeStore` se invoca en server/Code.gs:142 DENTRO de `deps_()`, es decir en CADA
+// petición: si falta del bundle el fallo es total e inmediato en producción. La paridad de
+// `handleRequest` no lo sostiene, porque su `deps` de arriba no lleva `store` — así que sin este
+// test se podía quitar "sheets-store" de SERVER_MODULES y la suite seguía en verde (comprobado).
+test("PARIDAD servidor: Server.makeStore del bundle == fuente ESM", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(buildServerBundle(), ctx);
+  assert.equal(typeof ctx.Server.makeStore, "function");
+
+  // Fake de hoja en memoria (idéntico contrato al de server/test/sheets.test.js).
+  const fakeSS = () => {
+    const sheets = new Map();
+    const guard = (n) => { if (!sheets.has(n)) throw new Error(`hoja inexistente: ${n}`); };
+    return {
+      listSheets: () => [...sheets.keys()],
+      exists: (n) => sheets.has(n),
+      read: (n) => (sheets.get(n) || []).map((r) => r.slice()),
+      overwrite: (n, rows) => { guard(n); sheets.set(n, rows.map((r) => r.slice())); },
+      append: (n, rows) => { if (!sheets.has(n)) sheets.set(n, []); sheets.get(n).push(...rows.map((r) => r.slice())); },
+      createSheet: (n) => { sheets.set(n, []); },
+      deleteSheet: (n) => { guard(n); sheets.delete(n); },
+      renameSheet: (from, to) => { guard(from); sheets.set(to, sheets.get(from)); sheets.delete(from); },
+      _dump: () => [...sheets.entries()],
+    };
+  };
+
+  // Ejercita las cinco operaciones: cabecera automática, lote, borrado explícito por
+  // `emptyField` (last-row-wins de `readLatest`) y el shadow-swap de `rebuildSheet`.
+  const exercise = (makeStore) => {
+    const ss = fakeSS();
+    let n = 0;
+    const store = makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++n}` });
+    const ids = store.appendRecords("asignaciones", [
+      { fecha: "2026-07-15", residenteId: "ANA", codigo: "G", origen: "IA" },
+      { fecha: "2026-07-16", residenteId: "IVAN", codigo: "3P" },
+    ]);
+    const suelto = store.appendRecord("asignaciones", { fecha: "2026-07-16", residenteId: "IVAN", codigo: "" });
+    const key = (a) => `${a.fecha}|${a.residenteId}`;
+    store.rebuildSheet("Resumen", [["Residente", "Total"], ["ANA", 1]]);
+    return {
+      ids, suelto,
+      records: store.readRecords("asignaciones"),
+      latest: store.readLatest("asignaciones", key, { emptyField: "codigo" }),
+      latestSinFiltro: store.readLatest("asignaciones", key),
+      hojas: ss.listSheets(),
+      dump: ss._dump(),
+    };
+  };
+
+  assert.equal(JSON.stringify(exercise(ctx.Server.makeStore)), JSON.stringify(exercise(esmMakeStore)));
 });
 
 test("FRESCURA: los .gs comiteados están al día con la fuente", () => {

@@ -5,6 +5,7 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "build": "node build/build-gas.mjs",
+    "catalogo": "node build/build-catalogo.mjs",
     "test": "node --test 'v2/domain/test/*.test.js' 'server/test/*.test.js' 'client/lib/test/*.test.js' 'test/*.test.js'"
   }
 }

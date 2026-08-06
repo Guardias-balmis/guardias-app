@@ -40,22 +40,63 @@ Dates are always ISO `"YYYY-MM-DD"` strings, validated strictly by `calendar.js:
 
 `Bloqueo` (motivo BAJA | VACACIONES | ROTACION) is deliberately split from `Preferencias.fechasEvitar`: only `motivo=BAJA` is DURO (hard) and blocks assignment (INV-5); VACACIONES/ROTACION are informative — they never block by themselves but still feed INV-2/6/7 and equity's availability discount. `fechasEvitar` is pure soft preference and is never enforced by the validator. Don't collapse these into one table.
 
-The ten modules split cleanly by responsibility: date/weekday/UTC arithmetic and academic-year derivation (`calendar.js`); training periods, level, and group derivation (`residents.js`); a deliberately dumb per-resident shift counter that never sees holiday data (`tally.js`); the month-scope invariant validator, `validateMonth` (`validate.js` — "la IA propone, el validador dispone"); third-post rules, `validateThirdPost`/INV-8 (`thirdpost.js`); equity at the two closes INV-3 defines — `validateResidencyYearClose` (residency year, all six axes) and `validateQuarterClose` (quarter, `total` only; P-8/V-13), both `aviso`-only — plus INV-4 (`equity.js`); the responsable lottery, INV-14 (`responsible.js`); cuadrante state-transition rules only, no persistence (`cuadrante.js`); Sheets-ready row projection that writes nothing itself (`projection.js`); and the accumulated per-resident tally, `accumulatedTally` (`accumulate.js`).
+**Toda lectura de `bloqueos` pasa por `v2/domain/absences.js` (decisión V-19).** Los criterios de
+cada invariante son distintos a propósito y están nombrados allí (`BLOQUEA_ASIGNACION` para INV-5,
+`EXIME_DEL_MINIMO` para INV-2, `AUSENCIA_SIMULTANEA` para INV-6, `DESCUENTA_DISPONIBILIDAD` para el
+descuento de INV-3, `isNearbyRotation` para INV-7): no escribas un `filter` nuevo sobre `motivo`,
+usa el conjunto que corresponda. El descarte de las filas canceladas (`activo=false`) vive ahí y
+solo ahí — cuando vivía en el router, bastaba un invocador que no pasara por él para que un bloqueo
+cancelado volviera a bloquear asignaciones. Y recuerda que **una «B» en la rejilla no es una
+ausencia**: es un código de asignación que no lee ningún invariante. La ausencia real es una fila de
+`bloqueos`, que desde V-19 el Responsable (o cualquier Mayor si no hay mandato) puede crear y
+cancelar también por otro residente.
+
+The thirteen modules split cleanly by responsibility: date/weekday/UTC arithmetic and academic-year derivation (`calendar.js`); training periods, level, and group derivation (`residents.js`); a deliberately dumb per-resident shift counter that never sees holiday data (`tally.js`); the single reader of the `bloqueos` table, `absences` (`absences.js`, V-19); the derived Imaginaria queue, `imaginariaQueue` (`imaginaria.js`, V-20 — a tool, never called by `validateMonth`); the month-scope invariant validator, `validateMonth` (`validate.js` — "la IA propone, el validador dispone"); third-post rules, `validateThirdPost`/INV-8 (`thirdpost.js`); equity at the two closes INV-3 defines — `validateResidencyYearClose` (residency year, all six axes) and `validateQuarterClose` (quarter, `total` only; P-8/V-13), both `aviso`-only — plus INV-4 (`equity.js`); the responsable lottery, INV-14 (`responsible.js`); cuadrante state-transition rules only, no persistence (`cuadrante.js`); Sheets-ready row projection that writes nothing itself (`projection.js`); and the accumulated per-resident tally, `accumulatedTally` (`accumulate.js`).
 
 Load-bearing contracts, easy to silently break:
 - **C-1 (lookahead):** any monthly `dobletes` computation that gets summed across months (Sheets projection, equity accumulation) must feed `tally()` the target month's assignments **plus** the first ~2 days of the next month, or a Friday-31→Sunday doblete silently vanishes — this is the exact bug already fixed once (S-5). `projection.js`'s per-tab rows deliberately do *not* do this lookahead (documented, matches the legacy `.xlsm`) — don't "fix" that without re-reading its header comment.
 - **C-2 (INV-7 rotation history):** INV-7 is evaluated only in the month a nearby rotation *ends*, but needs that resident's assignments for the whole rotation, which may start in an earlier month. Callers must fetch that history themselves — use `validate.js`'s exported `rotationHistoryStart` helper rather than reimplementing it (a past regression: Calendar.jsx was not honoring this).
+- **El ciclo del cuadrante no depende de que exista un Responsable (decisión V-16).** `requireCicloPermiso` (server/src/router.js) permite validar/publicar/despublicar al titular del mandato vigente y, si no hay ninguno, a cualquier Mayor (R3/R4). Relee el store en cada llamada: no te fíes de `session.rol`, que se firmó en el login y puede ser anterior al sorteo. No inventes un mandato para desbloquear nada — INV-14 exige R3 a 1 de enero y el registro tiene que seguir siendo verdad.
 - **Solo bloquea lo imposible y lo ilegal (decisión V-14).** De los 14 invariantes, únicamente tres producen `error` y por tanto impiden pasar a VALIDADO: INV-1 (día que nadie cubre, o composición de 2+ personas que no puede ser), INV-5 (guardia sobre una baja médica) e INV-11 (R1 asignado en junio-agosto). Todo lo demás es `aviso` — equidad (INV-3, INV-8), recuento mensual (INV-2), ausencias simultáneas (INV-6), cobertura de rotación cercana (INV-7), 2×R2 sin justificar (INV-9), eventos (INV-10). El motivo es estructural, no de gusto: una regla que bloquea por algo que no se puede corregir dentro de la herramienta deja al servicio sin cuadrante el día que ya no queda nadie que sepa desbloquearla, y el criterio rector del proyecto es sobrevivir sin administrador. No "arregles" esto subiendo una a `error`: la contrapartida acordada es que la UI pide confirmación explícita («Validar de todas formas») antes de validar un cuadrante que las incumple, usando `cuadrante.js:equityWarnings`/`EQUITY_INVARIANTS` — nunca reconociendo el mensaje por su texto.
 - **Un solo cuadrante mensual (decisión V-15).** Los «2 grupos» y sus «cuadrantes provisionales» de la normativa son la regla de composición Pequeño+Mayor (INV-1) y la organización de cada grupo, no dos unidades de datos: no hay ni habrá un cuadrante por grupo, ni dos pestañas.
+- **C-4 (histórico de INV-8):** el ciclo L-D del tercer puesto (INV-8b) **arranca el día en que
+  cada residente se apuntó** (`voluntarios3P.desde`), no en un borde de calendario — decisión
+  V-18, que es también lo que hace que el `desde` de esa tabla no sea decorativo. El rango que
+  hay que leer lo da `thirdpost.js:thirdPostHistoryStart` (el `desde` de cada voluntario para 8b
+  y la ventana del año de residencia para 8c, la más antigua de las dos), igual que
+  `rotationHistoryStart` para C-2: no se adivina en el invocador. Y el historial que se le pasa
+  debe contener **solo los 3P anteriores al mes** — los del mes llegan por `asignaciones`, y
+  contarlos por las dos vías rompe el ciclo de siete días. Quien apunte a alguien al 3P desde el
+  servidor debe escribir siempre `session.sub`: «será siempre voluntario», nadie apunta a nadie.
 - **Los dos cierres de INV-3 se invocan desde `marcarValidado` (servidor) y `Calendar.jsx` (vía `client/lib/closes.js`), no desde `validateMonth`.** `validateMonth` es de ámbito mes y no los incluye: quien añada otra pantalla que valide un mes tiene que llamar también a `closes.js`, o la equidad de cierre no se comprueba ahí. Los rangos que hay que leer los dan `quarterCloseWindow` y `yearCloseHistoryStart` — no se adivinan (mismo error que costó la regresión de C-2).
 - `cohorte` (calendar year of `fechaInicio`, used by INV-6/INV-11) and `nivel` (date-derived level, used for MAYOR/PEQUENO) are distinct — don't conflate them.
-- INV-12 (GF-must-be-actual-holiday) and INV-13 (Imaginaria rotation) are **not implemented yet** — don't assume `validateMonth` covers holiday-coherence.
+- **C-3 (ventana de `puentesLibres`):** el eje `puentesLibres` de INV-3 compara el **año de
+  residencia entero**, no el mes: los puentes se derivan de la tabla `festivos` con
+  `calendar.js:bridgesBetween` sobre `[aniversario, aniversario+1año)`, que **cruza dos años
+  naturales** (el aniversario cae en mayo). El rango de festivos que hay que leer lo da
+  `equity.js:yearCloseFestivosRange`, igual que `yearCloseHistoryStart` da el de asignaciones: no
+  se adivina en el invocador (mismo error que costó la regresión de C-2). Ese rango son los **años
+  naturales completos** que toca la ventana (±1 día), no la ventana recortada, y eso es
+  deliberado: si falta el calendario el cierre **avisa de que el eje no se ha podido comprobar**
+  en vez de comparar ceros y parecer que cuadra, pero la pregunta tiene que ser «¿está cargado el
+  año 2027?» y no «¿hay algún festivo en la ventana?» — la carga es por año (V-17a) y la ventana
+  cruza dos, así que «uno sí y otro no» es el estado normal, y con la pregunta laxa medio eje
+  volvía a compararse sobre ceros en silencio. El aviso solo se emite cuando el invocador pasa
+  `festivos` (los tests que inyectan `acumulados` a mano no lo ven) y cuando alguna cohorte tiene
+  ≥2 miembros, que es cuando el eje se compara con alguien.
+- **Los 14 invariantes están implementados** (INV-12 desde V-17; INV-8 desde V-18; INV-10 e INV-13
+  desde V-20). Dos matices que hay que tener presentes antes de dar algo por comprobado:
+  **INV-13 (Imaginaria) NO lo comprueba `validateMonth`** y es deliberado — es una herramienta que
+  dice a quién llamar (`imaginaria.js:imaginariaQueue`), no una validación a posteriori, porque una
+  incidencia se resuelve por teléfono y el registro se hace después (V-20b). Y **INV-10 e INV-12
+  dependen de tablas que hoy no tiene ninguna pantalla para rellenarse** (`eventos`, `festivos`):
+  están en vigor, pero sin filas cargadas no pueden emitir nada.
 
 Style: identifiers/code in English, comments/JSDoc in Spanish, explaining *why* (spec.md cross-references), never *what*. Never add an npm dependency under `v2/domain`.
 
 ### Server (Google Apps Script Web App: `server/src/*.js`, `server/Code.gs`, `server/domain.gs`, `server/server-lib.gs`, `build/build-gas.mjs`)
 
-Hexagonal design: `server/Code.gs` is the **only** hand-written, impure file — the sole adapter touching `UrlFetchApp`/`SpreadsheetApp`/`LockService`/`CacheService`/`PropertiesService`, and the only backend file with zero test coverage (verify it manually). It builds a `deps_()` object and hands it to the pure `Server.handleRequest(rawBody, deps)` from the generated bundle, which is how `router.js` stays testable without touching real Sheets/Google APIs.
+Hexagonal design: `server/Code.gs` is the **only** hand-written, impure file — the sole adapter touching `UrlFetchApp`/`SpreadsheetApp`/`LockService`/`CacheService`/`PropertiesService`, and the only backend file with zero test coverage (verify it manually). It builds a `deps_()` object and hands it to the pure `Server.handleRequest(rawBody, deps)` from the generated bundle, which is how `router.js` stays testable without touching real Sheets/Google APIs. `deps.domain` is the **whole** generated `Domain` object, not a hand-listed subset: enumerating keys meant re-pasting `Code.gs` by hand every time the domain grew, and forgetting to produced a `… is not a function` in production (it happened on 2026-07-26 with `quarterCloseWindow`). Adding a domain function therefore needs `npm run build` and a fresh paste of `domain.gs` only — never `Code.gs`.
 
 **`server/domain.gs` and `server/server-lib.gs` are generated artifacts — never hand-edit them.** Both carry a "NO EDITAR A MANO" header. Edit `v2/domain/*.js` or `server/src/*.js` and run `npm run build`; `v2/domain/test/parity.test.js` re-executes the committed bundle in `node:vm`, diffs it against the live ESM source, and fails the suite if they've drifted. The bundler exists because Apps Script concatenates all `.gs` files into one global scope with no ESM support — naive concatenation was verified to collide silently on several names (e.g. two different `periodsOf` implementations, where function-declaration hoisting plus unspecified file-parse order means "whichever loads last wins with no error"). The bundler wraps each module in its own IIFE and only supports a narrow import/export subset (`import {a,b} from "./x.js"`, `export function|const|let|var|class NAME` — no default export, no re-export, no dynamic `import()`).
 

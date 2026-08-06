@@ -82,6 +82,19 @@ function addYears(iso, years) {
   return toISO(targetYear, month, clampedDay);
 }
 
+/**
+ * Suma (o resta) meses conservando el día, con el mismo recorte que `addYears` cuando el mes
+ * destino es más corto (31-ene + 1 mes → 28-feb). La usa el compromiso de permanencia del
+ * voluntariado de 3P (INV-8), que se cuenta en meses y no en días.
+ */
+function addMonths(iso, months) {
+  const { year, month, day } = parseISO(iso);
+  const total = year * 12 + (month - 1) + months;
+  const targetYear = Math.floor(total / 12);
+  const targetMonth = total - targetYear * 12 + 1; // siempre 1-12, también con `months` negativo
+  return toISO(targetYear, targetMonth, Math.min(day, daysInMonth(targetYear, targetMonth)));
+}
+
 /** Días del mes (mes 1-12). */
 function daysInMonth(year, month) {
   if (!Number.isInteger(month) || month < 1 || month > 12) {
@@ -143,6 +156,65 @@ function trimesterWindow(iso) {
   };
 }
 
+/**
+ * ¿Es festivo esa fecha? Los festivos son DATOS DE ENTRADA (S-4, §3.4): esta función no calcula
+ * nada, solo consulta la lista que le pasan. Acepta la lista como fechas ISO o como registros
+ * `{fecha}` (que es lo que devuelve la tabla `festivos`) para que el invocador no tenga que
+ * mapear antes.
+ * @param {string} iso
+ * @param {(string|{fecha:string})[]} festivos
+ */
+function isHoliday(iso, festivos = []) {
+  parseISO(iso);
+  for (const f of festivos) {
+    if ((typeof f === "string" ? f : f && f.fecha) === iso) return true;
+  }
+  return false;
+}
+
+/**
+ * Puentes del mes (§3.4, literal): día laborable L-V no festivo cuyos DOS vecinos son cada uno
+ * festivo o fin de semana. Cubre el viernes tras un jueves festivo y el lunes ante un martes
+ * festivo.
+ *
+ * Ojo al borde: los vecinos del día 1 y del último día del mes caen FUERA del mes, así que la
+ * lista de festivos tiene que cubrir también esos dos días — por eso el invocador pide el rango
+ * con un día de margen a cada lado y no solo el mes.
+ * @returns {string[]} fechas ISO de los puentes, en orden
+ */
+function bridgesOfMonth(year, month, festivos = []) {
+  const esNoLaborable = (iso) => isWeekend(iso) || isHoliday(iso, festivos);
+  return datesOfMonth(year, month).filter((d) => {
+    if (isWeekend(d) || isHoliday(d, festivos)) return false; // el puente es un día laborable
+    return esNoLaborable(addDays(d, -1)) && esNoLaborable(addDays(d, 1));
+  });
+}
+
+/**
+ * Puentes de un rango cualquiera de fechas, en orden. Existe porque la ventana que compara el
+ * eje `puentesLibres` de INV-3 es el AÑO DE RESIDENCIA (aniversario→aniversario), que cruza dos
+ * años naturales y ~13 meses: iterar `bridgesOfMonth` mes a mes en cada invocador es cómo se
+ * cuela un mes de menos en uno de ellos y el eje deja de cuadrar entre cliente y servidor.
+ *
+ * La lista de `festivos` tiene que cubrir un día por cada lado del rango, por el mismo motivo
+ * que en `bridgesOfMonth`: los vecinos del primer y del último día caen fuera.
+ * @returns {string[]} fechas ISO de los puentes dentro de [desde, hasta], ambos inclusive
+ */
+function bridgesBetween(desde, hasta, festivos = []) {
+  const a = parseISO(desde);
+  const b = parseISO(hasta);
+  if (compareISO(desde, hasta) > 0) return [];
+  const out = [];
+  for (let year = a.year, month = a.month; year < b.year || (year === b.year && month <= b.month); ) {
+    for (const d of bridgesOfMonth(year, month, festivos)) {
+      if (compareISO(d, desde) >= 0 && compareISO(d, hasta) <= 0) out.push(d);
+    }
+    month += 1;
+    if (month > 12) { month = 1; year += 1; }
+  }
+  return out;
+}
+
 /** Comparación cronológica (-1/0/1). Valida ambas fechas: el orden lexicográfico solo es fiable en ISO estricto. */
 function compareISO(a, b) {
   parseISO(a);
@@ -150,7 +222,7 @@ function compareISO(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-  return { parseISO, toISO, weekday, isWeekend, addDays, addYears, daysInMonth, datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, compareISO };
+  return { parseISO, toISO, weekday, isWeekend, addDays, addYears, addMonths, daysInMonth, datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, isHoliday, bridgesOfMonth, bridgesBetween, compareISO };
 })();
 
 // ── residents.js ──
@@ -240,6 +312,28 @@ function isActiveOn(periods, iso) {
 }
 
 /**
+ * Periodos de un RESIDENTE (no de una lista de periodos ya calculada): usa los editados si los
+ * trae —bajas, nota [a]— y si no los deriva de fechaInicio/fechaFin, con el fallback de 4 años
+ * cuando no hay fechaFin. Existe para dejar de repetir ese mismo `fechaFin || addDays(addYears(
+ * …, 4), -1)` en cada fichero que necesita el nivel de alguien: era la misma línea copiada en
+ * siete sitios (deuda registrada en spec.md §6, retrospectiva de la Fase 6.1).
+ */
+function periodsOfResident(residente) {
+  if (residente.periodos) return residente.periodos;
+  const fin = residente.fechaFin || addDays(addYears(residente.fechaInicio, 4), -1);
+  return defaultTrainingPeriods(residente.fechaInicio, fin);
+}
+
+/**
+ * Grupo de guardia de un residente en una fecha: MAYOR (R3/R4), PEQUENO (R1/R2) o null si ese
+ * día no es asignable (PENDIENTE/FINALIZADO). Atajo sobre `periodsOfResident`+`levelOn`+
+ * `groupOf` para quien parte del residente y no de sus periodos.
+ */
+function groupOnDate(residente, iso) {
+  return groupOf(levelOn(periodsOfResident(residente), iso));
+}
+
+/**
  * Valida una lista de periodos (tras edición manual): exactamente 4, años 1..4 en
  * orden, cada periodo con inicio ≤ fin, sin solapes. Los huecos SÍ se permiten (S-3).
  * @returns {string[]} lista de errores en español, vacía si es válida
@@ -262,7 +356,7 @@ function validateTrainingPeriods(periods) {
   return errors;
 }
 
-  return { LEVELS, defaultTrainingPeriods, levelOn, periodOn, groupOf, isActiveOn, validateTrainingPeriods };
+  return { LEVELS, defaultTrainingPeriods, levelOn, periodOn, groupOf, isActiveOn, periodsOfResident, groupOnDate, validateTrainingPeriods };
 })();
 
 // ── tally.js ──
@@ -356,6 +450,193 @@ function tallyByResident(asignaciones, window) {
   return { tally, tallyByResident };
 })();
 
+// ── absences.js ──
+var Absences = (function () {
+// Lectura ÚNICA de la tabla `bloqueos` (spec.md §2, decisiones V-6 y V-8). Manda esta tabla:
+// una «B» pintada en la rejilla es un código de asignación y no la lee ningún invariante — la
+// ausencia real es una fila de `bloqueos`.
+//
+// Existe porque el mismo dato se filtraba en cinco sitios con criterios escritos a mano y
+// distintos entre sí (INV-5, INV-2, INV-6, INV-7 y el descuento de disponibilidad de INV-3),
+// más el rango del router. Las diferencias entre esos criterios son REALES —cada invariante
+// mira motivos distintos a propósito— así que este módulo no las colapsa: les pone nombre. La
+// constante dice para qué invariante vale cada conjunto de motivos, y el filtro es uno solo.
+//
+// Lo que sí unifica de verdad es `activo`: una fila cancelada (reinsertada con activo=false,
+// nunca borrada) se descarta AQUÍ. Antes eso dependía de que cada invocador se acordara de
+// filtrarla antes de llamar al dominio; el día que uno no lo hiciera, un bloqueo cancelado
+// habría vuelto a bloquear asignaciones sin que ningún test lo notara.
+
+/**
+ * Motivos por invariante. Cada lista es una decisión, no un detalle: cambiarla cambia
+ * comportamiento, y por eso está aquí y no repetida en cinco `filter` en línea.
+ */
+// INV-5 (decisión V-8): solo la baja médica impide asignar. No se puede exigir una guardia a
+// quien está de baja o de permiso de embarazo/paternidad; vacaciones y rotación NO bloquean.
+const BLOQUEA_ASIGNACION = ["BAJA"];
+// INV-2: exime del mínimo de 4 guardias/mes (spec.md §5: «febrero/vacaciones/baja/R1-verano»).
+// La rotación NO exime: se sigue haciendo guardia en el hospital de origen.
+const EXIME_DEL_MINIMO = ["VACACIONES", "BAJA"];
+// INV-6: cuentan como «ausente» para el máximo de 2 por promoción. La baja NO computa — no es
+// una ausencia que nadie haya concedido ni que se pueda repartir.
+const AUSENCIA_SIMULTANEA = ["ROTACION", "VACACIONES"];
+// INV-3, nota [a] de p.2: «se descontará de forma proporcional». Solo la baja.
+const DESCUENTA_DISPONIBILIDAD = ["BAJA"];
+
+// INV-7: la rotación «cercana» que obliga a cubrir viernes y sábado del periodo. La lista de
+// provincias vivía duplicada en `rotationHistoryStart` y en el propio INV-7.
+const PROVINCIAS_CERCANAS = new Set(["alicante", "valencia", "murcia", "albacete"]);
+
+/** ¿Es una rotación externa lo bastante cerca como para que aplique INV-7? */
+function isNearbyRotation(bloqueo) {
+  return bloqueo.motivo === "ROTACION"
+    && !!bloqueo.provincia
+    && PROVINCIAS_CERCANAS.has(bloqueo.provincia.toLowerCase());
+}
+
+/**
+ * Una fila cancelada se reinserta con `activo=false` y la original se queda (append-only): lo
+ * que cuenta es el proyectado. `undefined` se toma como activa a propósito — los tests del
+ * dominio y los contextos armados a mano no arrastran la columna, y exigirla convertiría en
+ * "sin ausencias" justo lo que se quiere comprobar.
+ */
+const estaActiva = (b) => b.activo !== false;
+
+/**
+ * El lector. Todos los criterios son opcionales y se combinan con AND; sin ninguno, devuelve
+ * las ausencias activas tal cual.
+ *
+ * @param {{residenteId?:string, desde:string, hasta:string, motivo:string, activo?:boolean}[]} bloqueos
+ * @param {object} [criterios]
+ *   - residenteId: solo las de ese residente
+ *   - motivos: string[] — uno de los conjuntos exportados arriba, nunca una lista suelta
+ *   - fecha: ISO; solo las que CUBREN ese día
+ *   - desde/hasta: ISO; solo las que SOLAPAN ese rango (no las contenidas: una baja de todo el
+ *     trimestre tiene que aparecer al preguntar por un mes de dentro)
+ * @returns las filas originales (no copias): quien las lea sigue viendo `provincia`, `id`, etc.
+ *
+ * Compara cadenas y no llama a `parseISO`: esto filtra datos que un humano puede haber editado
+ * a mano en el Sheet, y una fila con la fecha mal escrita no debe tumbar la validación entera.
+ * En ISO estricto el orden lexicográfico y el cronológico coinciden, así que no se pierde nada.
+ */
+function absences(bloqueos = [], criterios = {}) {
+  const { residenteId, motivos, fecha, desde, hasta } = criterios;
+  return bloqueos.filter((b) => {
+    if (!b || !estaActiva(b)) return false;
+    if (residenteId !== undefined && b.residenteId !== residenteId) return false;
+    if (motivos && !motivos.includes(b.motivo)) return false;
+    if (fecha !== undefined && !(fecha >= b.desde && fecha <= b.hasta)) return false;
+    if (desde !== undefined && b.hasta < desde) return false;
+    if (hasta !== undefined && b.desde > hasta) return false;
+    return true;
+  });
+}
+
+  return { BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA, DESCUENTA_DISPONIBILIDAD, PROVINCIAS_CERCANAS, isNearbyRotation, absences };
+})();
+
+// ── imaginaria.js ──
+var Imaginaria = (function () {
+// Imaginaria (INV-13, spec.md §5; decisión V-20). Normativa p.4, «-Imaginaria»:
+//
+//   «Se dispone de dos listas de Imaginaria. Una para residentes mayores y otra para residentes
+//    pequeños. En caso de incidencia, se debe intentar suplir la guardia con un residente según
+//    lista del grupo del que crea la incidencia. […] La cesión/compra de guardia de incidencia
+//    NO descuenta de la imaginaria.»
+//
+// Esto es una HERRAMIENTA, no un validador: lo que hace falta a las ocho de la mañana con una
+// baja encima es saber a quién llamar, por orden. No comprueba a posteriori que quien cubrió
+// fuera el que tocaba — una incidencia se resuelve por teléfono en cinco minutos y el registro
+// se hace después, así que ese aviso saltaría a menudo por motivos legítimos que la app no ve
+// (nadie cogía el teléfono, se cambió con otro). Por eso `validateMonth` no llama aquí.
+//
+// La cola NO se almacena: se registra cada cobertura real (tabla `imaginaria`) y el orden se
+// DERIVA de ese historial, igual que el nivel R1-R4 se deriva de fechas (§1). Una fila menos
+// que mantener sincronizada, y el «cesión/compra no descuenta» sale gratis: si nadie de la
+// lista cubrió, no hay fila, y por tanto nadie se mueve.
+
+  const { addDays } = Calendar;
+  const { groupOnDate, levelOn, periodsOfResident } = Residents;
+
+const GUARDIA = new Set(["G", "GF", "GP"]); // el 3P no ocupa puesto obligatorio
+
+/**
+ * ¿Puede este residente entrar en la lista de Imaginaria de `grupo` en esa fecha?
+ *
+ * Un **R1 nunca entra en la lista de Pequeños**, aunque R1 y R2 formen el grupo Pequeño para
+ * todo lo demás (INV-1, INV-11). Es una excepción explícita a la agrupación general, solo para
+ * Imaginaria: **no está en la normativa**, es la práctica real del servicio (P-11, decisión
+ * V-20) — un R1 no puede sostener solo una guardia que aparece sin previo aviso.
+ */
+function isEligibleForImaginaria(residente, grupo, fecha) {
+  if (groupOnDate(residente, fecha) !== grupo) return false;
+  if (grupo === "PEQUENO" && levelOn(periodsOfResident(residente), fecha) === "R1") return false;
+  return true;
+}
+
+/**
+ * La cola de Imaginaria de un grupo para una incidencia concreta, en orden de a quién llamar.
+ *
+ * Orden: quien lleva más tiempo sin cubrir una Imaginaria va primero (quien no ha cubierto
+ * ninguna, el primero de todos), y a igualdad, por id — el desempate tiene que ser determinista
+ * o dos pantallas darían órdenes distintas para la misma incidencia.
+ *
+ * Se aparta a quien tenga guardia el día ANTERIOR (estaría librando) o el SIGUIENTE (para no
+ * comprometer el descanso previo a esa guardia), y a quien tenga guardia la propia noche de la
+ * incidencia. Tampoco está en la normativa: práctica real del servicio (V-20).
+ *
+ * @param {object} p
+ *   - residentes, coberturas: filas de `imaginaria` (solo las activas), asignaciones
+ *   - grupo: "MAYOR" | "PEQUENO" — el del puesto que hay que cubrir
+ *   - fechaIncidencia: ISO
+ * @returns {{residenteId:string, ultimaCobertura:string|null, apartadoPor:string|null}[]}
+ *   TODA la lista elegible, en orden, con el motivo de quien queda apartado — la pantalla
+ *   enseña a quién llamar y también a quién no, que es lo que evita la llamada inútil.
+ */
+function imaginariaQueue({ residentes = [], coberturas = [], asignaciones = [], grupo, fechaIncidencia }) {
+  const vispera = addDays(fechaIncidencia, -1);
+  const siguiente = addDays(fechaIncidencia, 1);
+
+  const ultimaPorResidente = new Map();
+  for (const c of coberturas) {
+    if (c.activo === false) continue;
+    const previa = ultimaPorResidente.get(c.residenteId);
+    if (!previa || c.fechaIncidencia > previa) ultimaPorResidente.set(c.residenteId, c.fechaIncidencia);
+  }
+
+  const guardiaEn = (id, fecha) => asignaciones.some((a) => a.residenteId === id && a.fecha === fecha && GUARDIA.has(a.codigo));
+
+  return residentes
+    .filter((r) => isEligibleForImaginaria(r, grupo, fechaIncidencia))
+    .map((r) => ({
+      residenteId: r.id,
+      ultimaCobertura: ultimaPorResidente.get(r.id) || null,
+      apartadoPor: guardiaEn(r.id, fechaIncidencia) ? "tiene guardia esa misma noche"
+        : guardiaEn(r.id, vispera) ? `tiene guardia el día anterior (${vispera})`
+          : guardiaEn(r.id, siguiente) ? `tiene guardia el día siguiente (${siguiente})`
+            : null,
+    }))
+    .sort((a, b) => {
+      // Los apartados van al final, pero se devuelven: la pantalla dice por qué no se les llama.
+      if (!a.apartadoPor !== !b.apartadoPor) return a.apartadoPor ? 1 : -1;
+      if (a.ultimaCobertura !== b.ultimaCobertura) {
+        if (a.ultimaCobertura === null) return -1;
+        if (b.ultimaCobertura === null) return 1;
+        return a.ultimaCobertura < b.ultimaCobertura ? -1 : 1;
+      }
+      return a.residenteId < b.residenteId ? -1 : 1; // desempate determinista
+    });
+}
+
+/** A quién le toca: el primero no apartado, o `null` si no queda nadie de la lista. */
+function nextForImaginaria(args) {
+  const cola = imaginariaQueue(args).filter((x) => !x.apartadoPor);
+  return cola.length ? cola[0].residenteId : null;
+}
+
+  return { isEligibleForImaginaria, imaginariaQueue, nextForImaginaria };
+})();
+
 // ── accumulate.js ──
 var Accumulate = (function () {
 // Contaje acumulado por residente para el generador «prompt portátil» (Fase 6.1).
@@ -364,7 +645,7 @@ var Accumulate = (function () {
 // periodo formativo en curso .. hasta] y delega el contaje.
 
   const { addDays, addYears } = Calendar;
-  const { defaultTrainingPeriods, periodOn } = Residents;
+  const { periodsOfResident, periodOn } = Residents;
   const { tally } = Tally;
 
 const ZERO = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 };
@@ -382,8 +663,7 @@ const ZERO = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, ter
 function accumulatedTally(residentes, asignaciones, hasta) {
   const out = new Map();
   for (const r of residentes) {
-    const fin = r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1);
-    const periods = defaultTrainingPeriods(r.fechaInicio, fin);
+    const periods = periodsOfResident(r);
     // El periodo se busca a `hasta+1` (el primer día del mes que se va a generar), no a
     // `hasta`: así, si el aniversario cae exactamente ese día, ya se usa el periodo NUEVO.
     // Caso límite intencional: cuando eso ocurre, `periodoActual.start` (el aniversario)
@@ -414,30 +694,62 @@ var Thirdpost = (function () {
 // completar el ciclo); (c) equidad ≤1 entre voluntarios al cierre del año de residencia;
 // (d) prioridad a los días con R1 de "mochila". El 3P no computa en la equidad de
 // guardias obligatorias (eso lo garantiza tally excluyendo 3P; aquí no se re-verifica).
+//
+// Las CUATRO son `aviso` (decisión V-18, que extiende V-14): ninguna impide validar. Las dos
+// que aún eran `error` —8a, 3P a quien no consta voluntario, y 8b, repetir día de semana— lo
+// dejaron de ser por el mismo motivo estructural que el resto: su causa no siempre vive en el
+// cuadrante del mes. Un 3P de alguien que se apuntó después, o un ciclo que arrastra de meses
+// que ya nadie va a reabrir, no se arregla moviendo una celda; y bloquear por ellas dejaría al
+// servicio sin cuadrante justo en la regla más blanda que tiene la normativa («será siempre
+// voluntario»). Entran en `EQUITY_INVARIANTS` de cuadrante.js, así que validar con avisos de
+// INV-8 sigue exigiendo la confirmación explícita de la UI.
 
-  const { weekday, compareISO, addDays, addYears, datesOfMonth } = Calendar;
-  const { levelOn, defaultTrainingPeriods } = Residents;
+  const { weekday, compareISO, addDays, addMonths, addYears, datesOfMonth } = Calendar;
+  const { levelOn, periodsOfResident } = Residents;
 
-const err = (detalle, extra = {}) => ({ invariante: "INV-8", severidad: "error", detalle, ...extra });
 const aviso = (detalle, extra = {}) => ({ invariante: "INV-8", severidad: "aviso", detalle, ...extra });
 
-function periodsOf(r) {
-  return r.periodos || defaultTrainingPeriods(r.fechaInicio, r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1));
+/**
+ * Meses de permanencia que asume quien se apunta al 3P (decisión V-18). El 3P es voluntario y
+ * cada uno empieza el mes que quiere, pero la rotación L-D solo tiene sentido si se sostiene:
+ * apuntarse y salirse a las tres semanas deja el ciclo a medias y la equidad de 8c sin con
+ * quién compararse. Vive aquí, y no en el servidor ni en la pantalla, para que el texto que
+ * acepta el residente y la regla que aplica el backend no puedan divergir.
+ */
+const THIRD_POST_PERMANENCIA_MESES = 4;
+
+/** Último día que cubre el compromiso de permanencia de quien se apuntó el `desde`. */
+function thirdPostCommitmentEnd(desde) {
+  return addDays(addMonths(desde, THIRD_POST_PERMANENCIA_MESES), -1);
 }
+
+/** ¿Puede ya retirarse del 3P quien se apuntó el `desde`? (decisión V-18) */
+function canWithdrawThirdPost(desde, hoy) {
+  return compareISO(hoy, thirdPostCommitmentEnd(desde)) > 0;
+}
+
 const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Number(fecha.slice(5, 7)) === mes;
 const inRange = (f, a, b) => compareISO(f, a) >= 0 && compareISO(f, b) <= 0;
 
 /**
  * @param {object} ctx { mes, anio, residentes, asignaciones, voluntarios3P, historial3P }
  *   - asignaciones: del mes (incluye 3P y guardias G/GF/GP para detectar mochila)
- *   - voluntarios3P: string[] de ids
+ *   - voluntarios3P: los voluntarios, como `string[]` de ids o como `{residenteId, desde}[]`.
+ *     Con `desde` (lo que manda la tabla `voluntarios3P`) el ciclo L-D de INV-8b **se recorta a
+ *     partir de esa fecha**, que es lo que exige V-18(b): cada residente empieza su ciclo el día
+ *     que se apunta. Sin él —los tests que solo comprueban otras reglas— no se recorta nada.
+ *     El recorte tiene que vivir AQUÍ y no en el invocador: el histórico que se lee es común a
+ *     8b y a 8c (que sí necesita el año de residencia entero, más antiguo), así que recortarlo
+ *     al leerlo rompería 8c, y no recortarlo mete en el ciclo de alguien los 3P que hizo antes
+ *     de apuntarse. Misma tolerancia de dos formas que `calendar.js:isHoliday`.
  *   - historial3P: { id: [fechas ISO de 3P previas, cronológicas] }
  * @returns {{invariante:'INV-8', severidad:string, fecha?:string, residenteId?:string, detalle:string}[]}
  */
 function validateThirdPost(ctx) {
   const { mes, anio, residentes, asignaciones = [], voluntarios3P = [], historial3P = {} } = ctx;
   const byId = new Map(residentes.map((r) => [r.id, r]));
-  const voluntarios = new Set(voluntarios3P);
+  const voluntarios = new Set(voluntarios3P.map((v) => (typeof v === "string" ? v : v && v.residenteId)));
+  const altaDe = new Map(voluntarios3P.filter((v) => v && typeof v !== "string" && v.desde).map((v) => [v.residenteId, v.desde]));
   const violations = [];
 
   const thisMonth3P = asignaciones.filter((a) => a.codigo === "3P").sort((a, b) => compareISO(a.fecha, b.fecha));
@@ -445,7 +757,7 @@ function validateThirdPost(ctx) {
   // ── INV-8a: 3P solo a voluntarios ──
   for (const a of thisMonth3P) {
     if (!voluntarios.has(a.residenteId)) {
-      violations.push(err(`3P asignado a ${a.residenteId}, que no consta en la lista de voluntarios`, { fecha: a.fecha, residenteId: a.residenteId }));
+      violations.push(aviso(`3P asignado a ${a.residenteId}, que no consta en la lista de voluntarios`, { fecha: a.fecha, residenteId: a.residenteId }));
     }
   }
 
@@ -454,13 +766,18 @@ function validateThirdPost(ctx) {
   for (const id of idsCon3P) {
     const historial = (historial3P[id] || []).slice().sort(compareISO);
     const propiasMes = thisMonth3P.filter((a) => a.residenteId === id).map((a) => a.fecha);
-    const combinadas = historial.concat(propiasMes); // ya cronológicas (historial < mes)
+    // El ciclo arranca en el alta del residente (V-18b): lo que hiciera antes de apuntarse —o en
+    // una etapa anterior, si se retiró y volvió— no cuenta. Sin recortar, esos 3P añaden
+    // repeticiones falsas y, peor, pueden completar los 7 días y reiniciar el ciclo, tapando una
+    // repetición real. El histórico llega sin recortar a propósito: 8c lo necesita entero.
+    const alta = altaDe.get(id);
+    const combinadas = historial.concat(propiasMes).filter((f) => !alta || compareISO(f, alta) >= 0);
     let cycle = new Set();
     for (const fecha of combinadas) {
       const wd = weekday(fecha);
       if (cycle.has(wd)) {
         if (inMonth(fecha, mes, anio)) {
-          violations.push(err(`${id} repite ${wd} en 3P el ${fecha} sin completar el ciclo de 7 días`, { fecha, residenteId: id }));
+          violations.push(aviso(`${id} repite ${wd} en 3P el ${fecha} sin completar el ciclo de 7 días`, { fecha, residenteId: id }));
         }
         // no se reinicia el ciclo por una repetición; se sigue evaluando
       } else {
@@ -476,7 +793,7 @@ function validateThirdPost(ctx) {
   for (const a of asignaciones) {
     if (!["G", "GF", "GP"].includes(a.codigo)) continue;
     const r = byId.get(a.residenteId);
-    if (r && levelOn(periodsOf(r), a.fecha) === "R1") mochilaDays.add(a.fecha);
+    if (r && levelOn(periodsOfResident(r), a.fecha) === "R1") mochilaDays.add(a.fecha);
   }
   const days3P = new Set(thisMonth3P.map((a) => a.fecha));
   const uncoveredMochila = [...mochilaDays].filter((d) => !days3P.has(d)).sort(compareISO);
@@ -515,6 +832,37 @@ function validateThirdPost(ctx) {
   return violations;
 }
 
+/**
+ * Primer día de histórico de 3P que hace falta para evaluar INV-8 en este mes, o `null` si no
+ * hace falta ninguno (nadie apuntado y nadie cerrando: 8a y 8d se resuelven solo con el mes).
+ * Mismo papel que `rotationHistoryStart` (C-2) y `yearCloseHistoryStart`: el rango lo decide el
+ * dominio, no el invocador.
+ *
+ * Son dos necesidades distintas y se toma la más antigua de las dos:
+ *  - **8b (ciclo L-D)**: arranca el día en que cada residente SE APUNTÓ, no en un borde de
+ *    calendario. Es literal de cómo funciona el 3P (decisión V-18): cada uno empieza el mes que
+ *    quiere y por el día de semana que quiera, y el ciclo corre desde ahí. Por eso el `desde`
+ *    del voluntariado no es un adorno del registro: es lo que acota esta lectura.
+ *  - **8c (equidad al cierre)**: la ventana del año de residencia de quien lo cierre este mes,
+ *    igual que INV-3.
+ *
+ * @param {{residenteId:string, desde:string}[]} voluntarios3P  los ACTIVOS
+ * @param {{id:string, fechaInicio:string, fechaFin?:string}[]} residentes
+ */
+function thirdPostHistoryStart(voluntarios3P = [], residentes = [], mes, anio) {
+  const byId = new Map(residentes.map((r) => [r.id, r]));
+  let min = null;
+  const consider = (fecha) => { if (fecha && (min === null || compareISO(fecha, min) < 0)) min = fecha; };
+
+  for (const v of voluntarios3P) {
+    consider(v.desde);
+    const r = byId.get(v.residenteId);
+    const win = r ? closingWindowThisMonth(r, mes, anio) : null;
+    if (win) consider(win.start);
+  }
+  return min;
+}
+
 /** Si el residente cierra un año de residencia dentro de [mes/anio], devuelve la ventana [inicio, cierre]. */
 function closingWindowThisMonth(r, mes, anio) {
   for (let k = 1; k <= 4; k++) {
@@ -529,7 +877,7 @@ function countThirdPostInWindow(id, historial3P, thisMonth3P, win) {
   return todas.filter((f) => inRange(f, win.start, win.end)).length;
 }
 
-  return { validateThirdPost };
+  return { THIRD_POST_PERMANENCIA_MESES, thirdPostCommitmentEnd, canWithdrawThirdPost, validateThirdPost, thirdPostHistoryStart };
 })();
 
 // ── equity.js ──
@@ -550,11 +898,18 @@ var Equity = (function () {
 // `error`, porque la propia frase prevé compensar el exceso «en los meses siguientes hasta
 // equilibrar el cómputo dentro del año de residencia» (criterio V-4: lo compensable avisa).
 
-  const { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow } = Calendar;
+  const { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow, bridgesOfMonth, bridgesBetween } = Calendar;
   const { tally } = Tally;
+  const { absences, DESCUENTA_DISPONIBILIDAD } = Absences;
   const { accumulatedTally } = Accumulate;
+  const { periodsOfResident } = Residents;
 
 const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "dobletes"];
+// Los tres códigos que ocupan puesto. El 3P queda fuera a propósito (INV-4): es voluntario, así
+// que quien lo hace en un puente renuncia él al puente — el eje mide si el reparto se lo quitó.
+// Las cedidas/compradas SÍ cuentan aquí aunque no sumen a `total`: quien tiene la fila trabaja
+// ese día, que es justo lo que este eje pregunta.
+const GUARDIA = ["G", "GF", "GP"];
 const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes"]); // se normalizan por disponibilidad
 const EPS = 1e-9;
 
@@ -568,14 +923,22 @@ const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Numb
 const inRange = (f, a, b) => compareISO(f, a) >= 0 && compareISO(f, b) <= 0;
 
 /**
- * @param {object} ctx { mes, anio, residentes, acumulados, asignaciones?, puentesDelMes?, bloqueos? }
+ * @param {object} ctx { mes, anio, residentes, acumulados, asignaciones?, puentesDelMes?, bloqueos?, festivos? }
  *   - acumulados: { id: {total, findes, festivos, puentesLibres, dobletes} } hasta fin del mes anterior
  *   - asignaciones: del mes validado (G/GF/GP/3P, con origen? para cedidas/compradas)
- *   - puentesDelMes: [{desde, hasta}] puentes que caen en el mes validado (para puentesLibres)
+ *   - puentesDelMes: [string] fechas ISO de los puentes del mes validado, derivadas de la tabla
+ *     `festivos` con `bridgesOfMonth` (V-17b: los puentes se derivan, nunca se escriben)
  *   - bloqueos: del año (para el descuento proporcional por baja, nota [a])
+ *   - festivos: la lista que se usó para derivar los puentes, por AÑOS NATURALES completos (el
+ *     rango lo da `yearCloseFestivosRange`). Solo sirve para saber si el eje `puentesLibres` se
+ *     ha podido comprobar de verdad: `undefined` significa "el invocador no pretende comprobar
+ *     puentes" (los tests del propio validador, que inyectan `acumulados` a mano) y no avisa; un
+ *     array al que le falte ENTERO alguno de los años que cubre la ventana significa "ese
+ *     calendario no está cargado" y sí avisa, porque si no ese eje compararía ceros y se leería
+ *     como verificado (el fallo que V-13(e) dejó anotado).
  */
 function validateResidencyYearClose(ctx) {
-  const { mes, anio, residentes, acumulados = {}, asignaciones = [], puentesDelMes = [], bloqueos = [] } = ctx;
+  const { mes, anio, residentes, acumulados = {}, asignaciones = [], puentesDelMes = [], bloqueos = [], festivos } = ctx;
   const violations = [];
   const monthDays = datesOfMonth(anio, mes);
   const monthStart = monthDays[0];
@@ -601,16 +964,48 @@ function validateResidencyYearClose(ctx) {
       dobletes: acc.dobletes + t.dobletes,
       puentesLibres: acc.puentesLibres + puentesLibresMes,
     };
-    const f = availabilityFraction(win, bloqueos.filter((b) => b.residenteId === r.id && b.motivo === "BAJA"));
+    const f = availabilityFraction(win, absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD }));
 
     const cohorte = cohortOf(r);
     if (!byCohort.has(cohorte)) byCohort.set(cohorte, []);
-    byCohort.get(cohorte).push({ id: r.id, cierre: win.end, dims, f });
+    byCohort.get(cohorte).push({ id: r.id, cierre: win.end, win, dims, f });
+  }
+
+  // Solo se compara dentro de una cohorte con al menos dos miembros: quien cierra su año siendo
+  // el único de su promoción no tiene con quién compararse en NINGÚN eje.
+  const comparables = [...byCohort.values()].filter((grupo) => grupo.length >= 2);
+
+  // El eje `puentesLibres` se deriva de la tabla `festivos` (V-17b), y si el calendario no está
+  // cargado compararía ceros y saldría "cuadrado" sin haber mirado nada. La comprobación es por
+  // AÑO NATURAL, no "¿hay algún festivo en la ventana?": la ventana del cierre cruza siempre dos
+  // años (el aniversario cae en mayo) y `crearFestivos` carga un año de golpe (V-17a), así que
+  // "2026 cargado y 2027 no" es el estado intermedio NORMAL del sistema — y con la pregunta
+  // laxa bastaba un festivo de 2026 para dar por comprobados también los puentes de 2027.
+  // Tampoco aplica aquí el matiz de V-17(d) —no avisar en un febrero sin festivos—: un año
+  // natural español entero sin ningún festivo no existe, solo puede ser calendario sin cargar.
+  if (festivos !== undefined && comparables.length) {
+    // Comparación de cadenas, no `parseISO`: esto es una heurística de "¿está cargado el
+    // calendario de este año?", no aritmética de fechas, y la tabla vive en un Sheet que alguien
+    // puede editar a mano — una fila con una fecha mal escrita no debe tumbar el cierre entero.
+    // Misma tolerancia que `isHoliday`, que tampoco valida lo que le pasan.
+    const fechaDe = (f) => (typeof f === "string" ? f : f && f.fecha) || "";
+    const ventanas = comparables.flat().map((x) => x.win);
+    const desde = ventanas.reduce((min, w) => (w.start < min ? w.start : min), ventanas[0].start);
+    const hasta = ventanas.reduce((max, w) => (w.end > max ? w.end : max), ventanas[0].end);
+    const sinCargar = [];
+    for (let y = Number(desde.slice(0, 4)); y <= Number(hasta.slice(0, 4)); y++) {
+      if (!festivos.some((f) => fechaDe(f).startsWith(`${y}-`))) sinCargar.push(y);
+    }
+    if (sinCargar.length) {
+      violations.push(warn(
+        `Puentes libres: no hay ningún festivo cargado de ${sinCargar.join(" ni de ")}, así que ese eje del cierre anual (ventana ${desde}→${hasta}) no se ha podido comprobar`,
+        { fecha: hasta }
+      ));
+    }
   }
 
   // Comparación por dimensión dentro de cada cohorte.
-  for (const [, grupo] of byCohort) {
-    if (grupo.length < 2) continue;
+  for (const grupo of comparables) {
     for (const dim of DIMS) {
       const vals = grupo.map((x) => ({ id: x.id, cierre: x.cierre, v: PROPORCIONAL.has(dim) ? x.dims[dim] / x.f : x.dims[dim] }));
       const maxEntry = vals.reduce((a, b) => (b.v > a.v ? b : a));
@@ -655,21 +1050,66 @@ function yearCloseHistoryStart(residentes, mes, anio) {
  * dentro de la ventana que recibe. La contribución del mes la computa el validador aparte,
  * desde `asignaciones`.
  *
+ * Los puentes (fase 3 de V-17) se DERIVAN aquí de `festivos`, nunca se reciben ya calculados:
+ * los del mes validado con `bridgesOfMonth`, y los anteriores —el resto del año de residencia,
+ * que es lo que INV-3 compara— con `bridgesBetween` sobre la ventana de CADA residente que
+ * cierra. El reparto entre `acumulados` y `puentesDelMes` no es cosmético: la contribución del
+ * mes tiene que salir de `asignacionesDelMes` (lo que hay en pantalla, ediciones sin guardar
+ * incluidas), mientras que la del resto del año sale de `historicas` (el store), igual que ya
+ * ocurre con los otros cinco ejes.
+ *
  * @param {object} args
  *   - historicas: asignaciones anteriores al mes (desde `yearCloseHistoryStart`)
  *   - asignacionesDelMes: las del mes validado (las que se están por validar, no las del store)
- *   - puentesDelMes: hueco conocido — no existe todavía tabla de festivos/puentes (mismo
- *     bloqueo que INV-12), así que por defecto va vacío y el eje `puentesLibres` compara ceros:
- *     ese eje de INV-3 NO está comprobado de verdad hasta que exista esa entrada.
+ *   - festivos: los de TODA la ventana del cierre con un día de margen a cada lado — el rango
+ *     lo da `yearCloseFestivosRange`, no se adivina. Cruza dos años naturales porque el año de
+ *     residencia va de aniversario a aniversario (en la práctica, de mayo a mayo).
  */
-function buildYearCloseContext({ mes, anio, residentes, historicas = [], asignacionesDelMes = [], bloqueos = [], puentesDelMes = [] }) {
-  const acumulado = accumulatedTally(residentes, [...historicas, ...asignacionesDelMes], addDays(toISO(anio, mes, 1), -1));
+function buildYearCloseContext({ mes, anio, residentes, historicas = [], asignacionesDelMes = [], bloqueos = [], festivos = [] }) {
+  const finAcumulado = addDays(toISO(anio, mes, 1), -1);
+  const acumulado = accumulatedTally(residentes, [...historicas, ...asignacionesDelMes], finAcumulado);
   const acumulados = {};
   for (const [id, t] of acumulado) {
     // `tally` llama `finde` a lo que INV-3 compara como `findes`: la traducción vive aquí, una vez.
     acumulados[id] = { total: t.total, findes: t.finde, festivos: t.festivos, prefestivos: t.prefestivos, dobletes: t.dobletes, puentesLibres: 0 };
   }
-  return { mes, anio, residentes, acumulados, asignaciones: asignacionesDelMes, bloqueos, puentesDelMes };
+
+  // Puentes libres acumulados: solo hacen falta para quien cierra su año este mes (al resto ni
+  // se le compara este eje), y su ventana es la suya, no una común.
+  for (const r of residentes) {
+    const win = closingWindowThisMonth(r, mes, anio);
+    if (!win || !acumulados[r.id] || compareISO(win.start, finAcumulado) > 0) continue;
+    acumulados[r.id].puentesLibres = bridgesBetween(win.start, finAcumulado, festivos)
+      .filter((p) => residentIsFreeOnBridge(r.id, historicas, p, win)).length;
+  }
+
+  return {
+    mes, anio, residentes, acumulados, asignaciones: asignacionesDelMes, bloqueos, festivos,
+    puentesDelMes: bridgesOfMonth(anio, mes, festivos),
+  };
+}
+
+/**
+ * Rango de festivos que hay que leer para evaluar el cierre ANUAL en este mes, o `null` si no
+ * cierra nadie. Mismo papel que `yearCloseHistoryStart` para las asignaciones (y misma razón:
+ * el invocador no puede adivinar el rango del validador — es el error que ya costó la regresión
+ * del contrato C-2).
+ *
+ * Devuelve los AÑOS NATURALES completos que toca la ventana, más un día por cada lado, no la
+ * ventana recortada. Dos motivos, y ninguno es la comodidad: (1) los vecinos del primer y del
+ * último día deciden si son puente y caen fuera (§3.4); (2) el validador necesita poder
+ * distinguir «este año no está cargado» de «este tramo del año no tiene festivos», y eso solo se
+ * puede preguntar si ve el año entero — la ventana cruza siempre dos años naturales y la carga
+ * es por año (V-17a), así que «uno sí y otro no» es el estado intermedio normal. Son ~30 filas
+ * de más en el peor caso, y son inertes: `bridgesOfMonth` solo mira las fechas que le tocan.
+ */
+function yearCloseFestivosRange(residentes, mes, anio) {
+  const desde = yearCloseHistoryStart(residentes, mes, anio);
+  if (!desde) return null;
+  const monthDays = datesOfMonth(anio, mes);
+  const primerAnio = Number(desde.slice(0, 4));
+  const ultimoAnio = Number(monthDays[monthDays.length - 1].slice(0, 4));
+  return { desde: toISO(primerAnio - 1, 12, 31), hasta: toISO(ultimoAnio + 1, 1, 1) };
 }
 
 // --- Cierre de TRIMESTRE (INV-3 trimestral, P-8 / decisión V-13) ---------------------------
@@ -714,16 +1154,23 @@ function validateQuarterClose(ctx) {
   for (const r of residentes) {
     // Un residente que solo estaba parte del trimestre (alta a mitad, o R4 que termina) se
     // compara sobre la parte que le tocaba, no sobre el trimestre entero.
-    const presente = intersect(win, { start: r.fechaInicio, end: r.fechaFin || addDays(addYears(r.fechaInicio, 4), -1) });
+    // El rango de presencia sale de los periodos (V-24), no de reconstruir `fechaInicio +4 años`:
+    // con los periodos editados de la nota [a] el primero y el último son los que mandan.
+    const suyos = periodsOfResident(r);
+    const presente = intersect(win, { start: suyos[0].start, end: suyos[suyos.length - 1].end });
     if (!presente) continue;
-    const disponibles = availableDays(presente, bloqueos.filter((b) => b.residenteId === r.id && b.motivo === "BAJA"));
+    const diasPresente = daysInclusive(presente.start, presente.end);
+    const disponibles = availableDays(presente, absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD }));
     const f = disponibles / quarterDays;
     if (f < MIN_DISPONIBILIDAD) continue;
 
     const total = tally(asignaciones.filter((a) => a.residenteId === r.id), { start: win.start, end: win.end }).total;
     const cohorte = cohortOf(r);
     if (!byCohort.has(cohorte)) byCohort.set(cohorte, []);
-    byCohort.get(cohorte).push({ id: r.id, v: total / f, ajustado: f < 1 });
+    // `ajustado` se separa en sus DOS causas: la baja de la nota [a] y el simple hecho de no
+    // haber estado el trimestre entero (alta a mitad, o R4 que termina). Antes las dos colgaban
+    // el mismo texto y el aviso afirmaba una baja que no existía ni en la tabla de bloqueos.
+    byCohort.get(cohorte).push({ id: r.id, v: total / f, porBaja: disponibles < diasPresente, parcial: diasPresente < quarterDays });
   }
 
   for (const [, grupo] of byCohort) {
@@ -731,7 +1178,10 @@ function validateQuarterClose(ctx) {
     const maxEntry = grupo.reduce((a, b) => (b.v > a.v ? b : a));
     const minEntry = grupo.reduce((a, b) => (b.v < a.v ? b : a));
     if (maxEntry.v - minEntry.v > 1 + EPS) {
-      const ajuste = maxEntry.ajustado || minEntry.ajustado ? " — cifras ajustadas proporcionalmente por baja (nota [a])" : "";
+      const porBaja = maxEntry.porBaja || minEntry.porBaja;
+      const parcial = maxEntry.parcial || minEntry.parcial;
+      const causa = porBaja ? "por baja (nota [a])" : "por el tramo del trimestre que le correspondía";
+      const ajuste = porBaja || parcial ? ` — cifras ajustadas proporcionalmente ${causa}` : "";
       violations.push(warn(
         `Totales al cierre del trimestre ${win.trimestre} (${win.start}→${win.end}): ${maxEntry.id}=${round(maxEntry.v)} vs ${minEntry.id}=${round(minEntry.v)} (diferencia > 1)${ajuste}`,
         { fecha: win.end, residenteId: maxEntry.id }
@@ -742,12 +1192,20 @@ function validateQuarterClose(ctx) {
   return violations;
 }
 
+/**
+ * La ventana del año de residencia que CIERRA en este mes, o `null` si no cierra ninguno.
+ *
+ * Sale de `periodsOfResident` (unificación de V-24) y no de reconstruir el aniversario a mano.
+ * Antes iteraba `addYears(r.fechaInicio, k)`, lo que ignoraba **las dos** vías por las que un año
+ * de residencia puede no acabar en su aniversario nominal: `fechaFin` y los periodos editados de
+ * la nota [a]. Medido al unificar: con `fechaFin` nominal el resultado es idéntico mes a mes —o
+ * sea, para todos los residentes de hoy no cambia nada—, y donde cambia es donde estaba mal: un
+ * R4 que deja la residencia el 15 de marzo cerraba su año en MAYO, dos meses después de irse, con
+ * una ventana que se extendía más allá de su último día.
+ */
 function closingWindowThisMonth(r, mes, anio) {
-  for (let k = 1; k <= 4; k++) {
-    const cierre = addDays(addYears(r.fechaInicio, k), -1);
-    if (inMonth(cierre, mes, anio)) return { start: addYears(r.fechaInicio, k - 1), end: cierre };
-  }
-  return null;
+  const p = periodsOfResident(r).find((per) => inMonth(per.end, mes, anio));
+  return p ? { start: p.start, end: p.end } : null;
 }
 
 /** Fracción de disponibilidad = (días de la ventana − días de baja) / días de la ventana. */
@@ -778,11 +1236,16 @@ function intersect(a, b) {
   return compareISO(start, end) <= 0 ? { start, end } : null;
 }
 
+/**
+ * Un puente es un DÍA suelto (§3.4), no un fin de semana largo: «puentes libres» son, literal,
+ * los «días puente en los que el residente no hace guardia» (§4). Una guardia la víspera, o el
+ * fin de semana contiguo, no le quita el puente: eso sería medir el descanso largo, que es
+ * justamente el modelo de puntos ponderados de P-1 —propuesto y no vigente, y en contra de la
+ * normativa según §8—, no el recuento entero que exige «diferencia máxima de 1».
+ */
 function residentIsFreeOnBridge(id, asignaciones, puente, win) {
-  const dias = daysOfRange(puente.desde, puente.hasta).filter((d) => inRange(d, win.start, win.end));
-  if (!dias.length) return false; // el puente no cae en la ventana → no cuenta como libre
-  const set = new Set(dias);
-  return !asignaciones.some((a) => a.residenteId === id && ["G", "GF", "GP"].includes(a.codigo) && set.has(a.fecha));
+  if (!inRange(puente, win.start, win.end)) return false; // fuera de su ventana → no es suyo
+  return !asignaciones.some((a) => a.residenteId === id && GUARDIA.includes(a.codigo) && a.fecha === puente);
 }
 
 function daysInclusive(a, b) {
@@ -790,17 +1253,12 @@ function daysInclusive(a, b) {
   for (let d = a; compareISO(d, b) <= 0; d = addDays(d, 1)) n++;
   return n;
 }
-function daysOfRange(a, b) {
-  const out = [];
-  for (let d = a; compareISO(d, b) <= 0; d = addDays(d, 1)) out.push(d);
-  return out;
-}
 const round = (x) => (Number.isInteger(x) ? x : Math.round(x * 100) / 100);
 function labelDim(dim) {
   return { total: "Totales", findes: "Fines de semana", festivos: "Festivos", prefestivos: "Prefestivos", puentesLibres: "Puentes libres", dobletes: "Dobletes V-D" }[dim];
 }
 
-  return { validateResidencyYearClose, yearCloseHistoryStart, buildYearCloseContext, quarterCloseWindow, validateQuarterClose };
+  return { validateResidencyYearClose, yearCloseHistoryStart, buildYearCloseContext, yearCloseFestivosRange, quarterCloseWindow, validateQuarterClose };
 })();
 
 // ── validate.js ──
@@ -827,33 +1285,46 @@ var Validate = (function () {
 // bloquea por algo que no se puede corregir DENTRO de la herramienta deja al servicio sin
 // cuadrante. No subir nada a `error` sin revisar V-14 en spec.md §6.
 
-  const { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays } = Calendar;
-  const { defaultTrainingPeriods, levelOn, groupOf } = Residents;
+  const { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays, isHoliday } = Calendar;
+  const { periodsOfResident, levelOn, groupOf } = Residents;
   const { tally } = Tally;
+  const { absences, isNearbyRotation, BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA } = Absences;
 
 const GUARDIA = new Set(["G", "GF", "GP"]);          // ocupan puesto obligatorio
 const ASIGNACION = new Set(["G", "GF", "GP", "3P"]); // cualquier asignación (INV-5, INV-7)
-const PROVINCIAS_CERCANAS = new Set(["alicante", "valencia", "murcia", "albacete"]);
-// Decisión V-8 (Fase 5.x): solo BAJA bloquea la asignación — no se puede exigir una guardia
-// a alguien de baja médica/embarazo, por seguridad/legalidad. VACACIONES y ROTACION dejaron
-// de bloquear (antes ambas asignaciones aquí también contaban por igual): son informativas
-// para el generador, igual que una preferencia BLANDA — pero sus fechas SIGUEN alimentando
-// INV-2 (exención del mínimo mensual), INV-6 (ausencias simultáneas) e INV-7 (cobertura
-// viernes/sábado en rotación cercana), que las leen de `bloqueos` directamente, no de este set.
-const DURO = new Set(["BAJA"]);
+// Qué motivo de `bloqueos` cuenta para qué invariante vive en `absences.js`, no aquí: eran
+// cinco criterios escritos a mano en cinco sitios. Decisión V-8 (Fase 5.x): solo BAJA bloquea
+// la asignación —no se puede exigir una guardia a alguien de baja médica/embarazo—, mientras
+// VACACIONES y ROTACION son informativas para el generador pero SIGUEN alimentando INV-2
+// (exención del mínimo), INV-6 (ausencias simultáneas) e INV-7 (rotación cercana).
 
 const err = (invariante, detalle, extra = {}) => ({ invariante, severidad: "error", detalle, ...extra });
 const aviso = (invariante, detalle, extra = {}) => ({ invariante, severidad: "aviso", detalle, ...extra });
 
-function periodsOf(residente) {
-  if (residente.periodos) return residente.periodos;
-  const fin = residente.fechaFin || addDays(toISO(Number(residente.fechaInicio.slice(0, 4)) + 4, Number(residente.fechaInicio.slice(5, 7)), Number(residente.fechaInicio.slice(8, 10))), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
+// `periodsOfResident` (residents.js) es la ÚNICA derivación de periodos del dominio desde la
+// unificación de V-24: antes cada módulo tenía su propia copia del `fechaFin || addYears(+4)` y
+// tres de ellas —projection, accumulate y el `closingWindowThisMonth` de equity— NO miraban
+// `residente.periodos`, así que con la tabla `periodos` rellena el mismo residente habría tenido
+// dos niveles distintos DENTRO de una misma llamada a `marcarValidado`. Medido antes de unificar:
+// `projection.js` daba R2 el mismo día que `validate.js` daba R1.
 const cohortOf = (residente) => Number(residente.fechaInicio.slice(0, 4)); // promoción = año de inicio
 
 function inRange(fecha, desde, hasta) {
   return compareISO(fecha, desde) >= 0 && compareISO(fecha, hasta) <= 0;
+}
+
+/**
+ * Por qué un residente no es asignable en una fecha, en palabras y con la fecha frontera.
+ * `groupOf` devuelve null para los tres casos (residents.js:74-77) y son indistinguibles
+ * desde el grupo; el Responsable necesita saber cuál es para arreglarlo.
+ * @param {"PENDIENTE"|"FINALIZADO"|null} nivel  null = el id no está en `residentes`
+ * @param {{start:string,end:string}[]|undefined} periodos
+ */
+function reasonNotAssignable(nivel, periodos) {
+  if (nivel === null || !periodos) return "no figura en la lista de residentes";
+  if (nivel === "FINALIZADO") return `su residencia terminó el ${periodos[periodos.length - 1].end}`;
+  if (nivel === "PENDIENTE") return `su residencia empieza el ${periodos[0].start}`;
+  return `nivel ${nivel}, sin grupo de guardia`; // defensivo: hoy inalcanzable
 }
 
 /**
@@ -870,8 +1341,8 @@ function inRange(fecha, desde, hasta) {
  *          asignaciones del propio mes basta (ninguna rotación cercana lo cruza)
  */
 function rotationHistoryStart(bloqueos, monthStart) {
-  const desdes = bloqueos
-    .filter((b) => b.motivo === "ROTACION" && b.provincia && PROVINCIAS_CERCANAS.has(b.provincia.toLowerCase()) && b.desde < monthStart)
+  const desdes = absences(bloqueos)
+    .filter((b) => isNearbyRotation(b) && b.desde < monthStart)
     .map((b) => b.desde);
   return desdes.length === 0 ? null : desdes.reduce((min, d) => (d < min ? d : min));
 }
@@ -883,24 +1354,60 @@ function rotationHistoryStart(bloqueos, monthStart) {
  * la misma forma de objeto de forma independiente en Calendar.jsx, Generator.jsx y el router.
  * @param {object} p { mes, anio, residentes, historicas?, asignacionesDelMes, bloqueos }
  */
-function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos }) {
+function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [], eventos = [] }) {
   return {
     mes, anio,
-    residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin })),
+    // `periodos` viaja SIEMPRE que venga: es lo único que expresa la nota [a] («los periodos
+    // generados son editables después»), y recortarlo aquí hacía inalcanzable el punto entero —
+    // por mucho que el router hidrate desde la tabla, este `map` los borraba y `levelOn` volvía a
+    // derivar del aniversario nominal. Un fallo perfectamente silencioso: no lanza, solo devuelve
+    // el nivel equivocado. La proyección sigue siendo explícita a propósito (no arrastrar campos
+    // que el validador no debe ver), así que un campo nuevo hay que añadirlo aquí a mano.
+    residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin, periodos: r.periodos })),
     asignaciones: [...historicas, ...asignacionesDelMes],
     bloqueos,
+    // Los eventos llegan como FILAS de la tabla y se moldean aquí, una sola vez. Se quedan los
+    // del año académico del mes validado (jun→may), que es el que empareja la Navidad de
+    // diciembre con la despedida del mayo siguiente — sin eso, validar mayo no encontraría la
+    // Navidad con la que comparar y la regla «los de Navidad libres en la despedida» sería muda.
+    eventos: shapeEventos(eventos, toISO(anio, mes, 1)),
+    // Datos de entrada, jamás derivados (S-4). Se piden con un día de margen a cada lado del mes:
+    // los vecinos del día 1 y del último día caen fuera y deciden si son puente (§3.4).
+    festivos,
   };
 }
 
 /**
- * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos?, excepciones?,
- *                        eventos?, designadosNavidad? }
+ * Filas de `eventos` → la forma que consume `validateEvents`: `{navidad, despedida}`, solo las
+ * del año académico del mes validado. `sorteoDocumentado` se DERIVA de que exista `sorteoId`
+ * (una fila real en la tabla `sorteos`, reproducible) y no de un booleano autodeclarado: la
+ * normativa pide sorteo justamente para que el reparto no sea a dedo.
+ */
+function shapeEventos(filas, monthStart) {
+  const curso = academicYearOf(monthStart);
+  const out = {};
+  for (const e of filas) {
+    if (!e || e.activo === false || academicYearOf(e.fecha) !== curso) continue;
+    const clave = String(e.tipo || "").toLowerCase();
+    if (clave !== "navidad" && clave !== "despedida") continue;
+    out[clave] = {
+      fecha: e.fecha,
+      voluntarios: e.voluntarios || [],
+      designados: e.designados || [],
+      sorteoDocumentado: Boolean(e.sorteoId),
+    };
+  }
+  return out;
+}
+
+/**
+ * @param {object} ctx { mes, anio, residentes, asignaciones, bloqueos?, excepciones?, eventos? }
  * @returns {{invariante:string, severidad:'error'|'aviso', fecha?:string, residenteId?:string, detalle:string}[]}
  */
 function validateMonth(ctx) {
-  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, designadosNavidad = [] } = ctx;
+  const { mes, anio, residentes, asignaciones = [], bloqueos = [], excepciones = [], eventos = {}, festivos = [] } = ctx;
   const byId = new Map(residentes.map((r) => [r.id, r]));
-  const periods = new Map(residentes.map((r) => [r.id, periodsOf(r)]));
+  const periods = new Map(residentes.map((r) => [r.id, periodsOfResident(r)]));
   const levelOnDay = (id, fecha) => (periods.has(id) ? levelOn(periods.get(id), fecha) : null);
 
   const days = datesOfMonth(anio, mes);
@@ -926,6 +1433,21 @@ function validateMonth(ctx) {
     const roles = guardias.map((a) => ({ id: a.residenteId, level: levelOnDay(a.residenteId, fecha), group: groupOf(levelOnDay(a.residenteId, fecha)) }));
     const mayores = roles.filter((r) => r.group === "MAYOR");
     const pequenos = roles.filter((r) => r.group === "PEQUENO");
+    const noAsignables = roles.filter((r) => r.group === null);
+
+    // Asignaciones a quien no es asignable ese día (residencia terminada, no empezada, o id
+    // que no está en `residentes`). Antes se contaban como "nadie" y el día salía con el
+    // MISMO objeto que un día vacío —«sin cubrir (mayores=0, pequeños=0)»—, un diagnóstico
+    // falso, sin `residenteId` y por tanto sin nada que traducir en client/lib/violations.js.
+    // Es `aviso` y no `error` (decisión V-21) porque la causa vive en las fechas del
+    // residente y hoy no hay forma de corregirlas desde la app (no existe `editarResidente`):
+    // bloquear dejaría al servicio sin cuadrante por algo que nadie puede arreglar DENTRO de
+    // la herramienta, que es el criterio de V-12/V-14/V-16.
+    for (const r of noAsignables) {
+      violations.push(aviso("INV-1",
+        `Guardia del ${fecha} asignada a ${r.id}, que no es residente asignable en esa fecha (${reasonNotAssignable(r.level, periods.get(r.id))})`,
+        { fecha, residenteId: r.id }));
+    }
 
     if (guardias.length === 2 && pequenos.length === 2 && pequenos.every((p) => p.level === "R2")) {
       // Candidato 2×R2 → lo gobierna INV-9
@@ -958,6 +1480,15 @@ function validateMonth(ctx) {
     let detalle;
     if (mayores.length >= 2) detalle = `Dos o más Residentes Mayores el ${fecha}; falta el puesto de Pequeño`;
     else if (pequenos.length >= 2) detalle = `Dos Residentes Pequeños el ${fecha} (la excepción 2×R2 exige que ambos sean R2)`;
+    else if (noAsignables.length > 0) {
+      // El día TIENE nombres escritos en la rejilla: decirlo así, y no «sin cubrir», que es lo
+      // que lo hacía indistinguible de un día vacío. Aviso por lo mismo que el bucle de arriba
+      // (V-21) — el aviso de cada asignación ya dice a quién hay que arreglar.
+      violations.push(aviso("INV-1",
+        `Guardia del ${fecha} sin nadie asignable: el día solo lo cubre ${noAsignables.map((r) => r.id).join(", ")}`,
+        { fecha }));
+      continue;
+    }
     else detalle = `Día ${fecha} sin cubrir con exactamente 1 Mayor y 1 Pequeño (mayores=${mayores.length}, pequeños=${pequenos.length})`;
     violations.push(err("INV-1", detalle, { fecha }));
   }
@@ -965,7 +1496,7 @@ function validateMonth(ctx) {
   // ── INV-5: asignación sobre bloqueo BAJA (único motivo DURO — decisión V-8) ──
   for (const a of asignaciones) {
     if (!dayset.has(a.fecha) || !ASIGNACION.has(a.codigo)) continue;
-    const hit = bloqueos.find((b) => b.residenteId === a.residenteId && DURO.has(b.motivo) && inRange(a.fecha, b.desde, b.hasta));
+    const hit = absences(bloqueos, { residenteId: a.residenteId, motivos: BLOQUEA_ASIGNACION, fecha: a.fecha })[0];
     if (hit) violations.push(err("INV-5", `Asignación ${a.codigo} el ${a.fecha} sobre bloqueo ${hit.motivo}`, { fecha: a.fecha, residenteId: a.residenteId }));
   }
 
@@ -983,7 +1514,7 @@ function validateMonth(ctx) {
       violations.push(aviso("INV-2", `${r.id}: ${total} guardias computables > máximo 6`, { residenteId: r.id }));
     } else if (total < 4) {
       const esFebrero = mes === 2;
-      const tieneVoB = bloqueos.some((b) => b.residenteId === r.id && (b.motivo === "VACACIONES" || b.motivo === "BAJA") && rangeIntersectsMonth(b, days));
+      const tieneVoB = absences(bloqueos, { residenteId: r.id, motivos: EXIME_DEL_MINIMO, desde: days[0], hasta: days[days.length - 1] }).length > 0;
       const nivelMedio = levelOnDay(r.id, days[Math.floor(days.length / 2)]);
       const r1Verano = nivelMedio === "R1" && (mes === 6 || mes === 7 || mes === 8);
       if (!esFebrero && !tieneVoB && !r1Verano) {
@@ -1002,8 +1533,8 @@ function validateMonth(ctx) {
   validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, violations);
 
   // ── INV-7: presencia mínima en rotación cercana (solo en el mes de fin) ──
-  for (const b of bloqueos) {
-    if (b.motivo !== "ROTACION" || !b.provincia || !PROVINCIAS_CERCANAS.has(b.provincia.toLowerCase())) continue;
+  for (const b of absences(bloqueos)) {
+    if (!isNearbyRotation(b)) continue;
     const finEnEsteMes = Number(b.hasta.slice(0, 4)) === anio && Number(b.hasta.slice(5, 7)) === mes;
     if (!finEnEsteMes) continue;
     const period = eachDate(b.desde, b.hasta);
@@ -1023,7 +1554,30 @@ function validateMonth(ctx) {
   }
 
   // ── INV-9 adicional / INV-10: eventos del servicio ──
-  validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, violations);
+  validateEvents(eventos, byDay, levelOnDay, dayset, violations);
+
+  // ── INV-12: coherencia código↔festivo (aviso siempre, V-4/V-14) ──
+  // GF solo en día festivo; G y GP nunca EN festivo (un prefestivo es la víspera, no el día).
+  // Sin lista de festivos no se deriva ninguno (S-4: el v1 se los pedía a la IA, prohibido). Y
+  // no se avisa "falta el calendario" en todo mes vacío de festivos: febrero no tiene ninguno en
+  // España, así que sería un aviso falso cada febrero. Se avisa solo cuando la falta IMPIDE
+  // comprobar algo que sí se ha escrito: hay GF en el mes y no hay festivos cargados.
+  const gfDelMes = asignaciones.filter((a) => a.codigo === "GF" && dayset.has(a.fecha));
+  if (festivos.length === 0) {
+    if (gfDelMes.length) {
+      violations.push(aviso("INV-12", `Hay ${gfDelMes.length} guardia(s) marcadas GF pero no hay festivos cargados para ${anio}-${String(mes).padStart(2, "0")}: no se puede comprobar que caigan en festivo`, { fecha: gfDelMes[0].fecha }));
+    }
+  } else {
+    for (const a of asignaciones) {
+      if (!dayset.has(a.fecha)) continue;
+      const esFestivo = isHoliday(a.fecha, festivos);
+      if (a.codigo === "GF" && !esFestivo) {
+        violations.push(aviso("INV-12", `GF el ${a.fecha}, que no consta como festivo`, { fecha: a.fecha, residenteId: a.residenteId }));
+      } else if ((a.codigo === "G" || a.codigo === "GP") && esFestivo) {
+        violations.push(aviso("INV-12", `${a.codigo} el ${a.fecha}, que consta como festivo (debería ser GF)`, { fecha: a.fecha, residenteId: a.residenteId }));
+      }
+    }
+  }
 
   // ── INV-11: verano sin R1 + recuento entre R2 del mismo año ──
   if (mes === 6 || mes === 7 || mes === 8) {
@@ -1071,13 +1625,11 @@ function rangeIntersectsMonth(b, days) {
 
 function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, violations) {
   const cohortOfId = new Map(residentes.map((r) => [r.id, cohortOf(r)]));
-  const AUS = new Set(["ROTACION", "VACACIONES"]); // la baja no computa
   const emittedRun = new Map(); // cohorte → estaba en exceso el día anterior
 
   for (const fecha of days) {
     const cohorts = new Map(); // cohorte → [{id, motivo}]
-    for (const b of bloqueos) {
-      if (!AUS.has(b.motivo) || !inRange(fecha, b.desde, b.hasta)) continue;
+    for (const b of absences(bloqueos, { motivos: AUSENCIA_SIMULTANEA, fecha })) {
       const c = cohortOfId.get(b.residenteId);
       if (c === undefined) continue;
       if (!cohorts.has(c)) cohorts.set(c, []);
@@ -1103,7 +1655,13 @@ function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, viol
   }
 }
 
-function validateEvents(eventos, designadosNavidad, byDay, levelOnDay, dayset, violations) {
+/**
+ * INV-10. `designadosNavidad` ya no es un parámetro suelto: sale de la fila del evento de
+ * Navidad (decisión V-20, se ALMACENA). Antes había que pasárselo aparte y nadie lo hacía —
+ * ese es medio motivo de que este invariante llevara desde la Fase 3 mudo.
+ */
+function validateEvents(eventos, byDay, levelOnDay, dayset, violations) {
+  const designadosNavidad = (eventos.navidad && eventos.navidad.designados) || [];
   for (const [tipo, ev] of Object.entries(eventos)) {
     if (!ev || !dayset.has(ev.fecha)) continue;
     const guardias = (byDay.get(ev.fecha) || []).filter((a) => GUARDIA.has(a.codigo));
@@ -1149,17 +1707,10 @@ var Responsible = (function () {
 //    recomputable/auditable a partir del registro guardado.
 
   const { addDays, toISO } = Calendar;
-  const { defaultTrainingPeriods, levelOn } = Residents;
+  const { periodsOfResident, levelOn } = Residents;
 
 const err = (detalle, extra = {}) => ({ invariante: "INV-14", severidad: "error", detalle, ...extra });
 
-// Mismo patrón que validate.js/periodsOf: usa periodos editados si el residente los trae
-// (bajas, nota [a]), si no los genera por defecto a partir de fechaInicio/fechaFin.
-function periodsOf(residente) {
-  if (residente.periodos) return residente.periodos;
-  const fin = residente.fechaFin || addDays(toISO(Number(residente.fechaInicio.slice(0, 4)) + 4, Number(residente.fechaInicio.slice(5, 7)), Number(residente.fechaInicio.slice(8, 10))), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
 
 /**
  * Residentes con nivel R3 en `periodoInicio` (candidatos naturales al mandato), en orden
@@ -1171,7 +1722,7 @@ function periodsOf(residente) {
  */
 function eligibleCandidates(residentes, periodoInicio) {
   return residentes
-    .filter((r) => levelOn(periodsOf(r), periodoInicio) === "R3")
+    .filter((r) => levelOn(periodsOfResident(r), periodoInicio) === "R3")
     .map((r) => r.id)
     .sort();
 }
@@ -1232,7 +1783,7 @@ function validateResponsible(responsable, ctx) {
     return violations;
   }
 
-  if (levelOn(periodsOf(titular), responsable.periodoInicio) !== "R3") {
+  if (levelOn(periodsOfResident(titular), responsable.periodoInicio) !== "R3") {
     violations.push(err(
       `${responsable.residenteId} no tiene nivel R3 en ${responsable.periodoInicio} (el mandato exige R3 al inicio del periodo)`,
       { residenteId: responsable.residenteId, fecha: responsable.periodoInicio }
@@ -1370,13 +1921,30 @@ var Projection = (function () {
 //    con un domingo DENTRO del propio mes (nunca ve la pestaña del mes siguiente): la misma
 //    limitación que ya tenía el .xlsm, documentada y aceptada en spec.md §4 (S-5) — el
 //    dominio (`tally`) sí ve ese doblete de borde; esta proyección, deliberadamente, no.
-//  - `buildResumenRows`: hoja "Resumen", una fila por residente activo en algún mes
-//    publicado, con SUMIF encadenado cruzando TODAS las pestañas mensuales publicadas (por
-//    nombre de hoja) y la comprobación de equidad (MAXIFS/MINIFS) agrupada por COHORTE de
-//    ingreso — mismo criterio que INV-3/V-2, no por nivel actual como hacía el Excel viejo.
-//    Alcance provisional: acumula TODOS los meses publicados desde siempre, no por año
-//    académico como el .xlsm (que se recreaba cada año) — simplificación consciente,
-//    revisar si con varios años de datos reales deja de ser una lectura útil.
+//  - `buildResumenRows`: hoja "Resumen YYYY-YY", una fila por residente activo en el CURSO
+//    académico (jun–may), con SUMIF encadenado cruzando las pestañas mensuales publicadas de
+//    ese curso y la diferencia máx-mín agrupada por COHORTE de ingreso — mismo criterio de
+//    agrupación que INV-3/V-2, no por nivel actual como hacía el Excel viejo.
+//  - `buildContajeTrimestralRows`: hoja "Contaje Trimestral YYYY-YY", el total por residente
+//    y trimestre del contaje (T1 jun-ago … T4 mar-may) más la diferencia máx-mín por cohorte
+//    en cada trimestre. Es lo que el Responsable comunica a tutoría al cerrar el trimestre.
+//
+// LA VENTANA ES EL CURSO ACADÉMICO (decisión V-25), y las dos hojas la llevan en el NOMBRE
+// para que la del curso pasado no se sobreescriba — es lo que hacía el .xlsm recreándose cada
+// año, y encima acota la cadena SUMIF a ≤12 términos por celda en vez de crecer sin techo (a
+// diez años eran ~10.800 SUMIF de columna completa por recálculo).
+//
+// NINGUNA de las dos hojas puede reproducir el veredicto de INV-3, y por eso ninguna dice
+// "dif ≤ 1" ni habla de equidad: son una LECTURA, no una validación (ver `NOTA_LIMITES`). Las
+// diferencias son estructurales, no de precisión, y están medidas:
+//  - la ventana de INV-3 anual es el AÑO DE RESIDENCIA de cada residente, que arranca en su
+//    aniversario y no en junio; cuatro cierres anuales con dif=1 —los cuatro OK para INV-3—
+//    acumulan una dif de por vida de 4;
+//  - los dos cierres de INV-3 NORMALIZAN por disponibilidad (descuentan la baja médica), y eso
+//    no es expresable en una fórmula de hoja: con una baja de 6 meses INV-3 calla y un
+//    MAXIFS/MINIFS sobre totales brutos marcaría una diferencia de 25;
+//  - la hoja solo ve meses PUBLICADOS, así que un trimestre está incompleto hasta que se
+//    publica su tercer mes.
 //
 // Limitaciones conocidas y aceptadas (puerta de consistencia, revisión de 4 agentes):
 //  - El SUMIF de "Resumen" cruza por NOMBRE de residente (columna A de cada pestaña
@@ -1389,14 +1957,56 @@ var Projection = (function () {
 //    que `accumulatedTally` (spec.md §4, Fase 6.1). Cosmético: no alimenta INV-3 ni ningún
 //    contaje real, que siguen mirando la fecha exacta vía `tally`/`levelOn` en el dominio.
 
-  const { datesOfMonth, weekday, addDays, addYears } = Calendar;
-  const { defaultTrainingPeriods, levelOn, isActiveOn } = Residents;
+  const { datesOfMonth, weekday, addDays, addYears, academicYearOf, trimesterOf, toISO } = Calendar;
+  const { periodsOfResident, levelOn, isActiveOn } = Residents;
 
 const GUARDIA_CODES = new Set(["G", "GF", "GP"]);
 
 const FIXED_HEADERS = ["Residente", "Nivel", "G", "GF", "GP", "3P", "Fines de Semana", "Dobl. V-D", "Total"];
 const LEVEL_RANK = { R4: 4, R3: 3, R2: 2, R1: 1 };
-const RESUMEN_HEADER = ["Residente", "Cohorte", "Total", "Fines de Semana", "Festivos", "Prefestivos", "Dobletes V-D", "3P", "Dif. máx-mín (cohorte)", "Equidad (dif. ≤ 1)"];
+// «Dif. máx-mín (cohorte)» es un HECHO y se queda. La segunda columna era «Equidad (dif. ≤ 1)»,
+// que invocaba el umbral de INV-3 sobre una ventana y unos totales que no son los suyos (ver la
+// cabecera del fichero): ahora dice de qué curso habla y que es orientativo, decisión V-25.
+const RESUMEN_HEADER = ["Residente", "Cohorte", "Total", "Fines de Semana", "Festivos", "Prefestivos", "Dobletes V-D", "3P", "Dif. máx-mín (cohorte)", "Reparto del curso (orientativo)"];
+const TRIMESTRES_ORDEN = [
+  { clave: "T1", etiqueta: "T1 jun-ago" },
+  { clave: "T2", etiqueta: "T2 sep-nov" },
+  { clave: "T3", etiqueta: "T3 dic-feb" },
+  { clave: "T4", etiqueta: "T4 mar-may" },
+];
+const CONTAJE_HEADER = ["Residente", "Cohorte", ...TRIMESTRES_ORDEN.map((t) => t.etiqueta)];
+
+// La nota va DENTRO de la hoja, no solo en este comentario: el Sheet es el entregable y lo lee
+// gente que no abre el repo. Sin ella, «Dif. máx-mín» invita a leerse como el «dif ≤ 1» de la
+// normativa, que es justo lo que estas hojas no pueden comprobar.
+const NOTA_LIMITES = "Lectura orientativa, no es la comprobación de INV-3: solo cuenta meses ya PUBLICADOS de este curso (un trimestre está incompleto hasta publicar su tercer mes), no descuenta bajas médicas (el validador de la app sí lo hace) y la equidad de la normativa se cierra por año de residencia de cada uno, que empieza en su aniversario y no en junio.";
+
+/** Etiqueta del curso académico: 2026 → "2026-27". Ordena bien y no colisiona entre cursos. */
+function cursoLabel(curso) {
+  return `${curso}-${String((curso + 1) % 100).padStart(2, "0")}`;
+}
+
+/**
+ * Rellena todas las filas hasta el ancho de la más ancha, con "".
+ *
+ * OBLIGATORIO en todo lo que devuelva este módulo: `Code.gs` escribe con
+ * `getRange(1,1,rows.length,rows[0].length).setValues(rows)`, y `setValues` exige una matriz
+ * RECTANGULAR — una fila más corta lanza «The number of columns in the data does not match». Una
+ * fila de nota o de separación es lo primero que rompe eso, y ningún test lo vería: el `ss` de los
+ * fakes es un array de arrays sin límites (la misma ceguera que dejó pasar el fallo de la rejilla
+ * de 26 columnas hasta que se probó en vivo).
+ */
+function rectangular(rows) {
+  const ancho = rows.reduce((max, f) => Math.max(max, f.length), 0);
+  return rows.map((f) => (f.length === ancho ? f : [...f, ...Array(ancho - f.length).fill("")]));
+}
+
+/** Los meses publicados que caen en el curso académico dado, ordenados cronológicamente. */
+function monthsOfCurso(publishedMonths, curso) {
+  return [...new Map(publishedMonths.map((m) => [monthSheetName(m.anio, m.mes), m])).values()]
+    .filter((m) => academicYearOf(toISO(m.anio, m.mes, 1)) === curso)
+    .sort((a, b) => a.anio - b.anio || a.mes - b.mes);
+}
 
 /** Nombre de pestaña mensual: "YYYY-MM" (ordena bien alfabéticamente, sin acentos ni espacios). */
 function monthSheetName(anio, mes) {
@@ -1415,17 +2025,11 @@ function columnLetter(n) {
   return s;
 }
 
-// Mismo fallback de fechaFin que accumulate.js/validate.js (deuda preexistente conocida,
-// spec.md §6 retro Fase 6.1: duplicado en 7 sitios; no se consolida aquí, fuera de alcance).
-function periodsOf(residente) {
-  const fin = residente.fechaFin || addDays(addYears(residente.fechaInicio, 4), -1);
-  return defaultTrainingPeriods(residente.fechaInicio, fin);
-}
 
 /** Residentes activos (R1-R4) en alguna de `dates`, con su primer día activo dentro de ese conjunto. */
 function activeResidents(residentes, dates) {
   return residentes
-    .map((r) => ({ ...r, periods: periodsOf(r) }))
+    .map((r) => ({ ...r, periods: periodsOfResident(r) }))
     .map((r) => ({ ...r, firstActiveDate: dates.find((d) => isActiveOn(r.periods, d)) }))
     .filter((r) => r.firstActiveDate !== undefined);
 }
@@ -1497,7 +2101,7 @@ function buildMonthSheetRows({ anio, mes, residentes, asignaciones }) {
       ...codigos,
     ]);
   }
-  return { sheetName: monthSheetName(anio, mes), rows };
+  return { sheetName: monthSheetName(anio, mes), rows: rectangular(rows) };
 }
 
 function sumifChain(mesesOrdenados, rowNum, col) {
@@ -1509,22 +2113,37 @@ function sumifChain(mesesOrdenados, rowNum, col) {
   return `=${terms.join("+")}`;
 }
 
-/**
- * Filas de la hoja "Resumen" (spec.md §7): equidad acumulada por cohorte de ingreso,
- * agregando por SUMIF/MAXIFS/MINIFS sobre todas las pestañas mensuales PUBLICADAS.
- * @param {object} p { residentes:{id,nombre,fechaInicio}[], publishedMonths:{mes,anio}[] }
- * @returns {{sheetName:"Resumen", rows:Array<Array<string|number>>}}
- */
-function buildResumenRows({ residentes, publishedMonths }) {
-  const meses = [...new Map(publishedMonths.map((m) => [monthSheetName(m.anio, m.mes), m])).values()]
-    .sort((a, b) => a.anio - b.anio || a.mes - b.mes);
-  const todasLasFechas = meses.flatMap((m) => datesOfMonth(m.anio, m.mes));
-  const activos = activeResidents(residentes, todasLasFechas)
+/** Residentes activos en alguno de esos meses, con su cohorte, ordenados por cohorte y nombre. */
+function activosDeLosMeses(residentes, meses) {
+  const fechas = meses.flatMap((m) => datesOfMonth(m.anio, m.mes));
+  return activeResidents(residentes, fechas)
     .map((r) => ({ nombre: r.nombre, cohorte: Number(r.fechaInicio.slice(0, 4)) }))
     .sort((a, b) => a.cohorte - b.cohorte || a.nombre.localeCompare(b.nombre));
+}
 
+/** MAXIFS-MINIFS de `col` entre las filas de la MISMA cohorte (columna B), para la fila `i`. */
+function difCohorteFormula(col, i, lastRow) {
+  const rango = `$${col}$2:$${col}$${lastRow}`;
+  const cohortes = `$B$2:$B$${lastRow}`;
+  return `=IF($B${i}="","",MAXIFS(${rango},${cohortes},$B${i})-MINIFS(${rango},${cohortes},$B${i}))`;
+}
+
+/**
+ * Filas de la hoja "Resumen YYYY-YY" (spec.md §7): carga por residente en el CURSO académico,
+ * agregando por SUMIF sobre las pestañas mensuales publicadas de ese curso, con la diferencia
+ * máx-mín por cohorte de ingreso.
+ *
+ * La ventana es el curso (decisión V-25) y va en el nombre de la hoja: sin eso, republicar un mes
+ * de otro curso sobreescribiría la hoja del anterior. NO reproduce el veredicto de INV-3 y no lo
+ * pretende — ver la cabecera del fichero y `NOTA_LIMITES`, que se escribe en la propia hoja.
+ *
+ * @param {object} p { residentes:{id,nombre,fechaInicio}[], publishedMonths:{mes,anio}[], curso:number }
+ * @returns {{sheetName:string, rows:Array<Array<string|number>>}}
+ */
+function buildResumenRows({ residentes, publishedMonths, curso }) {
+  const meses = monthsOfCurso(publishedMonths, curso);
   const rows = [RESUMEN_HEADER];
-  for (const r of activos) {
+  for (const r of activosDeLosMeses(residentes, meses)) {
     const rowNum = rows.length + 1;
     rows.push([
       r.nombre, r.cohorte,
@@ -1534,23 +2153,80 @@ function buildResumenRows({ residentes, publishedMonths }) {
       sumifChain(meses, rowNum, "E"), // Prefestivos (columna GP)
       sumifChain(meses, rowNum, "H"), // Dobletes V-D
       sumifChain(meses, rowNum, "F"), // 3P
-      "", "", // equidad: se rellena abajo, una vez se conoce el rango completo de filas
+      "", "", // dif y lectura: se rellenan abajo, una vez se conoce el rango completo de filas
     ]);
   }
 
-  // Umbral de equidad = 1, el mismo que exige INV-3 (equity.js): no se deja como celda
-  // editable (a diferencia del Excel viejo) porque el validador real de la app NO lo lee
-  // de aquí — un umbral "editable" en el Sheet que no afecta a INV-3 sería engañoso.
+  // El umbral no se deja como celda editable (a diferencia del Excel viejo) porque el validador
+  // real de la app NO lo lee de aquí: un umbral editable en el Sheet que no afecta a INV-3 sería
+  // engañoso. Y el veredicto ya no dice "OK/REVISAR" sobre "dif ≤ 1", que era invocar el umbral de
+  // INV-3 sobre una ventana y unos totales que no son los suyos (V-25).
   const lastRow = rows.length;
   for (let i = 2; i <= lastRow; i++) {
-    rows[i - 1][8] = `=IF($B${i}="","",MAXIFS($C$2:$C$${lastRow},$B$2:$B$${lastRow},$B${i})-MINIFS($C$2:$C$${lastRow},$B$2:$B$${lastRow},$B${i}))`;
-    rows[i - 1][9] = `=IF($B${i}="","",IF(I${i}<=1,"OK","REVISAR"))`;
+    rows[i - 1][8] = difCohorteFormula("C", i, lastRow);
+    rows[i - 1][9] = `=IF($B${i}="","",IF(I${i}<=1,"equilibrado","desigual: mirar en la app"))`;
   }
-  return { sheetName: "Resumen", rows };
+  rows.push([], [NOTA_LIMITES]);
+  return { sheetName: `Resumen ${cursoLabel(curso)}`, rows: rectangular(rows) };
 }
 
-  return { monthSheetName, columnLetter, buildMonthSheetRows, buildResumenRows };
+/**
+ * Filas de la hoja "Contaje Trimestral YYYY-YY" (spec.md §7, Fase 7.2): el total por residente en
+ * cada trimestre del contaje, más la diferencia máx-mín por cohorte en cada uno. Es lo que el
+ * Responsable tiene que comunicar a tutoría al cerrar cada trimestre y hasta ahora no existía
+ * fuera de la app.
+ *
+ * Los trimestres se agrupan por MES (`trimesterOf`), nunca por posición de fila: trocear por
+ * rangos fijos es el «bug de trimestres posicionales» que el .xlsm tenía y que ADR-001 manda
+ * eliminar — al insertar un residente se desalineaba en silencio. Y T3 (dic-feb) cruza el año
+ * natural, así que agrupar por año de calendario tampoco valdría.
+ *
+ * Muestra los ejes de INV-3 TRIMESTRAL (solo el total, decisión V-13/P-8), no la carga anual por
+ * nivel del .xlsm: enseñar una cifra distinta de la que juzga el invariante es la trampa que
+ * V-11(c) ya evitó en el Resumen.
+ *
+ * @param {object} p { residentes:{id,nombre,fechaInicio}[], publishedMonths:{mes,anio}[], curso:number }
+ * @returns {{sheetName:string, rows:Array<Array<string|number>>}}
+ */
+function buildContajeTrimestralRows({ residentes, publishedMonths, curso }) {
+  const meses = monthsOfCurso(publishedMonths, curso);
+  const porTrimestre = TRIMESTRES_ORDEN.map((t) => meses.filter((m) => trimesterOf(toISO(m.anio, m.mes, 1)) === t.clave));
+
+  const rows = [CONTAJE_HEADER];
+  for (const r of activosDeLosMeses(residentes, meses)) {
+    const rowNum = rows.length + 1;
+    // Columna I de la pestaña mensual = Total (G+GF+GP), el único eje del cierre trimestral.
+    rows.push([r.nombre, r.cohorte, ...porTrimestre.map((ms) => sumifChain(ms, rowNum, "I"))]);
+  }
+
+  const lastRow = rows.length;
+  if (lastRow > 1) {
+    // Una fila por cohorte, que es la comparación que hace INV-3 (dentro de la promoción). Las de
+    // UN SOLO miembro se omiten: su MAXIFS-MINIFS vale 0 por definición y una fila permanente a 0
+    // se lee como «equilibrado» cuando en realidad no hay con quién comparar. INV-3 tampoco compara
+    // ahí (es el mismo criterio del aviso de C-3: solo cuando alguna cohorte tiene ≥2 miembros).
+    const porCohorte = new Map();
+    for (const f of rows.slice(1, lastRow)) porCohorte.set(f[1], (porCohorte.get(f[1]) || 0) + 1);
+    const cohortes = [...porCohorte.keys()].filter((c) => porCohorte.get(c) >= 2).sort();
+    if (cohortes.length === 0) return { sheetName: `Contaje Trimestral ${cursoLabel(curso)}`, rows: rectangular([...rows, [], [NOTA_LIMITES]]) };
+
+    rows.push([]);
+    rows.push(["Dif. máx-mín por cohorte", "", ...TRIMESTRES_ORDEN.map(() => "")]);
+    for (const c of cohortes) {
+      const fila = [`Cohorte ${c}`, c];
+      for (let t = 0; t < TRIMESTRES_ORDEN.length; t++) {
+        const col = columnLetter(3 + t); // C, D, E, F
+        fila.push(`=MAXIFS($${col}$2:$${col}$${lastRow},$B$2:$B$${lastRow},$B${rows.length + 1})-MINIFS($${col}$2:$${col}$${lastRow},$B$2:$B$${lastRow},$B${rows.length + 1})`);
+      }
+      rows.push(fila);
+    }
+  }
+  rows.push([], [NOTA_LIMITES]);
+  return { sheetName: `Contaje Trimestral ${cursoLabel(curso)}`, rows: rectangular(rows) };
+}
+
+  return { cursoLabel, monthSheetName, columnLetter, buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows };
 })();
 
 // ── API pública ──
-var Domain = Object.assign({}, Calendar, Residents, Tally, Accumulate, Thirdpost, Equity, Validate, Responsible, Cuadrante, Projection);
+var Domain = Object.assign({}, Calendar, Residents, Tally, Absences, Imaginaria, Accumulate, Thirdpost, Equity, Validate, Responsible, Cuadrante, Projection);
