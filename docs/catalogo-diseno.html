@@ -219,7 +219,7 @@ footer{color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);padd
       verdad — la insignia de nivel, el estado del cuadrante y la celda de la rejilla. Se mide con
       la fórmula de WCAG 2.1 contra el mínimo AA de texto normal (4,5:1); todos estos textos van
       en negrita y por debajo de 14px, así que no les vale el umbral de texto grande.
-      <b>4 de 14</b> parejas se quedan por debajo.
+      <b>0 de 14</b> parejas se quedan por debajo.
     </p>
     <div class="tabla-wrap">
       <table>
@@ -241,10 +241,10 @@ footer{color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);padd
 </tr>
 <tr>
   <th scope="row">Nivel R2</th>
-  <td><span class="chip" style="background:#5BA3D0;color:#fff">R2</span></td>
-  <td><code>#fff</code> sobre <code>#5BA3D0</code></td>
-  <td class="num">2.8:1</td>
-  <td><span class="verdict no">bajo (AA pide 4.5)</span></td>
+  <td><span class="chip" style="background:#5BA3D0;color:#1a1a2e">R2</span></td>
+  <td><code>#1a1a2e</code> sobre <code>#5BA3D0</code></td>
+  <td class="num">6.2:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
 </tr>
 <tr>
   <th scope="row">Nivel R1</th>
@@ -255,24 +255,24 @@ footer{color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);padd
 </tr>
 <tr>
   <th scope="row">Estado BORRADOR</th>
-  <td><span class="chip" style="background:#E0E7EF;color:#6B7280">📝 Borrador</span></td>
-  <td><code>#6B7280</code> sobre <code>#E0E7EF</code></td>
-  <td class="num">3.9:1</td>
-  <td><span class="verdict no">bajo (AA pide 4.5)</span></td>
+  <td><span class="chip" style="background:#E0E7EF;color:#4B5563">📝 Borrador</span></td>
+  <td><code>#4B5563</code> sobre <code>#E0E7EF</code></td>
+  <td class="num">6.1:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
 </tr>
 <tr>
   <th scope="row">Estado VALIDADO</th>
-  <td><span class="chip" style="background:#EBF3FB;color:#2E75B6">✅ Validado</span></td>
-  <td><code>#2E75B6</code> sobre <code>#EBF3FB</code></td>
-  <td class="num">4.3:1</td>
-  <td><span class="verdict no">bajo (AA pide 4.5)</span></td>
+  <td><span class="chip" style="background:#EBF3FB;color:#1F4E79">✅ Validado</span></td>
+  <td><code>#1F4E79</code> sobre <code>#EBF3FB</code></td>
+  <td class="num">7.7:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
 </tr>
 <tr>
   <th scope="row">Estado PUBLICADO</th>
-  <td><span class="chip" style="background:#E2EFDA;color:#70AD47">📢 Publicado</span></td>
-  <td><code>#70AD47</code> sobre <code>#E2EFDA</code></td>
-  <td class="num">2.3:1</td>
-  <td><span class="verdict no">bajo (AA pide 4.5)</span></td>
+  <td><span class="chip" style="background:#E2EFDA;color:#375623">📢 Publicado</span></td>
+  <td><code>#375623</code> sobre <code>#E2EFDA</code></td>
+  <td class="num">7:1</td>
+  <td><span class="verdict ok">cumple AA</span></td>
 </tr>
 <tr>
   <th scope="row">Código G</th>
@@ -367,7 +367,7 @@ footer{color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);padd
     <h2>Nivel de residencia</h2>
     <p class="nota">Más oscuro, más veterano. El nivel nunca se almacena: se deriva de las fechas de cada residente.</p>
     <div class="pills">
-      <span class="chip" style="background:#1F4E79;color:#fff;padding:6px 14px">R4</span><span class="chip" style="background:#2E75B6;color:#fff;padding:6px 14px">R3</span><span class="chip" style="background:#5BA3D0;color:#fff;padding:6px 14px">R2</span><span class="chip" style="background:#9DC3E6;color:#1F4E79;padding:6px 14px">R1</span>
+      <span class="chip" style="background:#1F4E79;color:#fff;padding:6px 14px">R4</span><span class="chip" style="background:#2E75B6;color:#fff;padding:6px 14px">R3</span><span class="chip" style="background:#5BA3D0;color:#1a1a2e;padding:6px 14px">R2</span><span class="chip" style="background:#9DC3E6;color:#1F4E79;padding:6px 14px">R1</span>
     </div>
   </section>
 
@@ -375,7 +375,7 @@ footer{color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);padd
     <h2>Estado del cuadrante</h2>
     <p class="nota">Un solo mapa por estado (color, fondo y etiqueta juntos), para que no puedan desincronizarse entre sí.</p>
     <div class="pills">
-      <span class="chip" style="background:#E0E7EF;color:#6B7280;padding:6px 14px" title="BORRADOR">📝 Borrador</span><span class="chip" style="background:#EBF3FB;color:#2E75B6;padding:6px 14px" title="VALIDADO">✅ Validado</span><span class="chip" style="background:#E2EFDA;color:#70AD47;padding:6px 14px" title="PUBLICADO">📢 Publicado</span>
+      <span class="chip" style="background:#E0E7EF;color:#4B5563;padding:6px 14px" title="BORRADOR">📝 Borrador</span><span class="chip" style="background:#EBF3FB;color:#1F4E79;padding:6px 14px" title="VALIDADO">✅ Validado</span><span class="chip" style="background:#E2EFDA;color:#375623;padding:6px 14px" title="PUBLICADO">📢 Publicado</span>
     </div>
   </section>
 
