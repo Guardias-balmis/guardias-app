@@ -101,5 +101,9 @@ planeada — y ya la cubren INV-5 (bloquea la asignación) e INV-6
 un residente de baja no resta disponibilidad ni cuenta para la
 concentración por nivel en esta simulación.
 
-Queda como `aceptado`, no `implementado`: ninguno de estos tres
-cálculos ni la ventana de 3 meses existen todavía en `v2/domain/`.
+**Implementada el 2026-08-07** (mismo día): `v2/domain/blockPreview.js`
+(`previewBloqueoRisk`), cableada en `crearBloqueo` de
+`server/src/router.js` — bloquea (`error`) solo dentro de la ventana de
+3 meses, y devuelve `riesgos` informativos (`aviso`) en la respuesta
+cuando no bloquea. 10 tests nuevos en `blockPreview.test.js`, 622/622
+en verde.

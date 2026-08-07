@@ -19,6 +19,7 @@ import { parseISO } from "../../v2/domain/calendar.js";
 import { canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
 import { groupOnDate } from "../../v2/domain/residents.js";
 import { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible } from "../../v2/domain/responsible.js";
+import { previewBloqueoRisk } from "../../v2/domain/blockPreview.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -59,7 +60,7 @@ function makeDeps(overrides = {}) {
     now: 1_000_000, today: "2027-07-16",
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto, ss, emails,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
-    domain: { absences, parseISO, canEdit, stateAfterEdit, groupOnDate, eligibleCandidates, resolveMethod, drawResponsible, validateResponsible },
+    domain: { absences, parseISO, canEdit, stateAfterEdit, groupOnDate, eligibleCandidates, resolveMethod, drawResponsible, validateResponsible, previewBloqueoRisk },
     newSeed: () => "semilla-fija", // el sorteo es puro dado (candidatos, semilla): fijarla lo hace reproducible
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
