@@ -43,3 +43,24 @@ administrador" que ya rebajó casi todo lo demás a `aviso` (V-14) — un
 alguna de las tres partes no usa la app.
 
 Ver la fila `P-10` en `spec.md` §8.
+
+## Decisión (2026-08-07, directa del autor)
+
+No hace falta modelar visto bueno de tutoría ni de Jefe de Servicio: son
+partes que no usan la app hoy, y exigir su aprobación digital dejaría
+una vacación de evento sin forma de aprobarse el día que alguna de las
+dos no responda — el mismo motivo estructural que ya rebajó casi todo
+lo demás a `aviso` (V-14, "la app sobrevive sin administrador").
+
+El único criterio que se retiene es el de **compañeros de guardia**, y
+se reduce a algo ya computable: que la guardia siga cuadrando entre los
+residentes del mismo grupo si esa vacación se aprueba. Eso es
+exactamente lo que propone `P-13` (simulación preventiva de cobertura,
+umbrales espejo de INV-1/INV-2) — P-10 no necesita una entidad de
+aprobación propia ni un tercer/cuarto flag: converge con el mecanismo
+de P-13, aplicado en concreto a las fechas de Navidad/despedida que ya
+cubre INV-10.
+
+Queda como `aceptado`, no `implementado`: depende de que P-13 se
+implemente primero (hoy sigue `propuesto`), porque la comprobación de
+"cuadra el calendario" es su mecanismo, no uno nuevo.
