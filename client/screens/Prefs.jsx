@@ -183,6 +183,10 @@ function Voluntariado3P({ api, showToast }) {
   const [error, setError] = useState(null);
   const [acepto, setAcepto] = useState(false);
   const [busy, setBusy] = useState(false);
+  // El compromiso de permanencia y el checkbox solo se muestran cuando alguien pide apuntarse
+  // de verdad — antes salían siempre, apenas se entraba a la pantalla, como si fuera el estado
+  // por defecto de la sección en vez de una acción que hay que solicitar.
+  const [solicitando, setSolicitando] = useState(false);
 
   const cargar = async () => {
     const r = await api.estadoVoluntariado3P();
@@ -194,7 +198,7 @@ function Voluntariado3P({ api, showToast }) {
     setBusy(true);
     const r = await fn();
     setBusy(false);
-    if (r.ok) { showToast(ok); setAcepto(false); cargar(); }
+    if (r.ok) { showToast(ok); setAcepto(false); setSolicitando(false); cargar(); }
     else showToast(r.error, "err");
   };
 
@@ -242,7 +246,7 @@ function Voluntariado3P({ api, showToast }) {
             </div>
           )}
         </>
-      ) : (
+      ) : solicitando ? (
         <>
           <div style={{
             background: COLOR.gray, borderLeft: `4px solid ${COLOR.orange}`,
@@ -258,10 +262,19 @@ function Voluntariado3P({ api, showToast }) {
               Entiendo que me comprometo a mantenerme {meses} meses.
             </span>
           </label>
-          <Btn onClick={() => accion(() => api.ofrecerse3P(true), "Te has apuntado al tercer puesto ✓")} disabled={busy || !acepto}>
-            Apuntarme al tercer puesto
-          </Btn>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn onClick={() => accion(() => api.ofrecerse3P(true), "Te has apuntado al tercer puesto ✓")} disabled={busy || !acepto}>
+              Confirmar
+            </Btn>
+            <Btn onClick={() => { setSolicitando(false); setAcepto(false); }} disabled={busy} color={COLOR.gray} textColor={COLOR.blueDark}>
+              Cancelar
+            </Btn>
+          </div>
         </>
+      ) : (
+        <Btn onClick={() => setSolicitando(true)} color={COLOR.gray} textColor={COLOR.blueDark}>
+          + Apuntarme al tercer puesto
+        </Btn>
       )}
 
       <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 10 }}>
