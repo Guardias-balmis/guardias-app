@@ -16,6 +16,7 @@ import { makeStore } from "../src/sheets-store.js";
 import { absences, BLOQUEA_ASIGNACION } from "../../v2/domain/absences.js";
 import { groupOnDate } from "../../v2/domain/residents.js";
 import { parseISO } from "../../v2/domain/calendar.js";
+import { previewBloqueoRisk } from "../../v2/domain/blockPreview.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -38,6 +39,10 @@ function fakeSS(rows = {}) {
 const MAYOR = { id: "uuid-mayor", nombre: "Ana", email: "ana@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
 const OTRO_MAYOR = { id: "uuid-otro", nombre: "Bea", email: "bea@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
 const PEQUE = { id: "uuid-peque", nombre: "Iván", email: "peque@gmail.com", fechaInicio: "2027-05-25", fechaFin: "2031-05-24" };
+// Segundo Pequeño del mismo nivel que Iván (P-13, spec.md §8): sin él, Iván sería el único
+// residente de su grupo y CUALQUIER vacación suya dispararía el riesgo de imposibilidad — estos
+// tests son de permisos de ausencia ajena, no de P-13.
+const OTRO_PEQUE = { id: "uuid-otro-peque", nombre: "Marta", email: "marta@gmail.com", fechaInicio: "2027-05-25", fechaFin: "2031-05-24" };
 let idCounter = 0;
 
 function makeDeps({ mandatoDe = null } = {}) {
@@ -48,7 +53,7 @@ function makeDeps({ mandatoDe = null } = {}) {
     }));
   }
   const ss = fakeSS({
-    residentes: [headerOf(TABLES.residentes), ...[MAYOR, OTRO_MAYOR, PEQUE].map((r) => recordToRow(TABLES.residentes, r))],
+    residentes: [headerOf(TABLES.residentes), ...[MAYOR, OTRO_MAYOR, PEQUE, OTRO_PEQUE].map((r) => recordToRow(TABLES.residentes, r))],
     responsables,
     bloqueos: [headerOf(TABLES.bloqueos)],
   });
@@ -58,7 +63,7 @@ function makeDeps({ mandatoDe = null } = {}) {
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     ss,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
-    domain: { absences, groupOnDate, parseISO },
+    domain: { absences, groupOnDate, parseISO, previewBloqueoRisk },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
     fetchTokeninfo: (idToken) => ({

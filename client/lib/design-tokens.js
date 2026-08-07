@@ -8,6 +8,13 @@ export const COLOR = {
   orange: "#C55A11", orangeLight: "#FCE4D6",
   yellow: "#FFE699", yellowLight: "#FFFDE7",
   red: "#C00000", redLight: "#FCE4D6",
+  // Acentos pastel adicionales (2026-08-07, a pedido del autor: "no solo azul"), pensados para
+  // dar identidad visual a cada sección sin tocar los colores YA auditados por WCAG AA (spec.md
+  // docs/catalogo-diseno.html, PR #12). El texto/borde usa el tono oscuro (>=5:1 sobre blanco,
+  // comprobado); el fondo pastel claro es solo relleno, nunca lleva texto encima directamente.
+  purple: "#6D28D9", purpleLight: "#F3E8FF",
+  turquoise: "#0F766E", turquoiseLight: "#F0FDFA",
+  amber: "#B45309", amberLight: "#FEF3C7",
   gray: "#F5F7FA", grayMid: "#E0E7EF", grayDark: "#6B7280", grayDarker: "#4B5563",
   bodyBg: "#F0F4F8", bodyText: "#1a1a2e",
   scrollThumb: "#C0CCD8", cellBorder: "#E0E7EF", cellText: "#333",

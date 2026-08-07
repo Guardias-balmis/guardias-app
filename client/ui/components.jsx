@@ -4,11 +4,15 @@
 // pantallas consumen estos componentes vía el namespace global, nunca con `import`.
 import { COLOR, RADIUS, SHADOW } from "./client/lib/design-tokens.js";
 
-function Card({ title, children }) {
+// `accent` es opcional (por defecto COLOR.blueDark, como siempre): un color de acento por
+// sección para que no todo se vea azul (2026-08-07, a pedido del autor). Solo cambia el color
+// del título y el borde bajo él — nunca el fondo de la Card ni el texto del contenido — así
+// que no interfiere con ningún contraste ya auditado dentro de `children`.
+function Card({ title, children, accent = COLOR.blueDark }) {
   return (
     <div style={{ background: "#fff", borderRadius: RADIUS.md, padding: 16, boxShadow: SHADOW.card }}>
       {title && (
-        <div style={{ fontSize: 13, fontWeight: 700, color: COLOR.blueDark, marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.4, paddingBottom: 8, borderBottom: `1px solid ${COLOR.grayMid}` }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: accent, marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.4, paddingBottom: 8, borderBottom: `2px solid ${accent}` }}>
           {title}
         </div>
       )}

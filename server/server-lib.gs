@@ -628,11 +628,29 @@ function handleRequest(rawBody, deps) {
             residenteId = req.residenteId;
           }
 
+          // P-13 (spec.md §8/§8.1, decisión 2026-08-07): simulación preventiva de cobertura.
+          // Solo VACACIONES/ROTACION pasan por aquí — BAJA es impredecible, no se "previene".
+          let riesgos = [];
+          if (req.motivo === "VACACIONES" || req.motivo === "ROTACION") {
+            const preview = deps.domain.previewBloqueoRisk(
+              { residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo },
+              { residentes: allResidentes(deps), bloqueosActivos: allBloqueos(deps), today: deps.today },
+            );
+            if (preview.bloquea) {
+              return {
+                ok: false,
+                error: "el bloqueo dejaría algún día sin nadie disponible de ese grupo dentro de los próximos 3 meses",
+                riesgos: preview.riesgos,
+              };
+            }
+            riesgos = preview.riesgos;
+          }
+
           const id = deps.store.appendRecord("bloqueos", {
             residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo,
             provincia: req.provincia, guardiasEnCentroExterno: req.guardiasEnCentroExterno, activo: true,
           });
-          return { ok: true, id, residenteId };
+          return { ok: true, id, residenteId, riesgos };
         });
 
       case "misBloqueos":

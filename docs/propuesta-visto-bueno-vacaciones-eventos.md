@@ -61,6 +61,7 @@ aprobación propia ni un tercer/cuarto flag: converge con el mecanismo
 de P-13, aplicado en concreto a las fechas de Navidad/despedida que ya
 cubre INV-10.
 
-Queda como `aceptado`, no `implementado`: depende de que P-13 se
-implemente primero (hoy sigue `propuesto`), porque la comprobación de
-"cuadra el calendario" es su mecanismo, no uno nuevo.
+**Implementada el 2026-08-07** (mismo día que P-13): sin código propio,
+satisfecha por `v2/domain/blockPreview.js`, que se aplica a cualquier
+`Bloqueo` de VACACIONES/ROTACION — incluidas las fechas de evento que
+cubre este documento — no solo a un caso especial.

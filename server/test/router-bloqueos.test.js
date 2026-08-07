@@ -9,6 +9,7 @@ import nodeCrypto from "node:crypto";
 import { handleRequest } from "../src/router.js";
 import { absences } from "../../v2/domain/absences.js";
 import { parseISO } from "../../v2/domain/calendar.js";
+import { previewBloqueoRisk } from "../../v2/domain/blockPreview.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 
@@ -30,10 +31,14 @@ function fakeSS(rows = {}) {
   };
 }
 const ANA = { id: "uuid-ana", nombre: "Ana", email: "ana@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
+// Segunda Mayor del mismo grupo/nivel que Ana (P-13, spec.md §8): sin ella, Ana sería la única
+// residente de su grupo y CUALQUIER vacación suya dispararía el riesgo de imposibilidad — estos
+// tests no van de eso, así que hace falta compañía para no acoplarlos a P-13 por accidente.
+const BEA = { id: "uuid-bea", nombre: "Bea", email: "bea@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
 let idCounter = 0;
 function makeDeps(overrides = {}) {
   const ss = fakeSS({
-    residentes: [headerOf(TABLES.residentes), recordToRow(TABLES.residentes, ANA)],
+    residentes: [headerOf(TABLES.residentes), ...[ANA, BEA].map((r) => recordToRow(TABLES.residentes, r))],
     responsables: [headerOf(TABLES.responsables)],
     bloqueos: [headerOf(TABLES.bloqueos)],
   });
@@ -43,7 +48,7 @@ function makeDeps(overrides = {}) {
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
     // `parseISO` porque `crearBloqueo` valida el rango de verdad (no por orden lexicográfico).
-    domain: { absences, parseISO },
+    domain: { absences, parseISO, previewBloqueoRisk },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
     fetchTokeninfo: () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "ana@gmail.com", email_verified: "true", sub: "g-1", exp: String(2_000_000), nonce: [...nonces][0] }),

@@ -9,6 +9,7 @@
 import { COLOR, SHADOW, S } from "./client/lib/design-tokens.js";
 import { datesOfMonth, weekday, compareISO, addDays } from "./v2/domain/calendar.js";
 import { puedeMoverCiclo } from "./client/lib/permisos.js";
+import { violationText } from "./client/lib/violations.js";
 
 const { useState, useEffect } = React;
 const { Card, SectionTitle, Btn, Aviso } = window.UI;
@@ -20,6 +21,9 @@ const DEFAULT_PREFS = {
   notas: "",
 };
 const MOTIVO_LABEL = { VACACIONES: "Vacaciones", ROTACION: "Rotación externa", BAJA: "Baja" };
+// Etiquetas de los riesgos de P-13 (spec.md §8/§8.1, blockPreview.js) — el `tipo` que devuelve
+// el dominio es un identificador estable, no texto pensado para pantalla.
+const RIESGO_LABEL = { IMPOSIBILIDAD: "Riesgo de cobertura", SOBRECARGA: "Riesgo de sobrecarga", CONCENTRACION_NIVEL: "Varios del mismo año ausentes" };
 
 function nombreMesDe(anio, mes) {
   const s = new Date(Date.UTC(anio, mes - 1, 1)).toLocaleDateString("es-ES", { month: "long", year: "numeric", timeZone: "UTC" });
@@ -49,13 +53,14 @@ function Toggle({ on, onChange, label }) {
   );
 }
 
-function Counter({ value, onChange, min, max }) {
+function Counter({ value, onChange, min, max, accent = COLOR.blue, bg = COLOR.bluePale }) {
+  const btnStyle = { ...S.counterBtn, borderColor: accent, color: accent, background: bg };
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-      <button style={{ ...S.counterBtn, opacity: value <= min ? 0.4 : 1 }} disabled={value <= min}
+      <button style={{ ...btnStyle, opacity: value <= min ? 0.4 : 1 }} disabled={value <= min}
         onClick={() => onChange(Math.max(min, value - 1))}>−</button>
       <div style={{ fontSize: 20, fontWeight: 700, color: COLOR.blueDark, minWidth: 26, textAlign: "center" }}>{value}</div>
-      <button style={{ ...S.counterBtn, opacity: value >= max ? 0.4 : 1 }} disabled={value >= max}
+      <button style={{ ...btnStyle, opacity: value >= max ? 0.4 : 1 }} disabled={value >= max}
         onClick={() => onChange(Math.min(max, value + 1))}>+</button>
     </div>
   );
@@ -107,7 +112,7 @@ function NuevoBloqueo({ anio, mes, onCreated, showToast, api, paraOtros, residen
     if (ajena) extra.residenteId = residenteId;
     const r = await api.crearBloqueo(desde, hasta, motivo, extra);
     setSaving(false);
-    if (r.ok) { showToast(ajena ? "Ausencia registrada ✓" : "Bloqueo añadido ✓"); onCreated(); }
+    if (r.ok) { showToast(ajena ? "Ausencia registrada ✓" : "Bloqueo añadido ✓"); onCreated(r.riesgos); }
     else showToast("Error añadiendo el bloqueo: " + r.error, "err");
   };
 
@@ -179,6 +184,10 @@ function Voluntariado3P({ api, showToast }) {
   const [error, setError] = useState(null);
   const [acepto, setAcepto] = useState(false);
   const [busy, setBusy] = useState(false);
+  // El compromiso de permanencia y el checkbox solo se muestran cuando alguien pide apuntarse
+  // de verdad — antes salían siempre, apenas se entraba a la pantalla, como si fuera el estado
+  // por defecto de la sección en vez de una acción que hay que solicitar.
+  const [solicitando, setSolicitando] = useState(false);
 
   const cargar = async () => {
     const r = await api.estadoVoluntariado3P();
@@ -190,7 +199,7 @@ function Voluntariado3P({ api, showToast }) {
     setBusy(true);
     const r = await fn();
     setBusy(false);
-    if (r.ok) { showToast(ok); setAcepto(false); cargar(); }
+    if (r.ok) { showToast(ok); setAcepto(false); setSolicitando(false); cargar(); }
     else showToast(r.error, "err");
   };
 
@@ -198,7 +207,7 @@ function Voluntariado3P({ api, showToast }) {
   // ninguna forma de apuntarse hasta recargar la página entera.
   if (error) {
     return (
-      <Card title="🩺 Tercer puesto">
+      <Card title="🩺 Tercer puesto" accent={COLOR.purple}>
         <Aviso>No se pudo cargar: {error}</Aviso>
         <div style={{ marginTop: 10 }}>
           <Btn onClick={() => { setError(null); cargar(); }} color={COLOR.gray} textColor={COLOR.blueDark}>Reintentar</Btn>
@@ -206,11 +215,11 @@ function Voluntariado3P({ api, showToast }) {
       </Card>
     );
   }
-  if (!estado) return <Card title="🩺 Tercer puesto"><div style={{ fontSize: 13, color: COLOR.grayDark }}>Cargando…</div></Card>;
+  if (!estado) return <Card title="🩺 Tercer puesto" accent={COLOR.purple}><div style={{ fontSize: 13, color: COLOR.grayDark }}>Cargando…</div></Card>;
 
   const meses = estado.permanenciaMeses;
   return (
-    <Card title="🩺 Tercer puesto">
+    <Card title="🩺 Tercer puesto" accent={COLOR.purple}>
       <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
         El tercer puesto es <b>siempre voluntario</b>: te apuntas tú, cuando quieras, y puedes
         empezar por el día de la semana que prefieras. A partir de ahí no se repite día hasta
@@ -238,7 +247,7 @@ function Voluntariado3P({ api, showToast }) {
             </div>
           )}
         </>
-      ) : (
+      ) : solicitando ? (
         <>
           <div style={{
             background: COLOR.gray, borderLeft: `4px solid ${COLOR.orange}`,
@@ -254,10 +263,19 @@ function Voluntariado3P({ api, showToast }) {
               Entiendo que me comprometo a mantenerme {meses} meses.
             </span>
           </label>
-          <Btn onClick={() => accion(() => api.ofrecerse3P(true), "Te has apuntado al tercer puesto ✓")} disabled={busy || !acepto}>
-            Apuntarme al tercer puesto
-          </Btn>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn onClick={() => accion(() => api.ofrecerse3P(true), "Te has apuntado al tercer puesto ✓")} disabled={busy || !acepto}>
+              Confirmar
+            </Btn>
+            <Btn onClick={() => { setSolicitando(false); setAcepto(false); }} disabled={busy} color={COLOR.gray} textColor={COLOR.blueDark}>
+              Cancelar
+            </Btn>
+          </div>
         </>
+      ) : (
+        <Btn onClick={() => setSolicitando(true)} color={COLOR.purpleLight} textColor={COLOR.purple}>
+          + Apuntarme al tercer puesto
+        </Btn>
       )}
 
       <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 10 }}>
@@ -282,6 +300,10 @@ function PrefsScreen() {
   // en estadoCuadrante (releído del store), nunca el `rol` del token, que se firmó en el login.
   const [sinResponsable, setSinResponsable] = useState(false);
   const [ajenas, setAjenas] = useState([]);
+  // Avisos de P-13 (spec.md §8/§8.1) del último Bloqueo registrado: `crearBloqueo` los calcula
+  // siempre que no bloquean (si bloquearan, la llamada habría fallado con ok:false y nunca
+  // habríamos llegado a onCreated), pero antes nadie los mostraba — se calculaban y se tiraban.
+  const [riesgosUltimoBloqueo, setRiesgosUltimoBloqueo] = useState([]);
   const puedoRegistrarAjenas = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
 
   const cargarBloqueos = async () => {
@@ -374,8 +396,8 @@ function PrefsScreen() {
         </div>
       </Card>
 
-      <Card title="Guardias máximas">
-        <Counter value={prefs.maxGuardias} min={4} max={6} onChange={set("maxGuardias")} />
+      <Card title="🎯 Guardias que quiero hacer este mes" accent={COLOR.turquoise}>
+        <Counter value={prefs.maxGuardias} min={4} max={6} onChange={set("maxGuardias")} accent={COLOR.turquoise} bg={COLOR.turquoiseLight} />
         <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 8 }}>(normativa: 4–6)</div>
         <div style={{ marginTop: 14 }}>
           <Toggle on={prefs.preferDobles} onChange={set("preferDobles")}
@@ -383,7 +405,7 @@ function PrefsScreen() {
         </div>
       </Card>
 
-      <Card title="🗓️ Vacaciones, rotación y baja">
+      <Card title="🗓️ Vacaciones, rotación y baja" accent={COLOR.orange}>
         <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
           Vacaciones y rotación son informativas: el generador evita asignarte guardia esos
           días, pero puede hacerlo si no queda alternativa — el validador no lo bloquea. La
@@ -444,23 +466,43 @@ function PrefsScreen() {
             </div>
           </div>
         )}
+        {riesgosUltimoBloqueo.length > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            <Aviso>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <b>Simulación preventiva de cobertura:</b>
+                <button onClick={() => setRiesgosUltimoBloqueo([])}
+                  style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0 }}
+                  aria-label="Cerrar aviso">×</button>
+              </div>
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                {riesgosUltimoBloqueo.map((r, i) => (
+                  <li key={i} style={{ marginBottom: 4 }}><b>{RIESGO_LABEL[r.tipo] || r.tipo}:</b> {violationText(r, app.residentes)}</li>
+                ))}
+              </ul>
+            </Aviso>
+          </div>
+        )}
         {showNuevoBloqueo ? (
           <NuevoBloqueo anio={anio} mes={mes} api={api} showToast={showToast}
             paraOtros={puedoRegistrarAjenas} residentes={app.residentes} miId={myResidente.id}
-            onCreated={() => { setShowNuevoBloqueo(false); cargarBloqueos(); cargarAjenas(); }} />
+            onCreated={(riesgos) => {
+              setShowNuevoBloqueo(false); cargarBloqueos(); cargarAjenas();
+              setRiesgosUltimoBloqueo(riesgos || []);
+            }} />
         ) : (
-          <Btn onClick={() => setShowNuevoBloqueo(true)} color={COLOR.gray} textColor={COLOR.blueDark}>+ Añadir</Btn>
+          <Btn onClick={() => { setShowNuevoBloqueo(true); setRiesgosUltimoBloqueo([]); }} color={COLOR.orangeLight} textColor={COLOR.orange}>+ Añadir</Btn>
         )}
       </Card>
 
       <Voluntariado3P api={api} showToast={showToast} />
 
-      <Card title="Fechas a evitar">
+      <Card title="🚫 Fechas a evitar" accent={COLOR.amber}>
         <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10 }}>
           Toca las fechas en las que preferirías no tener guardia (se minimiza, no se prohíbe).
         </div>
         <DateGrid anio={anio} mes={mes} selected={prefs.fechasEvitar} bloqueadas={fechasBloqueadas}
-          onToggle={(f) => toggleFecha("fechasEvitar", f)} color={COLOR.orange} />
+          onToggle={(f) => toggleFecha("fechasEvitar", f)} color={COLOR.amber} />
       </Card>
 
       <Card title="Notas">
