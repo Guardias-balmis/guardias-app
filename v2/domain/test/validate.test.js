@@ -488,17 +488,36 @@ test("INV-7: rotación en Alicante con 1 viernes + 1 sábado en el periodo es v�
   assert.equal(v.filter((x) => x.invariante === "INV-7").length, 0);
 });
 
-test("INV-7: dos viernes sin sábado → falta el sábado", () => {
+test("INV-7 (P-6, disyunción): dos viernes cubiertos sin ningún sábado → válido, un viernes ya basta", () => {
   const M2 = R("M2", "2024-05-27", "2028-05-26");
   const asgs = [asg("M2", "2026-11-06", "G"), asg("M2", "2026-11-20", "G")];
   const v = validateMonth({
     mes: 11, anio: 2026, residentes: [M2], asignaciones: asgs,
     bloqueos: [blk("M2", "2026-11-02", "2026-11-29", "ROTACION", { provincia: "Murcia" })],
   });
+  assert.equal(v.filter((x) => x.invariante === "INV-7").length, 0);
+});
+
+test("INV-7 (P-6, disyunción): un sábado cubierto sin ningún viernes → válido, simétrico al caso anterior", () => {
+  const M2s = R("M2s", "2024-05-27", "2028-05-26");
+  const asgs = [asg("M2s", "2026-11-07", "G")]; // sábado
+  const v = validateMonth({
+    mes: 11, anio: 2026, residentes: [M2s], asignaciones: asgs,
+    bloqueos: [blk("M2s", "2026-11-02", "2026-11-29", "ROTACION", { provincia: "Murcia" })],
+  });
+  assert.equal(v.filter((x) => x.invariante === "INV-7").length, 0);
+});
+
+test("INV-7 (P-6, disyunción): ni viernes ni sábado cubiertos → violación (antes bastaba con uno faltante)", () => {
+  const M2n = R("M2n", "2024-05-27", "2028-05-26");
+  const v = validateMonth({
+    mes: 11, anio: 2026, residentes: [M2n], asignaciones: [],
+    bloqueos: [blk("M2n", "2026-11-02", "2026-11-29", "ROTACION", { provincia: "Murcia" })],
+  });
   const i7 = v.filter((x) => x.invariante === "INV-7");
   assert.equal(i7.length, 1);
+  assert.match(i7[0].detalle, /viernes/i);
   assert.match(i7[0].detalle, /s[áa]bado/i);
-  assert.doesNotMatch(i7[0].detalle, /falta.*viernes/i);
 });
 
 test("INV-7: guardias en el mes pero fuera del periodo → faltan viernes y sábado", () => {
@@ -799,9 +818,12 @@ test("V-14: INV-6, INV-7 e INV-9 avisan, no bloquean (su causa no vive en el cua
   assert.equal(i6.length, 1);
   assert.equal(i6[0].severidad, "aviso");
 
+  // Disyunción (P-6): con un viernes cubierto ya no hay violación que probar, así que este
+  // caso deja el periodo sin ninguna guardia propia (ni viernes ni sábado) para seguir
+  // disparando INV-7 y poder comprobar su severidad.
   const R7 = R("M7", "2024-05-27", "2028-05-26");
   const i7 = validateMonth({
-    mes: 11, anio: 2026, residentes: [R7], asignaciones: [asg("M7", "2026-11-06", "G"), asg("M7", "2026-11-20", "G")],
+    mes: 11, anio: 2026, residentes: [R7], asignaciones: [],
     bloqueos: [blk("M7", "2026-11-02", "2026-11-29", "ROTACION", { provincia: "Murcia" })],
   }).filter((x) => x.invariante === "INV-7");
   assert.equal(i7.length, 1);
