@@ -54,3 +54,52 @@ que cubre el nuevo `Bloqueo`:
   poder pedir vacaciones. Se propone `error` por espejar `INV-1`
   directamente, pero es una decisión de quien lo implemente, no algo
   que este documento cierre.
+
+## Decisión (2026-08-07, directa del autor)
+
+**Compara siempre contra los `Bloqueo` activos ya existentes del mismo
+grupo** (la segunda pregunta abierta no era realmente una alternativa:
+sin esa comparación la simulación no dice nada).
+
+**Riesgo de imposibilidad (check 1) — bloquea, pero solo dentro de la
+ventana de 3 meses.** Las vacaciones/rotaciones a veces se piden con
+mucha más antelación que la sesión en la que se arma el cuadrante (a 3
+meses vista). Bloquear (`error`) un pedido hecho con un año de
+antelación dejaría a alguien sin poder registrar una vacación ya
+hablada y aprobada con tutoría solo porque otros dos la pidieron antes
+y las cosas todavía pueden cambiar. Así que: si el periodo del
+`Bloqueo` cae **dentro de los 3 meses** que ya cubre la sesión de
+armado del cuadrante, `error` — no deja guardar. Si cae **más allá**,
+solo `aviso` — se deja guardar, se asume negociado fuera de la app. No
+existe hoy ningún concepto de "ventana de 3 meses" en el dominio;
+tendría que crearse en la implementación, no hay nada que reaprovechar.
+
+**Riesgo de concentración por nivel (nuevo, no estaba en la propuesta
+original) — siempre `aviso`, nunca bloquea.** Además del riesgo de
+imposibilidad (grupo entero sin nadie disponible) y el de sobrecarga
+(check 2, sin cambios), se añade un tercer eje: si más de 2 residentes
+del **mismo nivel** (R1, R2, R3 o R4 — no grupo Mayor/Pequeño, no
+cohorte) están ausentes (vacaciones/rotación) a la vez, aunque el grupo
+en conjunto siga teniendo gente para cubrir. Es informativo, no
+bloquea, porque sigue siendo factible cubrir con el resto del grupo.
+
+**Cuidado al implementar — nivel, no cohorte.** Esta señal agrupa por
+`nivel` (R1–R4, derivado de fecha, cambia en el aniversario de cada
+residente), **no** por `cohorte` (año calendario de `fechaInicio`, la
+que usa INV-6 para su propio "máx. 2 simultáneos" en rotación).
+`CLAUDE.md` ya marca `cohorte` y `nivel` como "distintas — don't
+conflate them"; reutilizar por error la agrupación de INV-6 aquí mediría
+otra cosa sin que ningún test lo note, porque ambas reglas se *ven*
+igual ("máx. 2 a la vez"). Queda pendiente para la implementación
+decidir con qué nivel se cuenta a un residente cuyo `Bloqueo` cruza su
+propio aniversario (cambia de nivel a mitad del periodo).
+
+**Alcance: BAJA queda fuera de los tres cálculos.** Es impredecible —
+no se puede "prevenir" con antelación como una vacación o rotación
+planeada — y ya la cubren INV-5 (bloquea la asignación) e INV-6
+(ausencias simultáneas). Solo VACACIONES y ROTACION alimentan P-13;
+un residente de baja no resta disponibilidad ni cuenta para la
+concentración por nivel en esta simulación.
+
+Queda como `aceptado`, no `implementado`: ninguno de estos tres
+cálculos ni la ventana de 3 meses existen todavía en `v2/domain/`.
