@@ -1533,6 +1533,10 @@ function validateMonth(ctx) {
   validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, violations);
 
   // ── INV-7: presencia mínima en rotación cercana (solo en el mes de fin) ──
+  // Disyunción, no conjunción (decisión P-6, 2026-08-06): basta con UNA guardia de viernes
+  // O de sábado dentro del periodo, no las dos. La normativa es ambigua en sí misma ("al
+  // menos una de las guardias de viernes y sábado"); el autor decidió la lectura menos
+  // exigente directamente, sin consultar a tutoría — ver spec.md §5.1/§8.1.
   for (const b of absences(bloqueos)) {
     if (!isNearbyRotation(b)) continue;
     const finEnEsteMes = Number(b.hasta.slice(0, 4)) === anio && Number(b.hasta.slice(5, 7)) === mes;
@@ -1540,16 +1544,15 @@ function validateMonth(ctx) {
     const period = eachDate(b.desde, b.hasta);
     const hasFriday = period.some((f) => weekday(f) === "V");
     const hasSaturday = period.some((f) => weekday(f) === "S");
+    if (!hasFriday && !hasSaturday) continue;
     const propias = asignaciones.filter((a) => a.residenteId === b.residenteId && ASIGNACION.has(a.codigo) && inRange(a.fecha, b.desde, b.hasta));
     const cubreV = propias.some((a) => weekday(a.fecha) === "V");
     const cubreS = propias.some((a) => weekday(a.fecha) === "S");
-    const faltan = [];
-    if (hasFriday && !cubreV) faltan.push("viernes");
-    if (hasSaturday && !cubreS) faltan.push("sábado");
-    if (faltan.length) {
-      // Aviso, no error (V-14): puede no existir hueco de viernes o sábado dentro del periodo
-      // sin romper la composición del resto del grupo — no siempre se arregla en el cuadrante.
-      violations.push(aviso("INV-7", `${b.residenteId}: rotación en ${b.provincia} (${b.desde}..${b.hasta}) sin guardia de ${faltan.join(" ni ")} en el cuadrante propio`, { residenteId: b.residenteId }));
+    if (!cubreV && !cubreS) {
+      // Aviso, no error (V-14): puede no existir hueco de viernes ni de sábado dentro del
+      // periodo sin romper la composición del resto del grupo — no siempre se arregla en
+      // el cuadrante.
+      violations.push(aviso("INV-7", `${b.residenteId}: rotación en ${b.provincia} (${b.desde}..${b.hasta}) sin guardia de viernes ni de sábado en el cuadrante propio`, { residenteId: b.residenteId }));
     }
   }
 
