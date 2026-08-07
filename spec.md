@@ -147,7 +147,7 @@ Estado: ✅ implementado y con test · ⏳ pendiente (fase indicada).
 | INV-4 | 3P/cedidas/compradas fuera del cómputo | contaje | — (no emite violación: se aplica excluyendo en `tally`) | ✅ vía `tally`, pero la rama `origen` es **inalcanzable desde la app**: ningún cliente manda `origen` al guardar, así que hoy no existe forma de registrar una guardia cedida o comprada |
 | INV-5 | Ninguna asignación sobre Bloqueo motivo BAJA (vacaciones/rotación ya no bloquean la asignación, decisión V-8). Una ausencia con fecha **ilegible** no se juzga: se aparta y se reporta nombrándola (decisión V-22) | día | error | ✅ |
 | INV-6 | Máx. 2 residentes de la misma promoción en rotación externa simultánea; rotación prioritaria sobre vacaciones | día | **aviso** (V-14: las ausencias ya están concedidas, el cuadrante no puede deshacerlas) | ✅ |
-| INV-7 | Rotación en Alicante/colindante → ≥1 guardia en viernes y ≥1 en sábado dentro del periodo | periodo | **aviso** (V-14; evaluado solo en el mes de fin) | ✅ (ver contrato C-2) |
+| INV-7 | Rotación en Alicante/colindante → ≥1 guardia en viernes **o** ≥1 en sábado dentro del periodo (disyunción, P-6) | periodo | **aviso** (V-14; evaluado solo en el mes de fin) | ✅ (ver contrato C-2; disyunción en vigor desde P-6, 2026-08-06) |
 | INV-8 | 3P: cubrir L→D antes de repetir día (por voluntario); dif ≤ 1 entre voluntarios al cierre; prioridad a días con R1 de mochila | año | **aviso** en las cuatro reglas (decisión V-18: 8a y 8b bajan de error; 8c ya lo era por V-14 y 8d por V-4) | ✅ (en vigor desde V-18: tabla `voluntarios3P` con permanencia de 4 meses, `thirdPostHistoryStart`, `client/lib/thirdpost.js` y cableado en `marcarValidado` y `Calendar.jsx`) |
 | INV-9 | 2×R2 el mismo día: solo desde el 1-dic del año académico con Excepcion justificada, **o** en un día de evento | día | **aviso** si no justificado (V-14: la Excepcion aún no se puede registrar desde la app) | ✅ (fix P0-3: los eventos eximen con independencia del mes) |
 | INV-10 | Navidad y despedida: 2 R2 por sorteo documentado; los de Navidad libres en la despedida | evento | **aviso** (V-4) | ✅ (en vigor desde V-20: tabla `eventos`, sorteo reproducible en `sorteos`, y las filas entrando por `buildMonthContext`) |
@@ -207,8 +207,11 @@ Recordatorio de §0: si esta spec contradice la normativa, gana la normativa.
 - **INV-7** — p.2: «se deberá realizar al menos una de las guardias de viernes y sábado que
   correspondan al periodo». ⚠️ **Redacción ambigua en la propia normativa**: «al menos una de las
   guardias de viernes y sábado» admite leerse como *una de entre {viernes, sábado}* (disyunción) o
-  como *una de viernes y una de sábado* (conjunción). El código implementa la **conjunción**. Ver
-  P-6 en §8: es el único punto donde la ambigüedad es de la fuente y no de la interpretación.
+  como *una de viernes y una de sábado* (conjunción). El código implementaba la conjunción; desde
+  P-6 (§8, decisión directa del autor, 2026-08-06) implementa la **disyunción**. La distinción
+  `provincia` (Alicante/colindante = rotación "cercana", la única que activa INV-7) se mantiene sin
+  cambios: el autor confirmó que rotar en Alicante sigue contando como disponible para el reparto
+  de guardias.
 - **INV-8** — p.2-3: voluntariedad («será siempre voluntario»), lista rotatoria L-D antes de repetir
   día (con el ejemplo del domingo), «la diferencia máxima de 3.º puestos acumulados entre estos
   voluntarios no supere 1 al final del año de residencia», y la prioridad de mochila: «Los Residentes
@@ -359,7 +362,7 @@ Estados: `propuesto` (sin decidir) · `aceptado` (decidido, sin implementar) · 
 | P-3 | Redefinir la **«mochila» del R1** como un tercero que cubre al R1 | `reglas-equidad-descanso.md`, `EQUITY_SYSTEM.md`, `GUARD_COMPOSITION_RULES.md`, `paquete-generacion-prompt.md` | INV-8, INV-1 | **En contra.** p.3 es literal: «Los Residentes que hagan tercer puesto siempre deben cubrir primero los días que haya un R1» | `propuesto` |
 | P-4 | Comparar la equidad **fuera de la cohorte** (R4 con R3) | `EQUITY_SYSTEM.md` (§4), `reglas-equidad-descanso.md` | INV-3, V-2 | **En contra.** «del mismo año formativo» / «del mismo año» aparece cinco veces (p.1, p.2, p.3, p.4) | `propuesto` |
 | P-5 | Mochila del R1 activa de **junio a diciembre** | `EQUITY_SYSTEM.md`, `GUARD_COMPOSITION_RULES.md`, `paquete-generacion-prompt.md` | INV-11, INV-2 | **En contra.** p.1: «En junio, julio y agosto, dado que se organizan sin los R1» | `propuesto` |
-| P-6 | Leer INV-7 como **viernes _o_ sábado** en vez de viernes _y_ sábado | `casos-de-prueba-validador.md` (D3) | INV-7 | **Ambiguo en la fuente.** p.2 dice «al menos una de las guardias de viernes y sábado», que admite ambas lecturas | `propuesto` |
+| P-6 | Leer INV-7 como **viernes _o_ sábado** en vez de viernes _y_ sábado | `casos-de-prueba-validador.md` (D3) | INV-7 | **Ambiguo en la fuente.** p.2 dice «al menos una de las guardias de viernes y sábado», que admite ambas lecturas | `implementado` |
 | P-7 | **Un cuadrante independiente por grupo** (Mayores y Pequeños) en vez de uno único mensual | `casos-de-prueba-validador.md` (G3/CO2) | INV-1, V-9, V-10, V-11 | **Solo en apariencia.** p.1 («Los residentes se dividen en 2 grupos […] Cada grupo elaborará un cuadrante provisional») describe la composición de cada guardia y la organización de cada grupo, no dos unidades de datos — ver decisión V-15 | `rechazado` |
 | P-8 | Comprobar la equidad también **al cierre de cada trimestre**, no solo del año de residencia | `EQUITY_SYSTEM.md`; ya previsto como Fase 7.2 | INV-3 | **A favor.** p.2: «una vez cerrado el cuadrante trimestral, la diferencia de número de guardias entre residentes del mismo año no supere 1» | `implementado` |
 | P-9 | Catálogo cerrado de **tipos de guardia y horarios** (`TipoGuardia`, retribución, tramos) | `GUARD_SHIFT_TIME_RULES.md` | T-1, S-4, INV-12 | **Ausente.** La normativa no menciona horarios, tramos ni retribución en ninguna de sus 4 páginas: extensión sin respaldo normativo, decisión libre del autor | `rechazado` |
@@ -368,7 +371,23 @@ Estados: `propuesto` (sin decidir) · `aceptado` (decidido, sin implementar) · 
 | P-12 | **División de vacaciones entre Navidad y Año Nuevo**: nadie debería estar ausente en las dos ventanas a la vez | `propuesta-division-navidad-anio-nuevo.md` (conocimiento de práctica real del autor, no está en `normativa.pdf`) | Sin invariante existente — distinta de INV-10 (quién cubre los eventos de servicio) y del eje puentesLibres de INV-3 | **Ausente.** La normativa no menciona reparto de vacaciones alrededor de Navidad/Año Nuevo en ninguna de sus 4 páginas — extensión sin respaldo normativo, práctica real del servicio | `propuesto` |
 | P-13 | **Simulación preventiva de cobertura** al registrar un Bloqueo (vacaciones/rotación): reutiliza los umbrales de INV-1 (imposibilidad) e INV-2 (sobrecarga), evaluados antes de construir el Cuadrante en vez de solo después | `propuesta-simulacion-preventiva-cobertura.md` (conocimiento de práctica real del autor, no está en `normativa.pdf`) | INV-1, INV-2 (mismos umbrales, aplicados de forma preventiva) | **Ausente.** p.4 solo dice, en general, que la organización de vacaciones "debe realizarse en consonancia con el resto de grupo de guardias", sin fijar ningún umbral — extensión sin respaldo normativo, práctica real del servicio | `propuesto` |
 
-### 8.1 La que sigue abierta (y las cuatro ya cerradas)
+### 8.1 Las cinco ya cerradas
+
+**P-6, implementada el 2026-08-06 por decisión directa del autor** (no
+se consultó a tutoría — el autor tenía criterio propio y lo usó). La
+normativa es ambigua en sí misma («al menos una de las guardias de
+viernes y sábado»); el código exigía conjunción (viernes **y** sábado).
+Pasa a **disyunción** (viernes **o** sábado): quien rota cerca solo
+necesita cubrir uno de los dos días del periodo, no los dos. Confirmado
+de paso que la distinción `provincia` (Alicante/colindante activa
+INV-7, el resto no) se mantiene sin cambios — rotar en Alicante sigue
+contando como disponible para el reparto. `v2/domain/validate.js`
+actualizado (ya no acumula `faltan` por día, un único chequeo
+"¿cubrió viernes O sábado?"), 3 tests nuevos/reescritos en
+`validate.test.js` (los dos sentidos de la disyunción + el caso que
+sigue violando cuando no se cubre ninguno de los dos) y el escenario de
+severidad de V-14 ajustado para seguir disparando INV-7. Bundle
+regenerado (`npm run build`). 612/612 tests en verde.
 
 **P-9, rechazada el 2026-08-01 por decisión directa del autor** (no
 había normativa que evaluar: la propia fila ya decía "extensión sin
@@ -387,12 +406,6 @@ asignación — la fila de la cola seguía marcada `propuesto` sin que
 nadie la hubiera actualizado tras esa decisión. Marcada `rechazado`
 porque el comportamiento implementado es el contrario al que propone,
 no porque se haya evaluado de nuevo contra la normativa.
-
-**P-6 (ambigüedad real de la fuente).** Es el único punto donde la ambigüedad está en la normativa y
-no en su lectura. El código exige conjunción (una de viernes **y** una de sábado), que es la lectura
-más exigente y la coherente con el propósito declarado en la misma frase («para evitar la sobrecarga
-del resto del grupo»). Si se adopta la disyunción, INV-7 se relaja y hay que reescribir sus tests.
-Se resuelve preguntando a tutoría, no leyendo el PDF otra vez.
 
 **P-7 y P-8, cerradas ambas el 2026-07-26.** Eran las dos donde el contraste dio la razón a `docs/`
 y no a `v2/domain`, y ninguna ha terminado cambiando el modelo de datos:
