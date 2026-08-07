@@ -366,12 +366,27 @@ Estados: `propuesto` (sin decidir) · `aceptado` (decidido, sin implementar) · 
 | P-7 | **Un cuadrante independiente por grupo** (Mayores y Pequeños) en vez de uno único mensual | `casos-de-prueba-validador.md` (G3/CO2) | INV-1, V-9, V-10, V-11 | **Solo en apariencia.** p.1 («Los residentes se dividen en 2 grupos […] Cada grupo elaborará un cuadrante provisional») describe la composición de cada guardia y la organización de cada grupo, no dos unidades de datos — ver decisión V-15 | `rechazado` |
 | P-8 | Comprobar la equidad también **al cierre de cada trimestre**, no solo del año de residencia | `EQUITY_SYSTEM.md`; ya previsto como Fase 7.2 | INV-3 | **A favor.** p.2: «una vez cerrado el cuadrante trimestral, la diferencia de número de guardias entre residentes del mismo año no supere 1» | `implementado` |
 | P-9 | Catálogo cerrado de **tipos de guardia y horarios** (`TipoGuardia`, retribución, tramos) | `GUARD_SHIFT_TIME_RULES.md` | T-1, S-4, INV-12 | **Ausente.** La normativa no menciona horarios, tramos ni retribución en ninguna de sus 4 páginas: extensión sin respaldo normativo, decisión libre del autor | `rechazado` |
-| P-10 | Vacación solicitada en fechas de evento (Navidad/despedida) exige **visto bueno de compañeros de guardia + tutoría + Jefe de Servicio** antes de aprobarse | `propuesta-visto-bueno-vacaciones-eventos.md` (lectura directa de `normativa.pdf`, sin documento previo) | Sin invariante existente — ninguna entidad de aprobación modelada hoy en §2 | **A favor.** p.3, «Eventos del servicio»: «En esas fechas no se puede optar a vacaciones sin el visto bueno de los compañeros de puesta de guardias, de tutoría y del Jefe de Servicio (puesto que cae fuera del periodo vacacional contemplado por GVA)» | `propuesto` |
+| P-10 | Vacación solicitada en fechas de evento (Navidad/despedida): el visto bueno se reduce a que la guardia siga cuadrando entre compañeros del mismo grupo (converge con P-13); tutoría y Jefe de Servicio no se modelan (decisión del autor, 2026-08-07) | `propuesta-visto-bueno-vacaciones-eventos.md` (lectura directa de `normativa.pdf`, sin documento previo) | Sin invariante propio — reutiliza el mecanismo de P-13 | **A favor en la letra** (p.3, «Eventos del servicio»: exige visto bueno de compañeros de guardia, tutoría y Jefe de Servicio), **pero el autor decide no exigir digitalmente las dos partes externas a la app** — mismo criterio estructural que V-14 | `aceptado` |
 | P-11 | Modelo de datos concreto para **Imaginaria** (INV-13): entidad `ImaginariaCobertura` append-only, cola derivada por última cobertura, exclusión de R1 y de quien tenga guardia el día anterior/siguiente a la incidencia, sin exigencia de equidad | `imaginaria-modelo-propuesto.md` (lectura de `normativa.pdf` + respuestas del autor sobre la práctica real, no escritas en la normativa) | INV-13 | **Parcial.** p.4 («-Imaginaria») funda las dos listas, el criterio "lista del grupo de la incidencia" y que cesión/compra no descuenta de la imaginaria; el orden de la lista, la exclusión de R1, la exclusión por proximidad de fecha y la ausencia de exigencia de equidad **no están en la normativa** — son respuestas del autor sobre la práctica real, marcadas como tal en el documento | `implementado` (decisión V-20; se implementa como HERRAMIENTA, sin validación a posteriori, y las tres reglas sin respaldo quedan declaradas en §5.1) |
 | P-12 | **División de vacaciones entre Navidad y Año Nuevo**: nadie debería estar ausente en las dos ventanas a la vez | `propuesta-division-navidad-anio-nuevo.md` (conocimiento de práctica real del autor, no está en `normativa.pdf`) | Sin invariante existente — distinta de INV-10 (quién cubre los eventos de servicio) y del eje puentesLibres de INV-3 | **Ausente.** La normativa no menciona reparto de vacaciones alrededor de Navidad/Año Nuevo en ninguna de sus 4 páginas — extensión sin respaldo normativo, práctica real del servicio | `propuesto` |
 | P-13 | **Simulación preventiva de cobertura** al registrar un Bloqueo (vacaciones/rotación): reutiliza los umbrales de INV-1 (imposibilidad) e INV-2 (sobrecarga), evaluados antes de construir el Cuadrante en vez de solo después | `propuesta-simulacion-preventiva-cobertura.md` (conocimiento de práctica real del autor, no está en `normativa.pdf`) | INV-1, INV-2 (mismos umbrales, aplicados de forma preventiva) | **Ausente.** p.4 solo dice, en general, que la organización de vacaciones "debe realizarse en consonancia con el resto de grupo de guardias", sin fijar ningún umbral — extensión sin respaldo normativo, práctica real del servicio | `propuesto` |
 
-### 8.1 Las cinco ya cerradas
+### 8.1 Las seis ya cerradas
+
+**P-10, aceptada el 2026-08-07 por decisión directa del autor** (no
+implementada todavía). La normativa (p.3) exige visto bueno de
+compañeros de guardia, tutoría **y** Jefe de Servicio para vacaciones
+en fechas de evento; el autor decide no exigir digitalmente el de las
+dos partes que no usan la app, por el mismo motivo estructural de V-14
+("la app sobrevive sin administrador"): bloquear con un visto bueno que
+nadie puede dar dentro de la herramienta deja la vacación sin forma de
+aprobarse. El criterio que se retiene, "compañeros de guardia", se
+reduce a algo ya computable — que la guardia siga cuadrando entre los
+residentes del mismo grupo — que es exactamente el mecanismo que
+propone `P-13`. P-10 no introduce una entidad de aprobación propia:
+converge con P-13, aplicado a las fechas de Navidad/despedida que ya
+cubre INV-10. Queda `aceptado` y no `implementado` porque depende de
+que `P-13` (hoy `propuesto`) se construya primero.
 
 **P-6, implementada el 2026-08-06 por decisión directa del autor** (no
 se consultó a tutoría — el autor tenía criterio propio y lo usó). La
