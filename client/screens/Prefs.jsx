@@ -9,6 +9,7 @@
 import { COLOR, SHADOW, S } from "./client/lib/design-tokens.js";
 import { datesOfMonth, weekday, compareISO, addDays } from "./v2/domain/calendar.js";
 import { puedeMoverCiclo } from "./client/lib/permisos.js";
+import { violationText } from "./client/lib/violations.js";
 
 const { useState, useEffect } = React;
 const { Card, SectionTitle, Btn, Aviso } = window.UI;
@@ -20,6 +21,9 @@ const DEFAULT_PREFS = {
   notas: "",
 };
 const MOTIVO_LABEL = { VACACIONES: "Vacaciones", ROTACION: "Rotación externa", BAJA: "Baja" };
+// Etiquetas de los riesgos de P-13 (spec.md §8/§8.1, blockPreview.js) — el `tipo` que devuelve
+// el dominio es un identificador estable, no texto pensado para pantalla.
+const RIESGO_LABEL = { IMPOSIBILIDAD: "Riesgo de cobertura", SOBRECARGA: "Riesgo de sobrecarga", CONCENTRACION_NIVEL: "Varios del mismo año ausentes" };
 
 function nombreMesDe(anio, mes) {
   const s = new Date(Date.UTC(anio, mes - 1, 1)).toLocaleDateString("es-ES", { month: "long", year: "numeric", timeZone: "UTC" });
@@ -107,7 +111,7 @@ function NuevoBloqueo({ anio, mes, onCreated, showToast, api, paraOtros, residen
     if (ajena) extra.residenteId = residenteId;
     const r = await api.crearBloqueo(desde, hasta, motivo, extra);
     setSaving(false);
-    if (r.ok) { showToast(ajena ? "Ausencia registrada ✓" : "Bloqueo añadido ✓"); onCreated(); }
+    if (r.ok) { showToast(ajena ? "Ausencia registrada ✓" : "Bloqueo añadido ✓"); onCreated(r.riesgos); }
     else showToast("Error añadiendo el bloqueo: " + r.error, "err");
   };
 
@@ -282,6 +286,10 @@ function PrefsScreen() {
   // en estadoCuadrante (releído del store), nunca el `rol` del token, que se firmó en el login.
   const [sinResponsable, setSinResponsable] = useState(false);
   const [ajenas, setAjenas] = useState([]);
+  // Avisos de P-13 (spec.md §8/§8.1) del último Bloqueo registrado: `crearBloqueo` los calcula
+  // siempre que no bloquean (si bloquearan, la llamada habría fallado con ok:false y nunca
+  // habríamos llegado a onCreated), pero antes nadie los mostraba — se calculaban y se tiraban.
+  const [riesgosUltimoBloqueo, setRiesgosUltimoBloqueo] = useState([]);
   const puedoRegistrarAjenas = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
 
   const cargarBloqueos = async () => {
@@ -444,12 +452,32 @@ function PrefsScreen() {
             </div>
           </div>
         )}
+        {riesgosUltimoBloqueo.length > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            <Aviso>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <b>Simulación preventiva de cobertura:</b>
+                <button onClick={() => setRiesgosUltimoBloqueo([])}
+                  style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0 }}
+                  aria-label="Cerrar aviso">×</button>
+              </div>
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                {riesgosUltimoBloqueo.map((r, i) => (
+                  <li key={i} style={{ marginBottom: 4 }}><b>{RIESGO_LABEL[r.tipo] || r.tipo}:</b> {violationText(r, app.residentes)}</li>
+                ))}
+              </ul>
+            </Aviso>
+          </div>
+        )}
         {showNuevoBloqueo ? (
           <NuevoBloqueo anio={anio} mes={mes} api={api} showToast={showToast}
             paraOtros={puedoRegistrarAjenas} residentes={app.residentes} miId={myResidente.id}
-            onCreated={() => { setShowNuevoBloqueo(false); cargarBloqueos(); cargarAjenas(); }} />
+            onCreated={(riesgos) => {
+              setShowNuevoBloqueo(false); cargarBloqueos(); cargarAjenas();
+              setRiesgosUltimoBloqueo(riesgos || []);
+            }} />
         ) : (
-          <Btn onClick={() => setShowNuevoBloqueo(true)} color={COLOR.gray} textColor={COLOR.blueDark}>+ Añadir</Btn>
+          <Btn onClick={() => { setShowNuevoBloqueo(true); setRiesgosUltimoBloqueo([]); }} color={COLOR.gray} textColor={COLOR.blueDark}>+ Añadir</Btn>
         )}
       </Card>
 
