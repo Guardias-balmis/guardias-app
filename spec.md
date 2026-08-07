@@ -369,9 +369,31 @@ Estados: `propuesto` (sin decidir) · `aceptado` (decidido, sin implementar) · 
 | P-10 | Vacación solicitada en fechas de evento (Navidad/despedida): el visto bueno se reduce a que la guardia siga cuadrando entre compañeros del mismo grupo (converge con P-13); tutoría y Jefe de Servicio no se modelan (decisión del autor, 2026-08-07) | `propuesta-visto-bueno-vacaciones-eventos.md` (lectura directa de `normativa.pdf`, sin documento previo) | Sin invariante propio — reutiliza el mecanismo de P-13 | **A favor en la letra** (p.3, «Eventos del servicio»: exige visto bueno de compañeros de guardia, tutoría y Jefe de Servicio), **pero el autor decide no exigir digitalmente las dos partes externas a la app** — mismo criterio estructural que V-14 | `aceptado` |
 | P-11 | Modelo de datos concreto para **Imaginaria** (INV-13): entidad `ImaginariaCobertura` append-only, cola derivada por última cobertura, exclusión de R1 y de quien tenga guardia el día anterior/siguiente a la incidencia, sin exigencia de equidad | `imaginaria-modelo-propuesto.md` (lectura de `normativa.pdf` + respuestas del autor sobre la práctica real, no escritas en la normativa) | INV-13 | **Parcial.** p.4 («-Imaginaria») funda las dos listas, el criterio "lista del grupo de la incidencia" y que cesión/compra no descuenta de la imaginaria; el orden de la lista, la exclusión de R1, la exclusión por proximidad de fecha y la ausencia de exigencia de equidad **no están en la normativa** — son respuestas del autor sobre la práctica real, marcadas como tal en el documento | `implementado` (decisión V-20; se implementa como HERRAMIENTA, sin validación a posteriori, y las tres reglas sin respaldo quedan declaradas en §5.1) |
 | P-12 | **División de vacaciones entre Navidad y Año Nuevo**: nadie debería estar ausente en las dos ventanas a la vez | `propuesta-division-navidad-anio-nuevo.md` (conocimiento de práctica real del autor, no está en `normativa.pdf`) | Sin invariante existente — distinta de INV-10 (quién cubre los eventos de servicio) y del eje puentesLibres de INV-3 | **Ausente.** La normativa no menciona reparto de vacaciones alrededor de Navidad/Año Nuevo en ninguna de sus 4 páginas — extensión sin respaldo normativo, práctica real del servicio | `propuesto` |
-| P-13 | **Simulación preventiva de cobertura** al registrar un Bloqueo (vacaciones/rotación): reutiliza los umbrales de INV-1 (imposibilidad) e INV-2 (sobrecarga), evaluados antes de construir el Cuadrante en vez de solo después | `propuesta-simulacion-preventiva-cobertura.md` (conocimiento de práctica real del autor, no está en `normativa.pdf`) | INV-1, INV-2 (mismos umbrales, aplicados de forma preventiva) | **Ausente.** p.4 solo dice, en general, que la organización de vacaciones "debe realizarse en consonancia con el resto de grupo de guardias", sin fijar ningún umbral — extensión sin respaldo normativo, práctica real del servicio | `propuesto` |
+| P-13 | **Simulación preventiva de cobertura** al registrar un Bloqueo (vacaciones/rotación): riesgo de imposibilidad (espejo INV-1, bloquea solo dentro de 3 meses), riesgo de sobrecarga (espejo INV-2, aviso) y riesgo de concentración por nivel (nuevo, más de 2 del mismo R1–R4 a la vez, aviso) | `propuesta-simulacion-preventiva-cobertura.md` (conocimiento de práctica real del autor, no está en `normativa.pdf`) | INV-1, INV-2 (umbrales espejados) — el eje de concentración por nivel no tiene invariante previo | **Ausente.** p.4 solo dice, en general, que la organización de vacaciones "debe realizarse en consonancia con el resto de grupo de guardias", sin fijar ningún umbral — extensión sin respaldo normativo, práctica real del servicio | `aceptado` |
 
-### 8.1 Las seis ya cerradas
+### 8.1 Las siete ya cerradas
+
+**P-13, aceptada el 2026-08-07 por decisión directa del autor** (no
+implementada todavía). Cierra las tres preguntas que la propuesta
+dejaba abiertas: (a) compara siempre contra los `Bloqueo` activos ya
+existentes del mismo grupo — sin eso la simulación no dice nada; (b) el
+riesgo de imposibilidad (espejo INV-1) bloquea, pero **solo si el
+periodo cae dentro de los 3 meses** que ya cubre la sesión de armado
+del cuadrante — más allá de esa ventana solo avisa, porque las
+vacaciones a veces se piden con mucha más antelación que esa sesión, y
+bloquear un pedido ya hablado con tutoría con un año de antelación
+dejaría a alguien sin poder registrarlo aunque las cosas puedan cambiar
+antes. Se añade un tercer eje no previsto en la propuesta original:
+**riesgo de concentración por nivel** — más de 2 residentes del mismo
+`nivel` (R1, R2, R3 o R4; no grupo, no cohorte) ausentes a la vez,
+siempre `aviso`, nunca bloquea, porque el grupo en conjunto puede seguir
+teniendo cobertura. Ese eje agrupa por `nivel`, no por `cohorte` —
+`CLAUDE.md` ya marca esas dos nociones como fáciles de confundir, y
+aquí el riesgo es real porque INV-6 ya tiene su propio "máx. 2
+simultáneos" pero agrupado por cohorte y solo sobre rotación; ambas
+reglas se ven iguales sin serlo. BAJA queda fuera de los tres cálculos
+por impredecible — ya la cubren INV-5/INV-6 aparte. Ninguno de los tres
+ejes ni la ventana de 3 meses existen todavía en `v2/domain/`.
 
 **P-10, aceptada el 2026-08-07 por decisión directa del autor** (no
 implementada todavía). La normativa (p.3) exige visto bueno de
@@ -386,7 +408,8 @@ residentes del mismo grupo — que es exactamente el mecanismo que
 propone `P-13`. P-10 no introduce una entidad de aprobación propia:
 converge con P-13, aplicado a las fechas de Navidad/despedida que ya
 cubre INV-10. Queda `aceptado` y no `implementado` porque depende de
-que `P-13` (hoy `propuesto`) se construya primero.
+que `P-13` (hoy también `aceptado`, sin implementar) se construya
+primero.
 
 **P-6, implementada el 2026-08-06 por decisión directa del autor** (no
 se consultó a tutoría — el autor tenía criterio propio y lo usó). La
