@@ -54,6 +54,7 @@ const GRUPOS_COLOR = [
   ["Verdes", ["green", "greenMid", "greenLight"], "Validar y publicar: lo que ha salido bien."],
   ["Naranjas y rojos", ["orange", "orangeLight", "red", "redLight"], "Aviso y error. Ojo: `redLight` y `orangeLight` son el MISMO hex, así que el fondo no distingue una baja de unas vacaciones — la distinción real es el borde."],
   ["Amarillos", ["yellow", "yellowLight"], "Vacaciones en la rejilla."],
+  ["Púrpura, turquesa y ámbar", ["purple", "purpleLight", "turquoise", "turquoiseLight", "amber", "amberLight"], "Acentos por sección de Preferencias (2026-08-07): cada tono oscuro es texto/borde (≥5:1 sobre blanco, mismo criterio que el resto de la paleta) y su pareja `Light` es solo relleno pastel, nunca lleva texto encima."],
   ["Grises y base", ["gray", "grayMid", "grayDark", "bodyBg", "bodyText"], "El suelo de la interfaz. `bodyBg` es el fondo de la app; `grayDark`, todo el texto secundario."],
   ["Rejilla", ["scrollThumb", "cellBorder", "cellText"], "Solo la tabla del cuadrante."],
 ];
