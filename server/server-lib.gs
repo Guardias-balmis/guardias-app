@@ -65,7 +65,11 @@ const TABLES = {
   // `bloqueos` — spec.md §5 Fase 4: "distingue DURO vs BLANDO, son cosas distintas". Desde V-8
   // (Fase 5.x) la severidad dentro de `bloqueos` ya no es uniforme: solo motivo BAJA bloquea
   // la asignación (INV-5); VACACIONES/ROTACION son informativas.
-  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles", "bool"), col("fechasEvitar", "json"), col("notas")] },
+  // preferDobles pasó de bool a enum de texto ("" | VIERNES_DOMINGO | JUEVES_SABADO) el
+  // 2026-08-08, a petición del autor — ver client/screens/Prefs.jsx:DOBLETE_LABEL. Las filas
+  // viejas con TRUE/FALSE se leen tal cual (string plana) y no calzan con ningún valor del
+  // nuevo enum: no rompen nada, simplemente no coinciden hasta que el residente vuelva a guardar.
+  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles"), col("fechasEvitar", "json"), col("notas")] },
   // Fase 6.2: ciclo BORRADOR|VALIDADO|PUBLICADO por mes+año (spec.md §2 Cuadrante). Cada fila
   // es UNA transición de estado (append-only, `readLatest` por mes|anio se queda con la
   // última); `actorId`/`fecha` identifican quién la disparó y cuándo, sin distinguir un campo
