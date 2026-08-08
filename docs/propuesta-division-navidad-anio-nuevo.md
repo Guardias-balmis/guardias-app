@@ -77,4 +77,8 @@ mismo residente ya tiene (o esta misma la crea) una ausencia en la
 OTRA ventana también, avisa ahí mismo — misma pantalla, mismo momento
 que los otros tres riesgos de P-13, sin construir nada nuevo.
 
+**Implementada el 2026-08-08** (mismo día): tipo `DIVISION_NAVIDAD_ANIO_NUEVO`,
+7 tests nuevos en `blockPreview.test.js`, 629/629 en verde. Verificado en el
+navegador contra el dev-server.
+
 Ver la fila `P-12` en `spec.md` §8.
