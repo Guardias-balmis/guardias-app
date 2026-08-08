@@ -23,7 +23,10 @@ const DEFAULT_PREFS = {
 const MOTIVO_LABEL = { VACACIONES: "Vacaciones", ROTACION: "Rotación externa", BAJA: "Baja" };
 // Etiquetas de los riesgos de P-13 (spec.md §8/§8.1, blockPreview.js) — el `tipo` que devuelve
 // el dominio es un identificador estable, no texto pensado para pantalla.
-const RIESGO_LABEL = { IMPOSIBILIDAD: "Riesgo de cobertura", SOBRECARGA: "Riesgo de sobrecarga", CONCENTRACION_NIVEL: "Varios del mismo año ausentes" };
+const RIESGO_LABEL = {
+  IMPOSIBILIDAD: "Riesgo de cobertura", SOBRECARGA: "Riesgo de sobrecarga",
+  CONCENTRACION_NIVEL: "Varios del mismo año ausentes", DIVISION_NAVIDAD_ANIO_NUEVO: "Navidad y Año Nuevo a la vez",
+};
 
 function nombreMesDe(anio, mes) {
   const s = new Date(Date.UTC(anio, mes - 1, 1)).toLocaleDateString("es-ES", { month: "long", year: "numeric", timeZone: "UTC" });

@@ -168,6 +168,73 @@ test("sobrecarga: un periodo largo con muy pocos disponibles supera el techo de 
   assert.equal(r.bloquea, false, "sobrecarga nunca bloquea");
 });
 
+// ── P-12: división Navidad/Año Nuevo (spec.md §8/§8.1, decisión 2026-08-08) ──
+
+test("P-12: ausente en Navidad y luego pide Año Nuevo también → avisa", () => {
+  const bloqueosActivos = [b("r3a", "2026-12-23", "2026-12-26", "VACACIONES")]; // ya tiene Navidad
+  const r = previewBloqueoRisk(
+    { residenteId: "r3a", desde: "2026-12-29", hasta: "2027-01-02", motivo: "VACACIONES" }, // pide Año Nuevo
+    { residentes: RESIDENTES, bloqueosActivos, today: "2026-11-01" },
+  );
+  const div = r.riesgos.find((x) => x.tipo === "DIVISION_NAVIDAD_ANIO_NUEVO");
+  assert.ok(div, "debe avisar: ausente en las dos ventanas");
+  assert.equal(div.severidad, "aviso");
+  assert.equal(div.anio, 2026);
+  assert.equal(r.bloquea, false);
+});
+
+test("P-12: la ventana de Año Nuevo se estira hasta Reyes (6 de enero)", () => {
+  const bloqueosActivos = [b("r3a", "2026-12-23", "2026-12-24", "VACACIONES")];
+  const r = previewBloqueoRisk(
+    { residenteId: "r3a", desde: "2027-01-05", hasta: "2027-01-06", motivo: "ROTACION" }, // solo toca Reyes
+    { residentes: RESIDENTES, bloqueosActivos, today: "2026-11-01" },
+  );
+  assert.ok(r.riesgos.some((x) => x.tipo === "DIVISION_NAVIDAD_ANIO_NUEVO"), "Reyes cuenta como Año Nuevo");
+});
+
+test("P-12: un día después de Reyes ya no cuenta como Año Nuevo", () => {
+  const bloqueosActivos = [b("r3a", "2026-12-23", "2026-12-24", "VACACIONES")];
+  const r = previewBloqueoRisk(
+    { residenteId: "r3a", desde: "2027-01-07", hasta: "2027-01-09", motivo: "VACACIONES" },
+    { residentes: RESIDENTES, bloqueosActivos, today: "2026-11-01" },
+  );
+  assert.deepEqual(r.riesgos.filter((x) => x.tipo === "DIVISION_NAVIDAD_ANIO_NUEVO"), []);
+});
+
+test("P-12: solo Navidad, sin nada en Año Nuevo, no avisa", () => {
+  const r = previewBloqueoRisk(
+    { residenteId: "r3a", desde: "2026-12-23", hasta: "2026-12-26", motivo: "VACACIONES" },
+    { residentes: RESIDENTES, bloqueosActivos: [], today: "2026-11-01" },
+  );
+  assert.deepEqual(r.riesgos.filter((x) => x.tipo === "DIVISION_NAVIDAD_ANIO_NUEVO"), []);
+});
+
+test("P-12: BAJA en la otra ventana no cuenta (es impredecible, fuera del cómputo)", () => {
+  const bloqueosActivos = [b("r3a", "2026-12-23", "2026-12-26", "BAJA")];
+  const r = previewBloqueoRisk(
+    { residenteId: "r3a", desde: "2026-12-29", hasta: "2027-01-02", motivo: "VACACIONES" },
+    { residentes: RESIDENTES, bloqueosActivos, today: "2026-11-01" },
+  );
+  assert.deepEqual(r.riesgos.filter((x) => x.tipo === "DIVISION_NAVIDAD_ANIO_NUEVO"), []);
+});
+
+test("P-12: es por residente individual — la ausencia de OTRO en la otra ventana no cuenta", () => {
+  const bloqueosActivos = [b("r3b", "2026-12-23", "2026-12-26", "VACACIONES")]; // otro residente, no r3a
+  const r = previewBloqueoRisk(
+    { residenteId: "r3a", desde: "2026-12-29", hasta: "2027-01-02", motivo: "VACACIONES" },
+    { residentes: RESIDENTES, bloqueosActivos, today: "2026-11-01" },
+  );
+  assert.deepEqual(r.riesgos.filter((x) => x.tipo === "DIVISION_NAVIDAD_ANIO_NUEVO"), []);
+});
+
+test("P-12: un Bloqueo que ya cubre las dos ventanas de punta a punta avisa por sí solo", () => {
+  const r = previewBloqueoRisk(
+    { residenteId: "r3a", desde: "2026-12-20", hasta: "2027-01-10", motivo: "VACACIONES" },
+    { residentes: RESIDENTES, bloqueosActivos: [], today: "2026-11-01" },
+  );
+  assert.ok(r.riesgos.some((x) => x.tipo === "DIVISION_NAVIDAD_ANIO_NUEVO"));
+});
+
 test("residenteId desconocido lanza, no falla en silencio", () => {
   assert.throws(() => previewBloqueoRisk(
     { residenteId: "fantasma", desde: "2026-03-10", hasta: "2026-03-12", motivo: "VACACIONES" },
