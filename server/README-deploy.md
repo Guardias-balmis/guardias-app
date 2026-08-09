@@ -24,8 +24,10 @@
    a mano no rompe nada pero se pierde en la siguiente publicación.
 
 2. **Proyecto de Apps Script** (script.google.com, misma cuenta): crea un proyecto y añade
-   tres archivos con el contenido de `domain.gs`, `server-lib.gs` y `Code.gs`.
-   *(Alternativa versionada: `clasp` — ver R10 del ADR-001; el editor web es el respaldo.)*
+   tres archivos con el contenido de `domain.gs`, `server-lib.gs` y `Code.gs`. Copia el
+   **Script ID** (Configuración del proyecto) — hace falta en el paso 6.
+   *(El editor web es el respaldo manual; `clasp` — R10 del ADR-001 — es la vía normal desde
+   que existe este runbook con el paso 6.)*
 
 3. **OAuth Client** en console.cloud.google.com (proyecto GCP **de la cuenta del servicio**):
    credencial OAuth 2.0 de tipo *Aplicación web*; en *Authorized JavaScript origins* añade
@@ -42,6 +44,40 @@
    - ⚠️ Cualquier otro modo rompe el CORS del cliente (redirección a login sin `ACAO`).
    - Copia la **URL `/exec`** y fíjala en el cliente (Fase 3). Al re-desplegar, usa *Editar
      implementación → Nueva versión* para **conservar la URL** (crear una nueva la cambia — DR-4).
+
+6. **Configura `clasp` para los redespliegues futuros** (una sola vez por máquina):
+   ```bash
+   npm install               # trae @google/clasp como devDependency
+   npx clasp login           # abre el navegador; usar LA CUENTA DEL SERVICIO, no la personal
+   cp .clasp.json.example .clasp.json
+   # editar .clasp.json: pegar el Script ID del paso 2 (rootDir ya apunta a "server")
+   npx clasp deployments     # lista las implementaciones — copiar el Deployment ID de la de
+                              # tipo "Web app" creada en el paso 5 (la que tiene la URL /exec)
+   export CLASP_DEPLOYMENT_ID="AKfyc..."   # agregar esta línea a tu ~/.zshrc, no al repo
+   ```
+   `.clasp.json` (tiene el Script ID de un proyecto real) y `.clasprc.json` (credenciales de
+   `clasp login`) están en `.gitignore` a propósito — cada quien despliega configura el suyo.
+
+## Redesplegar tras un cambio de dominio (el caso de todos los días)
+
+Dos comandos, con roles distintos — confundirlos es exactamente el incidente del
+`quarterCloseWindow` (26-07-2026, ver CLAUDE.md):
+
+- **`npm run push`** — corre los tests, regenera `domain.gs`/`server-lib.gs` y los sube al
+  proyecto de Apps Script (`clasp push`). Esto actualiza el **HEAD** del proyecto (lo que se ve
+  al abrir el editor web), pero **no toca lo que corre en producción** — el Web App desplegado
+  sigue sirviendo la versión congelada de su último despliegue. Seguro de correr en cualquier
+  momento, incluso a medio terminar algo.
+- **`npm run deploy`** — lo mismo, y además crea una versión nueva y la asocia al
+  **`CLASP_DEPLOYMENT_ID`** existente (`clasp deploy -i`), que es lo que de verdad pone el
+  cambio en producción **sin cambiar la URL `/exec`** (equivalente a "Editar implementación →
+  Nueva versión" del paso 5, pero desde la terminal y sin poder pegar mal un archivo).
+
+Si `CLASP_DEPLOYMENT_ID` no está seteado, `npm run deploy` falla alto y claro en vez de crear
+una implementación nueva con URL distinta (DR-4) — no hay forma de que salga silencioso.
+
+`Code.gs` sigue sin poder testearse con Node (toca `UrlFetchApp`/`SpreadsheetApp` reales):
+después de un `npm run deploy` que lo modifique, repetir a mano la verificación E2E de abajo.
 
 ## Verificación E2E (los puntos 🧪 del ADR-002)
 - `GET /exec` → responde `{ok:true, nonce:...}` (cadena CORS 302→GET, `res.json()` legible).

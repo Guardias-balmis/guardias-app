@@ -24,6 +24,13 @@ node --test test/docs-trazabilidad.test.js        # spec.md §5/§8 vs docs/ tra
 node server/dev-server.mjs                        # local full-stack dev: serves client + real router.js over an in-memory store,
                                                    # with faked Google token verification (dev:<email>:<nonce>) — port 8787
 python3 -m http.server 8080                       # static-only serving; talks to the real deployed backend via client/config.js
+
+npm run push                                      # test + build + clasp push — updates the Apps Script project's HEAD only,
+                                                   # NOT what's live at the /exec URL (see server/README-deploy.md)
+npm run deploy                                    # push, then clasp deploy -i $CLASP_DEPLOYMENT_ID — this is what actually
+                                                   # goes live, same /exec URL. Requires one-time `npx clasp login` + a local
+                                                   # .clasp.json (gitignored, see .clasp.json.example) + $CLASP_DEPLOYMENT_ID
+                                                   # exported in your shell profile, never committed.
 ```
 
 There is no lint script and no bundler for the client. `npm test` covers domain, server, and `client/lib/` (api.js, auth.js) via `node:test`; the `.jsx` screens are **not** Node-testable (Babel-in-browser) and are verified manually in-browser instead — this is intentional, not a coverage gap to "fix".
