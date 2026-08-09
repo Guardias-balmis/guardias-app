@@ -17,8 +17,8 @@ npm test                                          # full suite: domain + server 
 npm run build                                     # node build/build-gas.mjs — regenerates server/domain.gs + server/server-lib.gs
 
 node --test v2/domain/test/validate.test.js       # single domain test file (swap filename: tally.test.js, equity.test.js, ...)
-node --test 'v2/domain/test/*.test.js'            # domain layer only
-node --test 'v2/domain/test/*.test.js' 'server/test/*.test.js'   # domain + server (bundle-parity-sensitive changes)
+node --test v2/domain/test/*.test.js              # domain layer only — UNQUOTED, see note below
+node --test v2/domain/test/*.test.js server/test/*.test.js   # domain + server (bundle-parity-sensitive changes)
 node --test test/docs-trazabilidad.test.js        # spec.md §5/§8 vs docs/ traceability gate (see below)
 
 node server/dev-server.mjs                        # local full-stack dev: serves client + real router.js over an in-memory store,
@@ -34,6 +34,8 @@ npm run deploy                                    # push, then clasp deploy -i $
 ```
 
 There is no lint script and no bundler for the client. `npm test` covers domain, server, and `client/lib/` (api.js, auth.js) via `node:test`; the `.jsx` screens are **not** Node-testable (Babel-in-browser) and are verified manually in-browser instead — this is intentional, not a coverage gap to "fix".
+
+**`--test` file-selection args must be UNQUOTED globs — never quoted, never a bare directory (2026-08-08 incident).** Node's own `--test` glob expansion for a quoted pattern like `'v2/domain/test/*.test.js'` only exists from Node 21 on, so it silently finds zero tests on Node 20 (the documented minimum). The seemingly obvious fix, passing bare directories instead, breaks the other way: Node 20 walks a directory argument recursively for `*.test.js`, but Node 22+ changed that same call to find nothing (0 tests) — verified in `node:20`/`22`/`24` Docker containers, no version runs both quoted-glob and bare-directory correctly. The one form that works identically on every version 20+ is an **unquoted** glob (`node --test v2/domain/test/*.test.js`): the *shell* expands it into literal file paths before Node ever sees a wildcard, so Node's own (version-dependent) glob/directory handling never comes into play. `package.json`'s `test`/`push`/`deploy` scripts and CI (`.github/workflows/test.yml`, pinned to Node 20) all rely on this — don't "clean up" the globs by quoting them or swapping in a directory, both silently zero out the suite on some Node version.
 
 ## Architecture
 
