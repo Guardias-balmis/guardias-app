@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node build/build-gas.mjs",
     "catalogo": "node build/build-catalogo.mjs",
-    "test": "node --test 'v2/domain/test/*.test.js' 'server/test/*.test.js' 'client/lib/test/*.test.js' 'test/*.test.js'",
+    "test": "node --test v2/domain/test/*.test.js server/test/*.test.js client/lib/test/*.test.js test/*.test.js",
     "clasp:login": "clasp login",
     "push": "npm test && npm run build && clasp push",
     "deploy": "npm run push && clasp deploy -i \"$CLASP_DEPLOYMENT_ID\" -d \"deploy $(date +%F_%H:%M)\""
