@@ -243,7 +243,7 @@ test("misPreferencias devuelve null si no hay registro previo", () => {
 test("guardarPreferencias y misPreferencias hacen round-trip; solo afecta al propio residente", () => {
   const deps = makeDeps();
   const session = loggedIn(deps);
-  const prefs = { maxGuardias: 5, preferDobles: true, fechasEvitar: ["2026-07-06"], notas: "ninguna" };
+  const prefs = { maxGuardias: 5, preferDobles: "VIERNES_DOMINGO", fechasEvitar: ["2026-07-06"], notas: "ninguna" };
   const r1 = call({ action: "guardarPreferencias", session, anio: 2026, mes: 7, prefs }, deps);
   assert.equal(r1.ok, true);
   const r2 = call({ action: "misPreferencias", session, anio: 2026, mes: 7 }, deps);

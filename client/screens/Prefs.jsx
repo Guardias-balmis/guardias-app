@@ -6,7 +6,7 @@
 // equidad. Se quitó la sección de "fechas preferidas" (BLANDO positivo) a petición del
 // autor. Acentos de color: rojo=BAJA (sigue bloqueando), naranja=vacaciones/rotación/evitar
 // (informativo, no bloquea).
-import { COLOR, SHADOW, S } from "./client/lib/design-tokens.js";
+import { COLOR, S } from "./client/lib/design-tokens.js";
 import { datesOfMonth, weekday, compareISO, addDays } from "./v2/domain/calendar.js";
 import { puedeMoverCiclo } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
@@ -16,14 +16,26 @@ const { Card, SectionTitle, Btn, Aviso } = window.UI;
 
 const DEFAULT_PREFS = {
   maxGuardias: 5,
-  preferDobles: false,
+  preferDobles: "",
   fechasEvitar: [],
   notas: "",
 };
 const MOTIVO_LABEL = { VACACIONES: "Vacaciones", ROTACION: "Rotación externa", BAJA: "Baja" };
+// Preferencia de "doblete" de fin de semana (a petición del autor, 2026-08-08): informativa
+// para el generador, igual que fechasEvitar — el validador nunca la comprueba. "Doblete" en
+// sentido amplio es cualquier par de guardias separadas por un solo día de descanso, pero la
+// práctica real concentra el sacrificio en un patrón de fin de semana concreto para no perder
+// dos fines de semana distintos del mes; viernes-domingo y jueves-sábado son los dos que la
+// gente pide. OJO: esto NO toca `dobletes` de INV-3/tally.js, que sigue siendo específicamente
+// viernes-domingo — esa es la métrica de equidad que cita la normativa («fines de semana
+// dobles»), y esta preferencia no la redefine.
+const DOBLETE_LABEL = { "": "Sin preferencia", VIERNES_DOMINGO: "Viernes-domingo", JUEVES_SABADO: "Jueves-sábado" };
 // Etiquetas de los riesgos de P-13 (spec.md §8/§8.1, blockPreview.js) — el `tipo` que devuelve
 // el dominio es un identificador estable, no texto pensado para pantalla.
-const RIESGO_LABEL = { IMPOSIBILIDAD: "Riesgo de cobertura", SOBRECARGA: "Riesgo de sobrecarga", CONCENTRACION_NIVEL: "Varios del mismo año ausentes" };
+const RIESGO_LABEL = {
+  IMPOSIBILIDAD: "Riesgo de cobertura", SOBRECARGA: "Riesgo de sobrecarga",
+  CONCENTRACION_NIVEL: "Varios del mismo año ausentes", DIVISION_NAVIDAD_ANIO_NUEVO: "Navidad y Año Nuevo a la vez",
+};
 
 function nombreMesDe(anio, mes) {
   const s = new Date(Date.UTC(anio, mes - 1, 1)).toLocaleDateString("es-ES", { month: "long", year: "numeric", timeZone: "UTC" });
@@ -31,26 +43,6 @@ function nombreMesDe(anio, mes) {
 }
 function fechaEs(iso) {
   return new Date(iso + "T00:00:00Z").toLocaleDateString("es-ES", { day: "numeric", month: "short", timeZone: "UTC" });
-}
-
-function Toggle({ on, onChange, label }) {
-  return (
-    <button onClick={() => onChange(!on)} style={{
-      display: "flex", alignItems: "center", gap: 10, background: "transparent",
-      border: "none", cursor: "pointer", padding: 0, textAlign: "left", width: "100%",
-    }}>
-      <span style={{
-        width: 44, height: 24, borderRadius: 12, flexShrink: 0,
-        background: on ? COLOR.blue : COLOR.grayMid, position: "relative", transition: "background .15s",
-      }}>
-        <span style={{
-          position: "absolute", top: 3, left: on ? 23 : 3, width: 18, height: 18, borderRadius: 9,
-          background: "#fff", boxShadow: SHADOW.toggleKnob, transition: "left .15s",
-        }} />
-      </span>
-      <span style={{ fontSize: 13, color: COLOR.bodyText, lineHeight: 1.4 }}>{label}</span>
-    </button>
-  );
 }
 
 function Counter({ value, onChange, min, max, accent = COLOR.blue, bg = COLOR.bluePale }) {
@@ -400,8 +392,14 @@ function PrefsScreen() {
         <Counter value={prefs.maxGuardias} min={4} max={6} onChange={set("maxGuardias")} accent={COLOR.turquoise} bg={COLOR.turquoiseLight} />
         <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 8 }}>(normativa: 4–6)</div>
         <div style={{ marginTop: 14 }}>
-          <Toggle on={prefs.preferDobles} onChange={set("preferDobles")}
-            label="Prefiero viernes-domingo frente a sábados aislados" />
+          <label style={S.label}>Si me toca doblete de fin de semana, prefiero…</label>
+          <select value={prefs.preferDobles} onChange={(e) => set("preferDobles")(e.target.value)}
+            style={{ ...S.input, width: "100%", marginTop: 4, boxSizing: "border-box" }}>
+            {Object.entries(DOBLETE_LABEL).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+          </select>
+          <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 6, lineHeight: 1.4 }}>
+            Así concentra el sacrificio en un solo fin de semana del mes, en vez de perder dos.
+          </div>
         </div>
       </Card>
 
