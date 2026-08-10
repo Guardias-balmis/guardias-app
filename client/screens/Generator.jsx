@@ -18,6 +18,10 @@ import { monthReplacementPlan } from "./client/lib/apply-month.js";
 // las dos pantallas tiene que salir del mismo sitio.
 import { closeViolations } from "./client/lib/closes.js";
 import { thirdPostViolations } from "./client/lib/thirdpost.js";
+// El generador determinista (V-30). Escribe en el MISMO textarea que se pega a mano: así el
+// camino de salida —comprobar(), el rechazo de fechas/ids y el reemplazo de mes de V-27— es
+// exactamente el mismo, y no hay una segunda vía de escritura que pueda saltarse esos controles.
+import { generateMonth } from "./v2/domain/schedule.js";
 
 const { useState, useMemo, useEffect, useRef } = React;
 const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
@@ -435,6 +439,44 @@ function GeneratorScreen() {
     setPlan(null);
     setChecksIncompletos([]);
     setConfirmarAplicar(false);
+    // El diagnóstico describe la propuesta que generó ESTE texto: en cuanto el texto cambia deja
+    // de hablar de lo que hay en pantalla.
+    setDiagnostico(null);
+  };
+
+  // Nombre de pila por id, solo para el resumen del reparto: el diagnóstico del dominio habla
+  // de ids (no conoce nombres) y una lista de UUIDs no la lee nadie.
+  const nombreDe = useMemo(() => {
+    const m = new Map(residentes.map((r) => [r.id, (r.nombre || r.id).split(" ")[0]]));
+    return (id) => m.get(id) || id;
+  }, [residentes]);
+
+  // Semilla de la propuesta: subirla da OTRO cuadrante igual de válido. Es lo que convierte
+  // «no me convence» en algo accionable sin tener que editar la rejilla a mano.
+  const [semilla, setSemilla] = useState(1);
+  const [diagnostico, setDiagnostico] = useState(null);
+
+  const generar = (nuevaSemilla) => {
+    const s = nuevaSemilla === undefined ? semilla : nuevaSemilla;
+    setSemilla(s);
+    // El MISMO ctx que arma comprobar(), con el mes vacío: lo que se genera es justo el mes.
+    const ctx = buildMonthContext({
+      mes, anio, residentes,
+      historicas: historicas.filter((a) => a.fecha < monthStart),
+      asignacionesDelMes: [],
+      bloqueos, festivos, eventos,
+    });
+    try {
+      const { asignaciones, diagnostico: d } = generateMonth(ctx, { semilla: s });
+      // Por onRespuestaChange y no por setRespuesta: tiene que invalidar el veredicto anterior
+      // igual que si el usuario hubiera pegado texto nuevo. Va ANTES de fijar el diagnóstico,
+      // porque es quien lo limpia: al revés, se borraría el diagnóstico recién calculado.
+      onRespuestaChange(JSON.stringify({ asignaciones }, null, 1));
+      setDiagnostico(d);
+    } catch (e) {
+      setDiagnostico(null);
+      showToast("No se pudo generar la propuesta: " + e.message, "err");
+    }
   };
 
   const copiarPrompt = async () => {
@@ -584,9 +626,10 @@ function GeneratorScreen() {
       <SectionTitle>🤖 Generador de cuadrante</SectionTitle>
 
       <Info>
-        Esta pantalla no llama a ninguna IA: genera un prompt de texto para que lo pegues tú
-        en el asistente que prefieras (claude.ai u otro) y valida aquí mismo, sin red, la
-        respuesta que te devuelva.
+        El generador reparte el mes aquí mismo, sin red y sin llamar a ninguna IA, persiguiendo
+        el reparto acumulado de cada año de residencia. Si prefieres pedírselo a un asistente,
+        abajo tienes el prompt con los mismos datos. Salga de donde salga, la propuesta pasa
+        por la misma validación antes de poder aplicarse.
       </Info>
 
       {contextError && (
@@ -607,8 +650,70 @@ function GeneratorScreen() {
         </Aviso>
       )}
 
-      <Card title={`1. Prompt para ${nombreMes}`}>
-        <textarea readOnly value={promptText} rows={12} style={{
+      <Card title={`1. Generar el cuadrante de ${nombreMes}`}>
+        <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10 }}>
+          Reparte el mes equilibrando el acumulado del año de residencia de cada uno, sin
+          asignar a nadie dos días seguidos ni sobre una baja. La propuesta cae en el cuadro de
+          abajo, donde puedes revisarla o retocarla antes de comprobarla.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Btn onClick={() => generar(1)} disabled={cargandoContexto || !!contextError} color={COLOR.blue}>
+            {cargandoContexto ? "Cargando contexto…" : "⚙️ Generar propuesta"}
+          </Btn>
+          {diagnostico && (
+            <Btn onClick={() => generar(semilla + 1)} disabled={cargandoContexto || !!contextError}>
+              🎲 Otra distinta
+            </Btn>
+          )}
+        </div>
+
+        {diagnostico && (
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontSize: 12, color: COLOR.grayDark }}>
+              Reparto {semilla > 1 ? `nº ${semilla}` : ""} — guardias por residente:{" "}
+              {diagnostico.residentes.filter((r) => r.guardiasDelMes > 0)
+                .map((r) => `${nombreDe(r.id)} ${r.guardiasDelMes}`).join(" · ")}
+            </div>
+            {/* `coste` a 0 = los seis ejes de INV-3 dentro de ±1 en las cohortes comparables. No es
+                una promesa sobre el cierre anual: aquí solo se ha decidido un mes. */}
+            {diagnostico.coste === 0 ? (
+              <div style={{ fontSize: 12, color: COLOR.green, fontWeight: 700 }}>
+                ⚖️ Equidad acumulada dentro de ±1 en los seis ejes
+              </div>
+            ) : (
+              <Aviso>
+                No se ha podido dejar los seis ejes de equidad dentro de ±1 con solo este mes
+                (le falta {Math.round(diagnostico.coste * 100) / 100}). Suele significar que
+                alguien llega con demasiada ventaja acumulada y hará falta más de un mes para
+                compensarla — no es un error, es lo mejor alcanzable ahora.
+              </Aviso>
+            )}
+            {diagnostico.sinCubrir.length > 0 && (
+              <Aviso color={COLOR.red} bg={COLOR.redLight}>
+                {diagnostico.sinCubrir.length} puesto(s) sin nadie a quien asignar
+                ({[...new Set(diagnostico.sinCubrir.map((s) => s.puesto))].join(" y ")}): no hay
+                residente elegible esos días. El validador lo marcará como error de INV-1; hay que
+                resolverlo fuera de la herramienta.
+              </Aviso>
+            )}
+            {diagnostico.adyacenciaForzada.length > 0 && (
+              <Aviso>
+                En {diagnostico.adyacenciaForzada.length} día(s) no había forma de evitar dos
+                guardias seguidas sin dejar el puesto vacío:{" "}
+                {diagnostico.adyacenciaForzada.slice(0, 5).map((s) => s.fecha).join(", ")}
+                {diagnostico.adyacenciaForzada.length > 5 ? "…" : ""}. Repásalos.
+              </Aviso>
+            )}
+          </div>
+        )}
+      </Card>
+
+      <Card title={`2. …o pídeselo a un asistente (prompt de ${nombreMes})`}>
+        <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 8 }}>
+          Copia el prompt, pégalo en claude.ai u otro asistente y trae aquí abajo el JSON que
+          te devuelva. Lleva los mismos datos que usa el generador de arriba.
+        </div>
+        <textarea readOnly value={promptText} rows={10} style={{
           ...S.input, width: "100%", boxSizing: "border-box", fontFamily: MONO_FONT,
           fontSize: 11.5, lineHeight: 1.5, resize: "vertical", background: COLOR.gray, color: COLOR.bodyText,
         }} />
@@ -619,12 +724,7 @@ function GeneratorScreen() {
         </div>
       </Card>
 
-      <Info>
-        1. Copia el prompt. 2. Pégalo en claude.ai (u otro asistente). 3. Pega aquí la
-        respuesta JSON que te devuelva.
-      </Info>
-
-      <Card title="2. Respuesta del asistente">
+      <Card title="3. Propuesta">
         <textarea value={respuesta} onChange={(e) => onRespuestaChange(e.target.value)} rows={10}
           placeholder='{"asignaciones": [{"fecha":"YYYY-MM-DD","residenteId":"...","codigo":"G"}]}'
           style={{ ...S.input, width: "100%", boxSizing: "border-box", fontFamily: MONO_FONT, fontSize: 12, resize: "vertical" }} />
@@ -638,7 +738,7 @@ function GeneratorScreen() {
       {parseError && <Aviso color={COLOR.red} bg={COLOR.redLight}>{parseError}</Aviso>}
 
       {violaciones !== null && !parseError && (
-        <Card title="3. Resultado de la validación">
+        <Card title="4. Resultado de la validación">
           {violaciones.length === 0 ? (
             <div style={{ color: COLOR.green, fontWeight: 700, fontSize: 14 }}>✅ Sin violaciones</div>
           ) : (

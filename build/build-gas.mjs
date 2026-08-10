@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 // (`equity.buildYearCloseContext`) necesita el contaje acumulado.
 // El orden importa: el bundler concatena IIFEs y cada módulo lee los anteriores por su
 // global, así que un módulo va SIEMPRE después de aquellos de los que importa.
-const DOMAIN_MODULES = ["calendar", "residents", "tally", "absences", "blockPreview", "imaginaria", "accumulate", "thirdpost", "equity", "validate", "responsible", "cuadrante", "projection"];
+const DOMAIN_MODULES = ["calendar", "residents", "tally", "absences", "blockPreview", "imaginaria", "accumulate", "thirdpost", "equity", "validate", "responsible", "cuadrante", "projection", "schedule"];
 const SERVER_MODULES = ["sheets-schema", "sheets-store", "session", "verify-token", "router"];
 
 const DOMAIN_DIR = fileURLToPath(new URL("../v2/domain/", import.meta.url));
