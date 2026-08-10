@@ -367,11 +367,11 @@ Estados: `propuesto` (sin decidir) · `aceptado` (decidido, sin implementar) · 
 
 | # | Propuesta | Origen | Toca | Respaldo en `normativa.pdf` | Estado |
 |---|---|---|---|---|---|
-| P-1 | Medir la equidad con un **índice de puntos ponderados** (pesos por tipo de día, decimales) en lugar de contadores enteros | `EQUITY_SYSTEM.md`, `reglas-equidad-descanso.md`, `impacto-descanso-pesos-propuestos.md` | INV-3, INV-4 | **En contra.** p.1 y p.2 fijan «diferencia máxima de 1» sobre cada eje por separado, y el umbral 1 solo tiene sentido sobre guardias enteras | `propuesto` |
+| P-1 | Medir la equidad con un **índice de puntos ponderados** (pesos por tipo de día, decimales) en lugar de contadores enteros | `EQUITY_SYSTEM.md`, `reglas-equidad-descanso.md`, `impacto-descanso-pesos-propuestos.md` | INV-3, INV-4 | **En contra.** p.1 y p.2 fijan «diferencia máxima de 1» sobre cada eje por separado, y el umbral 1 solo tiene sentido sobre guardias enteras | `rechazado` |
 | P-2 | Tratar **vacaciones y rotación como bloqueo DURO** que impide asignar guardia | `casos-de-prueba-validador.md` (D1), `paquete-generacion-prompt.md` | INV-5, V-8 | **Ausente.** p.2 hace la rotación «prioritaria sobre las vacaciones» pero nunca prohíbe asignar guardia en esos días | `rechazado` |
-| P-3 | Redefinir la **«mochila» del R1** como un tercero que cubre al R1 | `reglas-equidad-descanso.md`, `EQUITY_SYSTEM.md`, `GUARD_COMPOSITION_RULES.md`, `paquete-generacion-prompt.md` | INV-8, INV-1 | **En contra.** p.3 es literal: «Los Residentes que hagan tercer puesto siempre deben cubrir primero los días que haya un R1» | `propuesto` |
-| P-4 | Comparar la equidad **fuera de la cohorte** (R4 con R3) | `EQUITY_SYSTEM.md` (§4), `reglas-equidad-descanso.md` | INV-3, V-2 | **En contra.** «del mismo año formativo» / «del mismo año» aparece cinco veces (p.1, p.2, p.3, p.4) | `propuesto` |
-| P-5 | Mochila del R1 activa de **junio a diciembre** | `EQUITY_SYSTEM.md`, `GUARD_COMPOSITION_RULES.md`, `paquete-generacion-prompt.md` | INV-11, INV-2 | **En contra.** p.1: «En junio, julio y agosto, dado que se organizan sin los R1» | `propuesto` |
+| P-3 | Redefinir la **«mochila» del R1** como un tercero que cubre al R1 | `reglas-equidad-descanso.md`, `EQUITY_SYSTEM.md`, `GUARD_COMPOSITION_RULES.md`, `paquete-generacion-prompt.md` | INV-8, INV-1 | **En contra.** p.3 es literal: «Los Residentes que hagan tercer puesto siempre deben cubrir primero los días que haya un R1» | `rechazado` |
+| P-4 | Comparar la equidad **fuera de la cohorte** (R4 con R3) | `EQUITY_SYSTEM.md` (§4), `reglas-equidad-descanso.md` | INV-3, V-2 | **En contra.** «del mismo año formativo» / «del mismo año» aparece cinco veces (p.1, p.2, p.3, p.4) | `rechazado` |
+| P-5 | Mochila del R1 activa de **junio a diciembre** | `EQUITY_SYSTEM.md`, `GUARD_COMPOSITION_RULES.md`, `paquete-generacion-prompt.md` | INV-11, INV-2 | **En contra.** p.1: «En junio, julio y agosto, dado que se organizan sin los R1» | `rechazado` |
 | P-6 | Leer INV-7 como **viernes _o_ sábado** en vez de viernes _y_ sábado | `casos-de-prueba-validador.md` (D3) | INV-7 | **Ambiguo en la fuente.** p.2 dice «al menos una de las guardias de viernes y sábado», que admite ambas lecturas | `implementado` |
 | P-7 | **Un cuadrante independiente por grupo** (Mayores y Pequeños) en vez de uno único mensual | `casos-de-prueba-validador.md` (G3/CO2) | INV-1, V-9, V-10, V-11 | **Solo en apariencia.** p.1 («Los residentes se dividen en 2 grupos […] Cada grupo elaborará un cuadrante provisional») describe la composición de cada guardia y la organización de cada grupo, no dos unidades de datos — ver decisión V-15 | `rechazado` |
 | P-8 | Comprobar la equidad también **al cierre de cada trimestre**, no solo del año de residencia | `EQUITY_SYSTEM.md`; ya previsto como Fase 7.2 | INV-3 | **A favor.** p.2: «una vez cerrado el cuadrante trimestral, la diferencia de número de guardias entre residentes del mismo año no supere 1» | `implementado` |
@@ -381,7 +381,7 @@ Estados: `propuesto` (sin decidir) · `aceptado` (decidido, sin implementar) · 
 | P-12 | **División de vacaciones entre Navidad (23–26 dic) y Año Nuevo (29 dic–6 ene)**: por residente individual, si tiene ausencia (VACACIONES/ROTACION) en las dos ventanas a la vez, avisa — converge con P-13, cuarto riesgo de `blockPreview.js` | `propuesta-division-navidad-anio-nuevo.md` (conocimiento de práctica real del autor, no está en `normativa.pdf`) | Sin invariante propio — reutiliza el mecanismo de P-13 | **Ausente.** La normativa no menciona reparto de vacaciones alrededor de Navidad/Año Nuevo en ninguna de sus 4 páginas — extensión sin respaldo normativo, práctica real del servicio | `implementado` (`DIVISION_NAVIDAD_ANIO_NUEVO` en `v2/domain/blockPreview.js`; 7 tests nuevos, 629/629 en verde) |
 | P-13 | **Simulación preventiva de cobertura** al registrar un Bloqueo (vacaciones/rotación): riesgo de imposibilidad (espejo INV-1, bloquea solo dentro de 3 meses), riesgo de sobrecarga (espejo INV-2, aviso) y riesgo de concentración por nivel (nuevo, más de 2 del mismo R1–R4 a la vez, aviso) | `propuesta-simulacion-preventiva-cobertura.md` (conocimiento de práctica real del autor, no está en `normativa.pdf`) | INV-1, INV-2 (umbrales espejados) — el eje de concentración por nivel no tiene invariante previo | **Ausente.** p.4 solo dice, en general, que la organización de vacaciones "debe realizarse en consonancia con el resto de grupo de guardias", sin fijar ningún umbral — extensión sin respaldo normativo, práctica real del servicio | `implementado` (`v2/domain/blockPreview.js`, cableado en `crearBloqueo`; 10 tests nuevos, 622/622 en verde) |
 
-### 8.1 Las ocho ya cerradas
+### 8.1 Las doce ya cerradas
 
 **P-12, aceptada el 2026-08-08 por decisión directa del autor, implementada el
 mismo día** (`DIVISION_NAVIDAD_ANIO_NUEVO` en `v2/domain/blockPreview.js`; 7
@@ -469,6 +469,21 @@ asignación — la fila de la cola seguía marcada `propuesto` sin que
 nadie la hubiera actualizado tras esa decisión. Marcada `rechazado`
 porque el comportamiento implementado es el contrario al que propone,
 no porque se haya evaluado de nuevo contra la normativa.
+
+**P-1, P-3, P-4 y P-5, cerradas el 2026-08-10 (ninguna tenía su propia
+fecha de cierre — detectadas obsoletas al revisar la cola completa, igual
+que P-2).** Las cuatro ya traían su columna "Respaldo en `normativa.pdf`"
+en contra desde que se registraron, pero nadie había bajado el estado de
+`propuesto` a `rechazado` tras esa evaluación — quedaban como si siguieran
+esperando decisión cuando la decisión ya estaba escrita en la fila de al
+lado. Marcadas `rechazado` sin reabrir el análisis, por la misma razón que
+ya está en cada una: **P-1** (índice ponderado de equidad) contradice el
+umbral entero «diferencia máxima de 1» de p.1/p.2; **P-3** (redefinir la
+mochila del R1 como un tercero) contradice la cita literal de p.3 sobre
+quién cubre primero al R1; **P-4** (equidad fuera de la cohorte) contradice
+las cinco apariciones de «del mismo año» en la normativa; **P-5** (mochila
+de junio a diciembre) contradice que junio-agosto es justamente el tramo
+en que la normativa saca a los R1 del reparto (INV-11).
 
 **P-7 y P-8, cerradas ambas el 2026-07-26.** Eran las dos donde el contraste dio la razón a `docs/`
 y no a `v2/domain`, y ninguna ha terminado cambiando el modelo de datos:
