@@ -563,8 +563,10 @@ test("marcarValidado: con el residente apuntado, ese mismo 3P deja de avisar", (
   const deps = stubClean(makeDeps());
   const session = loggedInAs(deps, "resp@gmail.com");
   const suya = loggedInAs(deps, "otro@gmail.com");
-  call({ action: "ofrecerse3P", session: suya, compromisoAceptado: true }, deps);
-  guardar(deps, loggedInAs(deps, "resp@gmail.com"), [{ fecha: "2027-07-14", residenteId: "otro-1", codigo: "3P" }]);
+  call({ action: "ofrecerse3P", session: suya, compromisoAceptado: true }, deps); // desde = deps.today, "2027-07-16"
+  // La fecha del 3P tiene que ser DESDE el alta (decisión V-29, INV-8a juzga "¿era voluntario
+  // ESE día?"): antes se aceptaba cualquier fecha del mes con tal de que hoy siguiera apuntado.
+  guardar(deps, loggedInAs(deps, "resp@gmail.com"), [{ fecha: "2027-07-17", residenteId: "otro-1", codigo: "3P" }]);
 
   const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
   assert.equal(r.ok, true);

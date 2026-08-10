@@ -945,6 +945,10 @@ function buildThirdPostCtx(deps, mes, anio, snap) {
     asignaciones: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
     voluntarios3P: voluntarios, // con `desde`: el ciclo de 8b arranca en el alta de cada uno (V-18b)
     historial3P,
+    // INV-8a juzga "¿era voluntario ESE día?" con la historia completa (V-28), no con la lista de
+    // HOY que usan 8b/8c (`voluntarios`, sin tocar a propósito: el ciclo y el cierre de equidad sí
+    // son sobre el compromiso vigente).
+    periodosVoluntario3P: allThirdPostPeriods(deps),
   };
 }
 
@@ -1151,6 +1155,26 @@ function activeThirdPostVolunteers(deps) {
   return deps.store.readLatest("voluntarios3P", (r) => r.residenteId)
     .filter((v) => v.activo === true)
     .map((v) => ({ residenteId: v.residenteId, desde: v.desde }));
+}
+
+/**
+ * TODOS los periodos de voluntariado del 3P, activos e históricos (decisión V-28, corrige
+ * INV-8a). `readLatest` colapsa a una fila por residente y por eso sirve para "¿es voluntario
+ * AHORA?" pero no para "¿lo era ESE día?": alguien que se apuntó, se retiró y volvió a apuntarse
+ * tiene más de un periodo, y el de en medio desaparecería. Se lee con `readRecords` (crudo, sin
+ * colapsar) y se agrupa por `residenteId+desde` —la baja siempre reinserta el MISMO `desde` que
+ * su alta, añadiendo `hasta` (ver `retirarVoluntariado3P`)— así que cada par alta/baja se funde
+ * en un solo periodo `{residenteId, desde, hasta}`, con `hasta` ausente si sigue activo.
+ */
+function allThirdPostPeriods(deps) {
+  const porClave = new Map();
+  for (const f of deps.store.readRecords("voluntarios3P")) {
+    const clave = `${f.residenteId}|${f.desde}`;
+    const periodo = porClave.get(clave) || { residenteId: f.residenteId, desde: f.desde, hasta: undefined };
+    if (f.hasta) periodo.hasta = f.hasta;
+    porClave.set(clave, periodo);
+  }
+  return [...porClave.values()];
 }
 
 /** Mandato enero→enero (INV-14) para el año dado: [YYYY-01-01, (YYYY+1)-01-01). */

@@ -42,21 +42,25 @@ const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Numb
 const inRange = (f, a, b) => compareISO(f, a) >= 0 && compareISO(f, b) <= 0;
 
 /**
- * @param {object} ctx { mes, anio, residentes, asignaciones, voluntarios3P, historial3P }
+ * @param {object} ctx { mes, anio, residentes, asignaciones, voluntarios3P, historial3P, periodosVoluntario3P? }
  *   - asignaciones: del mes (incluye 3P y guardias G/GF/GP para detectar mochila)
- *   - voluntarios3P: los voluntarios, como `string[]` de ids o como `{residenteId, desde}[]`.
- *     Con `desde` (lo que manda la tabla `voluntarios3P`) el ciclo L-D de INV-8b **se recorta a
- *     partir de esa fecha**, que es lo que exige V-18(b): cada residente empieza su ciclo el día
- *     que se apunta. Sin él —los tests que solo comprueban otras reglas— no se recorta nada.
- *     El recorte tiene que vivir AQUÍ y no en el invocador: el histórico que se lee es común a
- *     8b y a 8c (que sí necesita el año de residencia entero, más antiguo), así que recortarlo
- *     al leerlo rompería 8c, y no recortarlo mete en el ciclo de alguien los 3P que hizo antes
- *     de apuntarse. Misma tolerancia de dos formas que `calendar.js:isHoliday`.
+ *   - voluntarios3P: los voluntarios ACTIVOS ahora, como `string[]` de ids o como
+ *     `{residenteId, desde}[]`. Con `desde` (lo que manda la tabla `voluntarios3P`) el ciclo L-D
+ *     de INV-8b **se recorta a partir de esa fecha**, que es lo que exige V-18(b): cada residente
+ *     empieza su ciclo el día que se apunta. Sin él —los tests que solo comprueban otras reglas—
+ *     no se recorta nada. El recorte tiene que vivir AQUÍ y no en el invocador: el histórico que
+ *     se lee es común a 8b y a 8c (que sí necesita el año de residencia entero, más antiguo), así
+ *     que recortarlo al leerlo rompería 8c, y no recortarlo mete en el ciclo de alguien los 3P que
+ *     hizo antes de apuntarse. Misma tolerancia de dos formas que `calendar.js:isHoliday`.
  *   - historial3P: { id: [fechas ISO de 3P previas, cronológicas] }
+ *   - periodosVoluntario3P?: `{residenteId, desde, hasta?}[]` — TODOS los periodos de
+ *     voluntariado, activos e históricos (decisión V-28, corrige INV-8a). Sin este campo, 8a cae
+ *     al criterio antiguo «¿lo es AHORA?» (`voluntarios3P`); con él, juzga «¿lo era ESE día?»,
+ *     que es lo correcto para un mes que no es el actual — ver el comentario en la propia regla.
  * @returns {{invariante:'INV-8', severidad:string, fecha?:string, residenteId?:string, detalle:string}[]}
  */
 export function validateThirdPost(ctx) {
-  const { mes, anio, residentes, asignaciones = [], voluntarios3P = [], historial3P = {} } = ctx;
+  const { mes, anio, residentes, asignaciones = [], voluntarios3P = [], historial3P = {}, periodosVoluntario3P = null } = ctx;
   const byId = new Map(residentes.map((r) => [r.id, r]));
   const voluntarios = new Set(voluntarios3P.map((v) => (typeof v === "string" ? v : v && v.residenteId)));
   const altaDe = new Map(voluntarios3P.filter((v) => v && typeof v !== "string" && v.desde).map((v) => [v.residenteId, v.desde]));
@@ -65,8 +69,18 @@ export function validateThirdPost(ctx) {
   const thisMonth3P = asignaciones.filter((a) => a.codigo === "3P").sort((a, b) => compareISO(a.fecha, b.fecha));
 
   // ── INV-8a: 3P solo a voluntarios ──
+  // «¿Era voluntario ESE día?», no «¿lo es AHORA?» (decisión V-28). Sin `periodosVoluntario3P`
+  // —los tests que no lo pasan, y cualquier invocador viejo— se conserva el criterio anterior
+  // (`voluntarios`, la lista de HOY) para no romper nada existente; el corregido solo se activa
+  // cuando el invocador provee la historia completa de periodos, activos y retirados.
+  const eraVoluntarioEl = (residenteId, fecha) => {
+    if (periodosVoluntario3P === null) return voluntarios.has(residenteId);
+    return periodosVoluntario3P.some((p) => p.residenteId === residenteId
+      && compareISO(fecha, p.desde) >= 0
+      && (!p.hasta || compareISO(fecha, p.hasta) <= 0));
+  };
   for (const a of thisMonth3P) {
-    if (!voluntarios.has(a.residenteId)) {
+    if (!eraVoluntarioEl(a.residenteId, a.fecha)) {
       violations.push(aviso(`3P asignado a ${a.residenteId}, que no consta en la lista de voluntarios`, { fecha: a.fecha, residenteId: a.residenteId }));
     }
   }
