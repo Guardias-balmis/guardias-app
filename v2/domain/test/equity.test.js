@@ -436,6 +436,35 @@ test("buildYearCloseContext: un 3P en el puente NO se lo quita (es voluntario, I
   assert.equal(ctx.acumulados.r3a.puentesLibres, 1);
 });
 
+// --- Sesgo de las ausencias en `puentesLibres` (decisión V-27) -----------------------------
+// Antes, `residentIsFreeOnBridge` solo miraba si hubo guardia: una ROTACION/VACACIONES/BAJA
+// larga hacía "libres" TODOS los puentes de ese tramo sin límite, y ni siquiera la BAJA se
+// descontaba en este eje (a diferencia de los otros cinco, nota [a]).
+
+test("buildYearCloseContext: un puente dentro de ROTACION/VACACIONES NO cuenta como libre", () => {
+  const ctx = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, B],
+    historicas: [], // ninguno de los dos tiene guardia el puente
+    asignacionesDelMes: [],
+    bloqueos: [{ residenteId: "r3a", desde: "2026-12-01", hasta: "2026-12-15", motivo: "ROTACION" }],
+    festivos: FESTIVOS,
+  });
+  assert.equal(ctx.acumulados.r3a.puentesLibres, 0, "estaba de rotación: no fue el reparto quien le dio el puente");
+  assert.equal(ctx.acumulados.r3b.puentesLibres, 1);
+});
+
+test("INV-3: puentesLibres se normaliza por disponibilidad igual que los demás ejes", () => {
+  const v = validateResidencyYearClose({
+    mes: 5, anio: 2027, residentes: [R2A, R2B],
+    acumulados: { r2a: acc(0, 0, 0, 4), r2b: acc(0, 0, 0, 2) },
+    asignaciones: [],
+    bloqueos: [{ residenteId: "r2b", desde: "2026-08-01", hasta: "2026-11-30", motivo: "BAJA" }],
+  });
+  // ventana 365 d; baja 122 d → f≈0.666; 2/0.666≈3.0 vs 4 → diff≈1 (no viola); en crudo 4−2=2 sí violaría
+  const puentes = inv3(v).filter((x) => /puentes libres/i.test(x.detalle));
+  assert.equal(puentes.length, 0);
+});
+
 test("puentesDelMes sale del mes validado y respeta la fecha de cierre", () => {
   // R2A cierra el 2027-05-25. Con el 27-may festivo (jueves) el viernes 28 es puente, pero cae
   // DESPUÉS de su aniversario: pertenece a su año siguiente, no al que se está cerrando.
