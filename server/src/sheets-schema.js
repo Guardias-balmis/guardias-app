@@ -67,6 +67,14 @@ export const TABLES = {
   // por tipo de transición (generadoPor/validadoPor/...) — el historial completo de quién hizo
   // qué ya queda en las filas append-only anteriores si algún día hace falta auditarlo.
   cuadrantes: { name: "cuadrantes", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("estado"), col("actorId"), col("fecha", "date")] },
+  // Excepcion (spec.md §2, decisión V-29): degrada una violación DURA→AVISO donde la normativa lo
+  // permite. Hoy el único consumidor es `validate.js:twoR2Justified` (INV-9, tipo "2xR2"): un
+  // 2×R2 dentro de [desde,hasta] deja de avisar si hay una excepción documentada que lo cubra.
+  // Append-only como `festivos`/`eventos`: `activo` corrige por reinserción, nunca se borra una
+  // fila. `tipo` es el identificador que lee el dominio (no `INV-n`: un mismo invariante podría
+  // en el futuro tener más de un tipo de excepción), y añadir uno nuevo exige cablearlo en
+  // `validateMonth`/`buildMonthContext` para que tenga efecto — la tabla por sí sola no hace nada.
+  excepciones: { name: "excepciones", columns: [col("id"), col("tipo"), col("desde", "date"), col("hasta", "date"), col("justificacion"), col("registradaPor"), col("fecha", "date"), col("activo", "bool")] },
 };
 
 /** Cabecera (nombres de columna) de una tabla. */

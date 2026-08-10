@@ -52,11 +52,12 @@ function SettingsScreen() {
         </Card>
       )}
 
-      <Card title="Festivos y eventos">
+      <Card title="Datos del servicio">
         <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
-          Los dos datos de entrada que el validador no puede deducir solo: el calendario de
-          festivos (INV-12 y los puentes) y las fechas de la comida de Navidad y la despedida
-          (INV-10). Sin ellos esas comprobaciones no tienen nada contra qué comparar.
+          Lo que el validador no puede deducir solo: el calendario de festivos (INV-12 y los
+          puentes), las fechas de la comida de Navidad y la despedida (INV-10), y las excepciones
+          documentadas a un 2×R2 el mismo día (INV-9). Sin ellos esas comprobaciones no tienen
+          nada contra qué comparar.
         </div>
         <Btn onClick={() => setTab("datos-servicio")} color={COLOR.bluePale} textColor={COLOR.blueDark}>Ver / cargar →</Btn>
       </Card>

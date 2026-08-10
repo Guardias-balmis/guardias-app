@@ -1581,7 +1581,7 @@ function rotationHistoryStart(bloqueos, monthStart) {
  * la misma forma de objeto de forma independiente en Calendar.jsx, Generator.jsx y el router.
  * @param {object} p { mes, anio, residentes, historicas?, asignacionesDelMes, bloqueos }
  */
-function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [], eventos = [] }) {
+function buildMonthContext({ mes, anio, residentes, historicas = [], asignacionesDelMes, bloqueos, festivos = [], eventos = [], excepciones = [] }) {
   return {
     mes, anio,
     // `periodos` viaja SIEMPRE que venga: es lo único que expresa la nota [a] («los periodos
@@ -1593,6 +1593,10 @@ function buildMonthContext({ mes, anio, residentes, historicas = [], asignacione
     residentes: residentes.map((r) => ({ id: r.id, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin, periodos: r.periodos })),
     asignaciones: [...historicas, ...asignacionesDelMes],
     bloqueos,
+    // Filas de la tabla `excepciones`, tal cual: `twoR2Justified` ya filtra por `tipo` y por rango
+    // de fechas él mismo, así que no hace falta moldearlas aquí (a diferencia de `eventos`, que sí
+    // necesita recortarse al año académico antes de llegar al validador).
+    excepciones,
     // Los eventos llegan como FILAS de la tabla y se moldean aquí, una sola vez. Se quedan los
     // del año académico del mes validado (jun→may), que es el que empareja la Navidad de
     // diciembre con la despedida del mayo siguiente — sin eso, validar mayo no encontraría la
@@ -1680,9 +1684,10 @@ function validateMonth(ctx) {
       // Candidato 2×R2 → lo gobierna INV-9
       if (!twoR2Justified(fecha)) {
         const antesDeDiciembre = compareISO(fecha, toISO(academicYearOf(fecha), 12, 1)) < 0;
-        // Aviso, no error (V-14): la Excepcion justificada todavía no se puede registrar desde
-        // la app, así que bloquear aquí impide validar un mes por algo que nadie puede resolver
-        // dentro de la herramienta.
+        // Aviso, no error (V-14): sigue siendo aviso aunque desde V-29 la Excepcion ya se pueda
+        // registrar desde la app — subir a error dejaría el mes bloqueado mientras alguien va a
+        // buscar el permiso del ciclo para justificarlo, y esta regla nunca fue de las tres que
+        // protegen lo imposible/ilegal.
         violations.push(aviso("INV-9", antesDeDiciembre
           ? `2×R2 el ${fecha}: la excepción solo aplica desde diciembre del año académico`
           : `2×R2 el ${fecha}: sin justificación documentada (rotaciones de mayores o necesidad organizativa)`,

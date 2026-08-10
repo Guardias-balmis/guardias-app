@@ -33,7 +33,7 @@ const REINTENTABLES = new Set([
   "getNonce", "login", "whoami", "validar",
   "listResidentes", "listAsignaciones", "listAsignacionesRango",
   "misPreferencias", "misBloqueos", "listBloqueos", "listBloqueosRango",
-  "listFestivosRango", "listEventos", "colaImaginaria",
+  "listFestivosRango", "listEventos", "listExcepciones", "colaImaginaria",
   "estadoResponsable", "listResponsables", "estadoCuadrante", "estadoVoluntariado3P",
 ]);
 
@@ -129,6 +129,10 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
     crearEvento: (tipo, fecha, voluntarios = []) => authed("crearEvento", { tipo, fecha, voluntarios }),
     anularEvento: (id) => authed("anularEvento", { id }),
     sortearEvento: (id) => authed("sortearEvento", { id }),
+    /** Excepciones (INV-9, V-29): degradan un 2×R2 documentado dentro de [desde,hasta]. */
+    listExcepciones: () => authed("listExcepciones"),
+    crearExcepcion: (tipo, desde, hasta, justificacion) => authed("crearExcepcion", { tipo, desde, hasta, justificacion }),
+    anularExcepcion: (id) => authed("anularExcepcion", { id }),
     /** Imaginaria (INV-13, V-20): la cola se DERIVA, nunca se almacena. */
     colaImaginaria: (grupo, fecha) => authed("colaImaginaria", { grupo, fecha }),
     registrarImaginaria: (grupo, fechaIncidencia, residenteId) => authed("registrarImaginaria", { grupo, fechaIncidencia, residenteId }),

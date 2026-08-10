@@ -262,8 +262,15 @@ function CalendarScreen() {
     if (!rFestivos.ok) showToast("No se pudieron cargar los festivos: " + rFestivos.error + " — INV-12 no se ha comprobado", "err");
     const festivos = rFestivos.ok ? rFestivos.festivos : [];
 
+    // Excepciones (INV-9, V-29): sin ellas, un 2×R2 con justificación documentada avisaría aquí
+    // igual que uno sin justificar — el servidor sí las ve en marcarValidado, así que el aviso
+    // desaparecería al validar de verdad. Es aviso, nunca bloquea (V-14), así que un fallo de red
+    // no impide seguir: solo deja este chequeo local sin la excepción.
+    const rExcepciones = await app.api.listExcepciones();
+    const excepciones = rExcepciones.ok ? rExcepciones.excepciones : [];
+
     const asignacionesDelMes = residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo })));
-    const ctx = buildMonthContext({ mes, anio, residentes, historicas, asignacionesDelMes, bloqueos, festivos });
+    const ctx = buildMonthContext({ mes, anio, residentes, historicas, asignacionesDelMes, bloqueos, festivos, excepciones });
 
     // Cierres de equidad de INV-3 (P-8, decisión V-13): el trimestral en ago/nov/feb/may y el
     // anual en el mes del aniversario de alguien. Es la MISMA comprobación que hará el
