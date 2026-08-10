@@ -1850,6 +1850,32 @@ function validateMonth(ctx) {
     }
   }
 
+  // ── INV-15: descanso obligatorio tras una guardia (decisión del autor, 2026-08-10) ──
+  // Nadie hace dos guardias en días consecutivos. Es `error`, y eso NO es una excepción a V-14
+  // sino un caso suyo: V-14 bloquea «lo imposible y lo ILEGAL», y tras una guardia de 24 h el
+  // descanso del día siguiente es una obligación legal, igual que INV-5 (no se le puede exigir
+  // una guardia a quien está de baja). No hay respaldo en `normativa.pdf` — está declarado como
+  // extensión en §5.1.
+  //
+  // Se juzga el PAR, así que se recorre una sola vez por asignación mirando el día siguiente. El
+  // par que cruza el borde del mes entra porque `asignaciones` trae el histórico (contrato C-2):
+  // por eso se exige que al menos uno de los dos días sea del mes validado, o validar octubre
+  // reportaría también un par ocurrido entero en agosto.
+  //
+  // Cuenta el 3P: es «tercer puesto de guardia», la misma noche en el hospital, y el descanso
+  // legal no distingue si era voluntario. Excluirlo dejaría que la herramienta bendijera
+  // exactamente el encadenamiento que esta regla existe para impedir.
+  const conPuesto = asignaciones.filter((a) => ASIGNACION.has(a.codigo));
+  const puestoPorClave = new Set(conPuesto.map((a) => `${a.residenteId}|${a.fecha}`));
+  for (const a of conPuesto) {
+    const siguiente = addDays(a.fecha, 1);
+    if (!dayset.has(a.fecha) && !dayset.has(siguiente)) continue;
+    if (!puestoPorClave.has(`${a.residenteId}|${siguiente}`)) continue;
+    violations.push(err("INV-15",
+      `Guardias en días consecutivos: ${a.fecha} y ${siguiente} (tras una guardia corresponde el descanso del día siguiente)`,
+      { fecha: siguiente, residenteId: a.residenteId }));
+  }
+
   return violations;
 }
 
@@ -2493,20 +2519,17 @@ var Schedule = (function () {
 //      número de guardias de cada uno, así que un buscador de solo-swap no puede mover nunca el
 //      eje `total`. Aquí `MOVER` es la mitad de los pasos por eso.
 //
-// DÍAS CONSECUTIVOS: nadie hace guardia dos días seguidos. Es una restricción DURA de aquí, por
-// decisión explícita del autor (2026-08-10), y se respeta por construcción igual que INV-5 o
-// INV-11 — no es un coste que se pueda pagar. Ojo con lo que NO es: no es un invariante. El
-// validador no la comprueba, así que un cuadrante hecho a mano en la rejilla puede tenerlas y
-// nadie avisará; si algún día debe avisar, es un INV nuevo con su procedencia en §5.1, no un
-// detalle de este fichero. La adyacencia se mira también contra el mes ANTERIOR (el histórico):
-// la última guardia de septiembre veta el 1 de octubre, o la regla se cumpliría solo por dentro
-// de cada mes y se rompería justo en el borde, que es donde nadie mira.
+// DÍAS CONSECUTIVOS (INV-15): nadie hace dos guardias seguidas. Es restricción dura y se poda
+// por construcción, igual que INV-5 e INV-11 — las otras dos que producen `error`. La adyacencia
+// se mira también contra el mes ANTERIOR (el histórico): la última guardia de septiembre veta el
+// 1 de octubre, o la regla se cumpliría solo por dentro de cada mes y se rompería justo en el
+// borde, que es donde nadie mira.
 //
-// Cuando respetarla dejaría un día SIN NADIE, se cede en ese día concreto y se dice en el
-// diagnóstico (`adyacenciaForzada`). Un día sin cubrir es un `error` de INV-1 que impide validar
-// el mes entero; dos guardias seguidas son un problema real pero corregible a mano. Preferir el
-// error habría sido dejar al servicio sin cuadrante para cumplir una regla más limpia, que es
-// exactamente lo que V-14 existe para evitar.
+// Si ningún elegible puede coger el día sin encadenar, el puesto se queda SIN CUBRIR y se dice
+// (`sinCubrir`, con `motivo: "descanso"`). No se rellena: proponerlo sería proponer algo ilegal
+// —y algo que el validador va a marcar como error de todas formas—, y un día vacío al menos dice
+// la verdad, que es que ese día no tiene solución legal con esta plantilla y hay que resolverlo
+// fuera de la aplicación. El generador nunca propone lo que el validador rechaza.
 //
 // El juez de la equidad sigue siendo `equity.js` en el cierre; esto solo es quien propone. La
 // función de coste de aquí IMITA a `validateResidencyYearClose` (mismos seis ejes, misma
@@ -2725,19 +2748,23 @@ function generateMonth(ctx, opciones = {}) {
   // más de pasos para llegar al mismo sitio.
   const slots = [];
   const sinCubrir = [];
-  const adyacenciaForzada = [];
   for (const fecha of dias) {
     for (const puesto of ["M", "P"]) {
       const base = poolDe(puesto, fecha);
       if (!base.length) {
-        sinCubrir.push({ fecha, puesto: puesto === "M" ? "Mayor" : "Pequeño" });
+        sinCubrir.push({ fecha, puesto: puesto === "M" ? "Mayor" : "Pequeño", motivo: "sin elegibles" });
         continue;
       }
-      // La regla de días consecutivos poda el pool; si lo vacía, se cede en ESTE día antes que
-      // dejarlo sin nadie (ver cabecera), y queda dicho para que se pueda corregir a mano.
-      const holgado = base.filter((a) => !tieneVecino(a, fecha));
-      const pool = holgado.length ? holgado : base;
-      if (!holgado.length) adyacenciaForzada.push({ fecha, puesto: puesto === "M" ? "Mayor" : "Pequeño" });
+      // INV-15 poda el pool igual que INV-5 o INV-11, y si lo vacía el puesto se queda SIN
+      // CUBRIR: proponer la guardia consecutiva sería proponer algo ilegal, y el generador no
+      // propone nada que el validador vaya a marcar como error. Un día sin nadie dice la verdad
+      // —«este día no tiene solución legal con esta plantilla»— y se arregla fuera de la app;
+      // rellenarlo lo disfrazaría de cuadrante correcto.
+      const pool = base.filter((a) => !tieneVecino(a, fecha));
+      if (!pool.length) {
+        sinCubrir.push({ fecha, puesto: puesto === "M" ? "Mayor" : "Pequeño", motivo: "descanso" });
+        continue;
+      }
       const elegido = pool.reduce((mejor, cand) => {
         const vc = metrica(cand).total / cand.f;
         const vm = metrica(mejor).total / mejor.f;
@@ -2841,9 +2868,6 @@ function generateMonth(ctx, opciones = {}) {
       // buscador y no se puede «mejorar» con más pasos: ese día no había nadie. Se dice para que
       // quien mire la propuesta sepa que el INV-1 que va a saltar viene de la plantilla.
       sinCubrir,
-      // Días en que hubo que ceder en la regla de días consecutivos para no dejar el puesto
-      // vacío. Vacío es lo normal; con contenido, son los días a repasar a mano.
-      adyacenciaForzada,
       cohortesComparadas: comparables.length,
       pasosAceptados: aceptados,
       // `duro` a 0 significa «los seis ejes dentro de ±1 en todas las cohortes comparables», que

@@ -352,6 +352,32 @@ export function validateMonth(ctx) {
     }
   }
 
+  // ── INV-15: descanso obligatorio tras una guardia (decisión del autor, 2026-08-10) ──
+  // Nadie hace dos guardias en días consecutivos. Es `error`, y eso NO es una excepción a V-14
+  // sino un caso suyo: V-14 bloquea «lo imposible y lo ILEGAL», y tras una guardia de 24 h el
+  // descanso del día siguiente es una obligación legal, igual que INV-5 (no se le puede exigir
+  // una guardia a quien está de baja). No hay respaldo en `normativa.pdf` — está declarado como
+  // extensión en §5.1.
+  //
+  // Se juzga el PAR, así que se recorre una sola vez por asignación mirando el día siguiente. El
+  // par que cruza el borde del mes entra porque `asignaciones` trae el histórico (contrato C-2):
+  // por eso se exige que al menos uno de los dos días sea del mes validado, o validar octubre
+  // reportaría también un par ocurrido entero en agosto.
+  //
+  // Cuenta el 3P: es «tercer puesto de guardia», la misma noche en el hospital, y el descanso
+  // legal no distingue si era voluntario. Excluirlo dejaría que la herramienta bendijera
+  // exactamente el encadenamiento que esta regla existe para impedir.
+  const conPuesto = asignaciones.filter((a) => ASIGNACION.has(a.codigo));
+  const puestoPorClave = new Set(conPuesto.map((a) => `${a.residenteId}|${a.fecha}`));
+  for (const a of conPuesto) {
+    const siguiente = addDays(a.fecha, 1);
+    if (!dayset.has(a.fecha) && !dayset.has(siguiente)) continue;
+    if (!puestoPorClave.has(`${a.residenteId}|${siguiente}`)) continue;
+    violations.push(err("INV-15",
+      `Guardias en días consecutivos: ${a.fecha} y ${siguiente} (tras una guardia corresponde el descanso del día siguiente)`,
+      { fecha: siguiente, residenteId: a.residenteId }));
+  }
+
   return violations;
 }
 

@@ -36,7 +36,7 @@ test("cubre el mes entero sin un solo error del validador (INV-1: 1 Mayor + 1 Pe
   assert.deepEqual(erroresDe(asignaciones), []);
 });
 
-test("nadie hace guardia dos días seguidos (restricción dura, decisión del autor)", () => {
+test("nadie hace guardia dos días seguidos (INV-15), y el validador tampoco lo ve", () => {
   for (const mes of [6, 7, 10, 12]) {
     const { asignaciones, diagnostico } = generar({ mes, anio: 2026 });
     for (const id of PLANTILLA.map((r) => r.id)) {
@@ -45,7 +45,8 @@ test("nadie hace guardia dos días seguidos (restricción dura, decisión del au
         assert.ok(!fs.has(addDays(f, 1)), `${id} tiene ${f} y ${addDays(f, 1)} seguidas (mes ${mes})`);
       }
     }
-    assert.deepEqual(diagnostico.adyacenciaForzada, [], `mes ${mes} no debería necesitar ceder`);
+    assert.deepEqual(diagnostico.sinCubrir, [], `mes ${mes} debería cubrirse entero con la plantilla real`);
+    assert.deepEqual(erroresDe(asignaciones, { mes }), []);
   }
 });
 
@@ -144,15 +145,22 @@ test("si un día no tiene a nadie elegible lo dice, no revienta ni inventa a alg
   assert.equal(asignaciones.length, 31);
 });
 
-test("antes de dejar un día vacío, cede en la regla de días consecutivos — y lo deja anotado", () => {
-  // Un único Pequeño para todo el mes: o hace días seguidos o el mes se queda sin cubrir. Un día
-  // sin nadie es `error` de INV-1 e impide validar; dos seguidas se corrigen a mano.
+test("con un solo Pequeño deja los días alternos SIN CUBRIR: no propone lo que INV-15 prohíbe", () => {
+  // Un único Pequeño para todo el mes. Encadenarle guardias sería ilegal (INV-15), así que el
+  // generador cubre día sí día no y DICE que el resto no tiene solución legal con esta plantilla:
+  // rellenarlo lo disfrazaría de cuadrante correcto y el validador lo rechazaría igual.
   const residentes = [...mk("r4_", 2, 2023), ...mk("r2_", 1, 2025)];
   const { asignaciones, diagnostico } = generar({ mes: 10, anio: 2026, residentes });
-  assert.equal(fechasDe(asignaciones, "r2_1").size, 31, "el Pequeño cubre los 31 días");
-  assert.equal(diagnostico.sinCubrir.length, 0);
-  assert.ok(diagnostico.adyacenciaForzada.length > 0, "y queda anotado que hubo que ceder");
-  assert.deepEqual(erroresDe(asignaciones, { residentes }), []);
+
+  const suyas = [...fechasDe(asignaciones, "r2_1")].sort();
+  assert.ok(suyas.length > 0 && suyas.length < 31, `debería cubrir algunos días, no todos (${suyas.length})`);
+  for (const f of suyas) assert.ok(!suyas.includes(addDays(f, 1)), `${f} y el día siguiente, seguidas`);
+  const porDescanso = diagnostico.sinCubrir.filter((s) => s.motivo === "descanso");
+  assert.equal(porDescanso.length, 31 - suyas.length);
+  assert.ok(porDescanso.every((s) => s.puesto === "Pequeño"));
+  // Lo que propone NO tiene ni un INV-15: los errores que quedan son los días sin Pequeño (INV-1).
+  const errores = erroresDe(asignaciones, { residentes });
+  assert.ok(errores.every((v) => v.invariante === "INV-1"), errores.map((v) => v.invariante).join(","));
 });
 
 test("no propone nada para quien ya terminó la residencia ni para quien no ha empezado", () => {
