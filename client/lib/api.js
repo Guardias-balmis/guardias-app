@@ -32,7 +32,7 @@ export function buildRequestInit(payload) {
 const REINTENTABLES = new Set([
   "getNonce", "login", "whoami", "validar",
   "listResidentes", "listAsignaciones", "listAsignacionesRango",
-  "misPreferencias", "misBloqueos", "listBloqueos", "listBloqueosRango",
+  "misPreferencias", "listPreferencias", "misBloqueos", "listBloqueos", "listBloqueosRango",
   "listFestivosRango", "listEventos", "listExcepciones", "colaImaginaria",
   "estadoResponsable", "listResponsables", "estadoCuadrante", "estadoVoluntariado3P",
 ]);
@@ -108,6 +108,8 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
     listAsignacionesRango: (desde, hasta) => authed("listAsignacionesRango", { desde, hasta }),
     guardarAsignaciones: (cambios) => authed("guardarAsignaciones", { cambios }),
     misPreferencias: (anio, mes) => authed("misPreferencias", { anio, mes }),
+    /** Alcance EQUIPO (misPreferencias es el propio): las necesita quien monta el cuadrante. */
+    listPreferencias: (anio, mes) => authed("listPreferencias", { anio, mes }),
     guardarPreferencias: (anio, mes, prefs) => authed("guardarPreferencias", { anio, mes, prefs }),
     validar: (cuadrante) => authed("validar", { cuadrante }),
     misBloqueos: (anio, mes) => authed("misBloqueos", { anio, mes }),

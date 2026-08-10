@@ -5,14 +5,21 @@
 // (spec.md §5), mismo esquema visual de violaciones que CalendarScreen.
 import { COLOR, S, ANOS } from "./client/lib/design-tokens.js";
 import { periodsOfResident, levelOn, groupOf, periodOn } from "./v2/domain/residents.js";
-import { addDays, toISO, daysInMonth, bridgesOfMonth } from "./v2/domain/calendar.js";
+import { addDays, toISO, daysInMonth, bridgesOfMonth, academicYearOf } from "./v2/domain/calendar.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/domain/validate.js";
 import { accumulatedTally } from "./v2/domain/accumulate.js";
 import { canEdit } from "./v2/domain/cuadrante.js";
 import { violationText } from "./client/lib/violations.js";
 import { monthReplacementPlan } from "./client/lib/apply-month.js";
+// Los dos ámbitos que `validateMonth` NO cubre y que hasta ahora esta pantalla se saltaba: los
+// cierres de equidad de INV-3 (trimestral y de año de residencia) y el ciclo L-D del tercer
+// puesto (INV-8). Ambos necesitan histórico de fuera del mes, así que traen red — es lo que
+// vuelve `comprobar()` asíncrono. Son los mismos módulos que usa Calendar.jsx: el veredicto de
+// las dos pantallas tiene que salir del mismo sitio.
+import { closeViolations } from "./client/lib/closes.js";
+import { thirdPostViolations } from "./client/lib/thirdpost.js";
 
-const { useState, useMemo, useEffect } = React;
+const { useState, useMemo, useEffect, useRef } = React;
 const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
 
 const GRUPO_LABEL = { MAYOR: "Mayor", PEQUENO: "Pequeño" };
@@ -78,7 +85,62 @@ function construirFestivosTexto(festivos, puentes) {
   return `FESTIVOS DEL MES (los únicos que existen; la víspera de cada uno es prefestivo → GP):\n${lista}${puentesTexto}`;
 }
 
-function construirPrompt({ mes, anio, nombreMes, porNivel, acumulados, bloqueosDelMes, festivosDelMes, puentesDelMes }) {
+/**
+ * Voluntarios del tercer puesto, para el prompt. El 3P es autoservicio puro («será siempre
+ * voluntario», V-18): la norma 8 le pedía al modelo repartir el 3P «con equidad entre
+ * voluntarios» sin decirle NUNCA quiénes son, así que o no lo ponía o lo repartía entre
+ * cualquiera. El `desde` viaja porque es el que arranca el ciclo L-D de INV-8b (contrato C-4),
+ * no un borde de calendario.
+ */
+function construirVoluntarios3PTexto(voluntarios) {
+  if (!voluntarios || voluntarios.length === 0) {
+    return "VOLUNTARIOS DEL 3.º PUESTO: ninguno. NO asignes ningún código 3P este mes.";
+  }
+  const lista = voluntarios.map((v) => `  - id="${v.residenteId}" — voluntario desde ${v.desde}`).join("\n");
+  return `VOLUNTARIOS DEL 3.º PUESTO (los ÚNICOS que pueden llevar código 3P):\n${lista}`;
+}
+
+/**
+ * Eventos del servicio del curso (INV-10). Igual que los festivos: son un dato de entrada, y sin
+ * ellos la norma 10 terminaba con «si no conoces esas fechas, ignora esta norma» — es decir, se
+ * apagaba sola. `voluntarios` es el resultado del sorteo cuando ya se hizo.
+ */
+function construirEventosTexto(eventos) {
+  if (!eventos || eventos.length === 0) {
+    return "EVENTOS DEL SERVICIO (Navidad, cena de despedida): ninguno cargado. NO inventes fechas de\nevento ni apliques la norma 10.";
+  }
+  const lista = eventos.map((e) => {
+    const quienes = e.voluntarios && e.voluntarios.length
+      ? ` — sorteados: ${e.voluntarios.map((id) => `id="${id}"`).join(", ")}`
+      : " — sin sorteo todavía";
+    return `  - ${String(e.tipo).toUpperCase()} el ${e.fecha}${quienes}`;
+  }).join("\n");
+  return `EVENTOS DEL SERVICIO DE ESTE CURSO:\n${lista}`;
+}
+
+/**
+ * Preferencias personales del equipo. Son BLANDAS por definición (V-6/V-8): `fechasEvitar` no la
+ * enforcea ningún invariante y `maxGuardias` no puede saltarse el 4-6 de INV-2. Se marcan como
+ * tales en el texto para que el modelo no las trate como bloqueos — la ausencia de verdad es una
+ * fila de `bloqueos`, que ya va en su propia sección.
+ */
+function construirPreferenciasTexto(preferencias) {
+  const utiles = (preferencias || []).filter(
+    (p) => (p.fechasEvitar && p.fechasEvitar.length) || p.maxGuardias || p.preferDobles || p.notas
+  );
+  if (utiles.length === 0) return "PREFERENCIAS PERSONALES DEL MES: ninguna registrada.";
+  const lista = utiles.map((p) => {
+    const partes = [];
+    if (p.fechasEvitar && p.fechasEvitar.length) partes.push(`preferiría evitar ${p.fechasEvitar.join(", ")}`);
+    if (p.maxGuardias) partes.push(`querría no pasar de ${p.maxGuardias} guardias`);
+    if (p.preferDobles) partes.push(`doblete preferido: ${String(p.preferDobles).toLowerCase().replace(/_/g, "-")}`);
+    if (p.notas) partes.push(`nota: "${p.notas}"`);
+    return `  - id="${p.residenteId}" — ${partes.join("; ")}`;
+  }).join("\n");
+  return `PREFERENCIAS PERSONALES DEL MES (BLANDAS: son deseos, no obligaciones — respétalas solo si\nno te obligan a incumplir ninguna norma de abajo):\n${lista}`;
+}
+
+function construirPrompt({ mes, anio, nombreMes, porNivel, acumulados, bloqueosDelMes, festivosDelMes, puentesDelMes, voluntarios3P, eventos, preferencias }) {
   const bloques = ANOS.map((nivel) => {
     const lista = porNivel[nivel];
     if (!lista.length) return null;
@@ -104,6 +166,12 @@ ${construirBloqueosTexto(bloqueosDelMes)}
 
 ${construirFestivosTexto(festivosDelMes, puentesDelMes)}
 
+${construirVoluntarios3PTexto(voluntarios3P)}
+
+${construirEventosTexto(eventos)}
+
+${construirPreferenciasTexto(preferencias)}
+
 NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
 1. Cada día lleva exactamente 1 guardia (G/GF/GP) de un residente Mayor (R3/R4) y 1 de un
    residente Pequeño (R1/R2). Excepción: 2 residentes R2 el mismo día solo se admite desde
@@ -121,11 +189,13 @@ NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
    ausentes a la vez en rotación externa.
 7. Si un residente rota en Alicante o provincia colindante (ver BLOQUEOS ACTIVOS), cúbrele
    guardia de viernes y de sábado durante esa rotación.
-8. El 3.º puesto recorre lunes→domingo antes de repetir día, con equidad entre voluntarios.
+8. El 3.º puesto (3P) SOLO puede recaer en los VOLUNTARIOS listados arriba, nunca en otro
+   residente. Recorre lunes→domingo antes de repetir día, con equidad entre ellos.
 9. 2 residentes R2 el mismo día solo se admite desde el 1 de diciembre y justificado, o en
    un día de evento del servicio (Navidad, despedida).
-10. Los eventos del servicio (Navidad, cena de despedida) se cubren con 2 R2 por sorteo
-    documentado; si no conoces esas fechas, ignora esta norma.
+10. Los eventos del servicio listados arriba se cubren con 2 R2 por sorteo documentado; si ya
+    figuran los sorteados, respétalos. Usa EXCLUSIVAMENTE esas fechas: no deduzcas por tu
+    cuenta cuándo cae la Navidad o la despedida del servicio.
 11. Junio, julio y agosto: ningún R1 hace guardia — ese puesto de Pequeño lo cubren los R2,
     repartido con equidad entre ellos.
 12. Usa el código GP para el prefestivo (la VÍSPERA de un festivo), GF para el propio festivo y
@@ -183,6 +253,13 @@ function GeneratorScreen() {
   // servidor ya lo rechaza en guardarAsignaciones, esto solo lo refleja en la UI.
   const [estadoCuadrante, setEstadoCuadrante] = useState("BORRADOR");
   const [festivos, setFestivos] = useState([]);
+  // Las tres piezas que le faltaban al prompt. Ninguna es load-bearing para aplicar (a diferencia
+  // de bloqueos/estado/existentes): si fallan, el prompt lo DICE en su sección y la pantalla sigue
+  // siendo usable, igual que ya se hacía con los festivos. `eventos` además entra en la validación
+  // (INV-10), que hasta ahora corría siempre con la lista vacía.
+  const [voluntarios3P, setVoluntarios3P] = useState([]);
+  const [eventos, setEventos] = useState([]);
+  const [preferencias, setPreferencias] = useState([]);
   // Lo que el mes YA tiene. No entra en la validación (eso duplicaría lo pegado), pero sin ello
   // no se puede aplicar bien: `guardarAsignaciones` es append-only y mandar solo las filas nuevas
   // AÑADE — ver client/lib/apply-month.js.
@@ -196,12 +273,15 @@ function GeneratorScreen() {
       setLoading(true);
 
       const monthEnd = toISO(anio, mes, daysInMonth(anio, mes));
-      const [rBloqueos, rEstado, rFestivos, rExistentes] = await Promise.all([
+      const [rBloqueos, rEstado, rFestivos, rExistentes, r3P, rEventos, rPrefs] = await Promise.all([
         api.listBloqueos(anio, mes),
         api.estadoCuadrante(anio, mes),
         // Con margen: el vecino del día 1 y el del último día deciden si son puente (§3.4).
         api.listFestivosRango(addDays(monthStart, -1), addDays(monthEnd, 1)),
         api.listAsignaciones(anio, mes),
+        api.estadoVoluntariado3P(),
+        api.listEventos(),
+        api.listPreferencias(anio, mes),
       ]);
       if (cancelled) return;
       // Un fallo de estadoCuadrante o del cuadrante actual pasa por el MISMO contextError que un
@@ -222,14 +302,30 @@ function GeneratorScreen() {
         setHistoricas([]);
         setFestivos([]);
         setExistentes([]);
+        setVoluntarios3P([]);
+        setEventos([]);
+        setPreferencias([]);
         return;
       }
       setExistentes(rExistentes.asignaciones);
       setEstadoCuadrante(rEstado.estado);
       // Un fallo al cargar festivos NO tumba la pantalla (INV-12 es aviso, V-14), pero tampoco
-      // se calla: sin ellos el prompt le dice al modelo que no invente ninguno.
-      if (!rFestivos.ok) showToast("No se pudieron cargar los festivos: " + rFestivos.error, "err");
+      // se calla: sin ellos el prompt le dice al modelo que no invente ninguno. Mismo criterio
+      // para voluntarios 3P, eventos y preferencias: cada sección del prompt dice explícitamente
+      // que no hay datos, que es muy distinto de omitir la sección y dejar al modelo improvisar.
+      const degradados = [
+        !rFestivos.ok && "los festivos",
+        !r3P.ok && "los voluntarios del 3.º puesto",
+        !rEventos.ok && "los eventos del servicio",
+        !rPrefs.ok && "las preferencias del equipo",
+      ].filter(Boolean);
+      if (degradados.length > 0) {
+        showToast(`No se pudieron cargar ${degradados.join(", ")} — el prompt irá sin esos datos`, "err");
+      }
       setFestivos(rFestivos.ok ? rFestivos.festivos : []);
+      setVoluntarios3P(r3P.ok ? r3P.voluntarios : []);
+      setEventos(rEventos.ok ? rEventos.eventos : []);
+      setPreferencias(rPrefs.ok ? rPrefs.preferencias : []);
 
       // Rango del histórico: cubre (a) desde el inicio del año de residencia en curso más
       // antiguo entre los residentes activos (para accumulatedTally, contrato C-1) y (b)
@@ -254,9 +350,16 @@ function GeneratorScreen() {
       if (!rHist.ok) {
         setContextError("No se pudo cargar el histórico de guardias: " + rHist.error);
         setCargandoContexto(false);
+        // Se vacía TODO el contexto, igual que en la rama de arriba: con contextError activo el
+        // prompt no debe seguir enseñando media carga como si estuviera completa. Antes se
+        // dejaban los festivos puestos y el prompt salía a medias sin decirlo.
         setBloqueos([]);
         setHistoricas([]);
         setExistentes([]);
+        setFestivos([]);
+        setVoluntarios3P([]);
+        setEventos([]);
+        setPreferencias([]);
         return;
       }
       setBloqueos(rBloqueos.bloqueos);
@@ -283,9 +386,20 @@ function GeneratorScreen() {
     () => monthReplacementPlan({ mes, anio, residentes, existentes, propuesta: [] }).borradas.length,
     [mes, anio, residentes, existentes]
   );
+  // Solo los eventos del curso del mes que se está generando: la Navidad de diciembre empareja
+  // con la despedida del mayo SIGUIENTE (año académico jun→may), que es el mismo criterio que
+  // aplica shapeEventos dentro de buildMonthContext — el prompt y el validador tienen que estar
+  // mirando exactamente los mismos eventos.
+  const eventosDelCurso = useMemo(() => {
+    const curso = academicYearOf(monthStart);
+    return eventos.filter((e) => e && e.activo !== false && academicYearOf(e.fecha) === curso);
+  }, [eventos, monthStart]);
   const promptText = useMemo(
-    () => construirPrompt({ mes, anio, nombreMes, porNivel, acumulados, bloqueosDelMes: bloqueos, festivosDelMes, puentesDelMes: puentes }),
-    [mes, anio, nombreMes, porNivel, acumulados, bloqueos, festivosDelMes, puentes]
+    () => construirPrompt({
+      mes, anio, nombreMes, porNivel, acumulados, bloqueosDelMes: bloqueos, festivosDelMes,
+      puentesDelMes: puentes, voluntarios3P, eventos: eventosDelCurso, preferencias,
+    }),
+    [mes, anio, nombreMes, porNivel, acumulados, bloqueos, festivosDelMes, puentes, voluntarios3P, eventosDelCurso, preferencias]
   );
 
   const [respuesta, setRespuesta] = useState("");
@@ -294,6 +408,24 @@ function GeneratorScreen() {
   const [parsedAsignaciones, setParsedAsignaciones] = useState(null);
   const [plan, setPlan] = useState(null); // lo que se escribiría al aplicar (apply-month.js)
   const [applying, setApplying] = useState(false);
+  const [comprobando, setComprobando] = useState(false);
+  // Qué ámbitos NO se han podido comprobar (cierres de INV-3, tercer puesto). No es lo mismo que
+  // "sin violaciones": es "no se sabe", y se pregunta antes de aplicar en vez de darlo por bueno.
+  const [checksIncompletos, setChecksIncompletos] = useState([]);
+  const [confirmarAplicar, setConfirmarAplicar] = useState(false);
+
+  // `comprobar()` pasó a tener red (cierres de INV-3 e INV-8), así que ahora hay una ventana entre
+  // que arranca y que termina. `runRef` numera cada pasada y `respuestaVigenteRef` guarda el texto
+  // que hay REALMENTE en el textarea: si al volver de la red no coinciden, el veredicto habla de
+  // algo que ya no está en pantalla y se tira. Sin esto, editar la respuesta mientras se comprueba
+  // dejaba el veredicto viejo —y su `plan.cambios`— asociado al texto nuevo.
+  //
+  // La ref del texto se escribe EN RENDER y no en un efecto: un efecto corre después, y en esa
+  // ventana la comprobación en vuelo todavía se daría por vigente. Escribirla en render es
+  // idempotente y no depende del orden de los efectos.
+  const runRef = useRef(0);
+  const respuestaVigenteRef = useRef("");
+  respuestaVigenteRef.current = respuesta;
 
   const onRespuestaChange = (v) => {
     setRespuesta(v);
@@ -301,6 +433,8 @@ function GeneratorScreen() {
     setViolaciones(null);
     setParsedAsignaciones(null);
     setPlan(null);
+    setChecksIncompletos([]);
+    setConfirmarAplicar(false);
   };
 
   const copiarPrompt = async () => {
@@ -312,7 +446,11 @@ function GeneratorScreen() {
     }
   };
 
-  const comprobar = () => {
+  const comprobar = async () => {
+    const run = runRef.current + 1;
+    runRef.current = run;
+    const textoComprobado = respuesta;
+
     // Un único punto de rechazo: cada motivo tiene que dejar la pantalla en el mismo estado (sin
     // veredicto y sin plan de escritura), y ya eran tres copias de lo mismo antes de sumar la
     // comprobación de las fechas de abajo.
@@ -321,6 +459,8 @@ function GeneratorScreen() {
       setViolaciones(null);
       setParsedAsignaciones(null);
       setPlan(null);
+      setChecksIncompletos([]);
+      setConfirmarAplicar(false);
     };
     const texto = respuesta.replace(/```json|```/g, "").trim();
     let parsed;
@@ -362,15 +502,52 @@ function GeneratorScreen() {
       asignacionesDelMes: asignacionesRespuesta,
       bloqueos,
       festivos,
+      // Sin esto INV-10 corría siempre con la lista vacía: el validador del Generador no podía
+      // emitir un solo aviso de evento por mucho que la tabla estuviera rellena.
+      eventos,
     });
+    let violacionesMes;
     try {
-      setParseError(null);
-      setViolaciones(validateMonth(ctx));
-      setParsedAsignaciones(asignacionesRespuesta);
-      setPlan(nuevoPlan);
+      violacionesMes = validateMonth(ctx);
     } catch (e) {
       return rechaza("La respuesta no se pudo validar: " + e.message);
     }
+
+    // Los dos ámbitos de fuera del mes. `validateMonth` no los cubre a propósito (es de ámbito
+    // mes) y esta pantalla llevaba desde P-8 sin llamarlos: quien aplicaba una propuesta de la IA
+    // no veía ni la equidad de cierre de INV-3 ni los 3P mal repartidos. Van en paralelo y cada
+    // uno resuelve su propio histórico (quarterCloseWindow / thirdPostHistoryStart): los rangos
+    // no se adivinan aquí, que es el error que costó la regresión del contrato C-2.
+    setComprobando(true);
+    const [rCierres, r3P] = await Promise.all([
+      closeViolations({ api, mes, anio, residentes, asignacionesDelMes: asignacionesRespuesta }),
+      thirdPostViolations({ api, mes, anio, residentes, asignacionesDelMes: asignacionesRespuesta }),
+    ]);
+    // El flag se suelta salvo que otra comprobación haya arrancado detrás: en ese caso es suya, y
+    // apagarlo aquí dejaría el botón diciendo que no hay nada en curso cuando sí lo hay.
+    const soyLaUltima = runRef.current === run;
+    if (soyLaUltima) setComprobando(false);
+    // El usuario pudo reescribir la respuesta mientras esto viajaba: el veredicto ya no habla de
+    // lo que hay en pantalla, así que se tira entero en vez de pintarlo.
+    if (!soyLaUltima || respuestaVigenteRef.current !== textoComprobado) return;
+
+    // Un fallo de red NO se traduce en "sin violaciones": se nombra lo que quedó sin mirar y se
+    // pide confirmación antes de aplicar (V-14 — avisar y preguntar, nunca bloquear en seco).
+    const incompletos = [
+      !rCierres.ok && { que: "la equidad de cierre (INV-3)", error: rCierres.error },
+      !r3P.ok && { que: "el tercer puesto (INV-8)", error: r3P.error },
+    ].filter(Boolean);
+
+    setParseError(null);
+    setViolaciones([
+      ...violacionesMes,
+      ...(rCierres.ok ? rCierres.violaciones : []),
+      ...(r3P.ok ? r3P.violaciones : []),
+    ]);
+    setParsedAsignaciones(asignacionesRespuesta);
+    setPlan(nuevoPlan);
+    setChecksIncompletos(incompletos);
+    setConfirmarAplicar(false);
   };
 
   const errores = (violaciones || []).filter((v) => v.severidad === "error");
@@ -378,8 +555,11 @@ function GeneratorScreen() {
   const cuadrantePublicado = !canEdit(estadoCuadrante);
   // `parsedAsignaciones.length > 0` y no `plan.cambios.length`: un `{"asignaciones": []}` genera un
   // plan que solo borra, y "aplicar" no puede ser la forma de vaciar el mes de un botonazo.
-  const puedeAplicar = violaciones !== null && errores.length === 0 && parsedAsignaciones && parsedAsignaciones.length > 0 && !cuadrantePublicado;
+  const puedeAplicar = violaciones !== null && errores.length === 0 && parsedAsignaciones && parsedAsignaciones.length > 0 && !cuadrantePublicado && !comprobando;
   const guardiasQueSePierden = plan ? plan.borradas.length : 0;
+  // Lo que no se ha podido comprobar se pregunta, no se bloquea ni se pasa por alto (V-14): el
+  // primer clic solo enseña qué quedó sin mirar, el segundo aplica de verdad.
+  const faltaConfirmar = checksIncompletos.length > 0 && !confirmarAplicar;
 
   const aplicar = async () => {
     setApplying(true);
@@ -449,8 +629,8 @@ function GeneratorScreen() {
           placeholder='{"asignaciones": [{"fecha":"YYYY-MM-DD","residenteId":"...","codigo":"G"}]}'
           style={{ ...S.input, width: "100%", boxSizing: "border-box", fontFamily: MONO_FONT, fontSize: 12, resize: "vertical" }} />
         <div style={{ marginTop: 10 }}>
-          <Btn onClick={comprobar} disabled={!respuesta.trim() || cargandoContexto || !!contextError} aria-busy={cargandoContexto}>
-            {cargandoContexto ? "Cargando contexto…" : "Comprobar y aplicar"}
+          <Btn onClick={comprobar} disabled={!respuesta.trim() || cargandoContexto || comprobando || !!contextError} aria-busy={cargandoContexto || comprobando}>
+            {cargandoContexto ? "Cargando contexto…" : comprobando ? "Comprobando…" : "Comprobar y aplicar"}
           </Btn>
         </div>
       </Card>
@@ -503,8 +683,27 @@ function GeneratorScreen() {
                     como lo validado arriba.
                   </Aviso>
                 )}
-                <Btn onClick={aplicar} disabled={applying || !puedeAplicar} color={COLOR.greenMid}>
+                {/* Nombra lo que de verdad falló, como en Calendar.jsx: atribuir a los cierres un
+                    fallo del tercer puesto manda a buscar el problema al sitio equivocado. */}
+                {checksIncompletos.length > 0 && (
+                  <Aviso color={COLOR.orange} bg={COLOR.orangeLight}>
+                    <b>⚖️ No se ha podido comprobar {checksIncompletos.map((c) => c.que).join(" ni ")}.</b>
+                    <div style={{ marginTop: 4 }}>
+                      {/* Deduplicado: los dos fallan casi siempre por lo mismo (la red, la sesión), y
+                          repetir el mismo texto dos veces se lee como si fueran dos problemas. */}
+                      {[...new Set(checksIncompletos.map((c) => c.error))].join(" · ")}. El resto de la propuesta sí se ha
+                      validado; eso queda sin mirar. Puedes aplicarla igualmente y revisarlo después en la
+                      pantalla Cuadrante, que vuelve a comprobarlo.
+                    </div>
+                  </Aviso>
+                )}
+                <Btn
+                  onClick={faltaConfirmar ? () => setConfirmarAplicar(true) : aplicar}
+                  disabled={applying || !puedeAplicar}
+                  color={faltaConfirmar ? COLOR.orange : COLOR.greenMid}
+                >
                   {applying ? "Aplicando…"
+                    : faltaConfirmar ? "Aplicar de todas formas"
                     : guardiasQueSePierden > 0 ? `♻️ Reemplazar el cuadrante de ${nombreMes}`
                     : "✅ Aplicar al cuadrante"}
                 </Btn>
