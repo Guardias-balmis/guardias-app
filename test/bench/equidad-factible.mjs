@@ -16,6 +16,17 @@
 // nunca una reimplementación. Aquí solo se buscan asignaciones; quién decide si valen es el código
 // que está en producción. Un banco que se juzga a sí mismo no mide nada.
 //
+// INV-15 (decisión V-31, posterior a la primera versión de este banco): nadie hace guardia dos
+// días consecutivos, y es `error`. Se aplica aquí como PODA dura — nunca se crea una asignación
+// que encadene —, no como coste. Sin esto el banco medía un problema más fácil que el real: su
+// propia salida producía ~90 errores duros por semilla, todos INV-15.
+//
+// MEDIDO CON INV-15 PUESTO (2026-08-11): el ±1 sigue alcanzándose 6/6 en los seis escenarios y
+// con CERO errores duros, y el banco además va MÁS RÁPIDO que sin la restricción (0,85 s frente
+// a 1,4 s en el caso base), porque podar el espacio de búsqueda compensa de sobra lo que estrecha.
+// INV-15 solo obliga a dejar puestos vacíos cuando el pool elegible de un puesto baja a UNA
+// persona —solo puede hacer días alternos—, y esos huecos son aviso de INV-1, no error.
+//
 // TRES COSAS QUE SE APRENDIERON MIDIENDO, y que quien escriba el solver necesita saber:
 //   1. Un buscador que solo INTERCAMBIA asignaciones no puede arreglar nunca el eje `total`: un
 //      intercambio conserva el número de guardias de cada uno. Hace falta un operador que reasigne.
@@ -90,6 +101,14 @@ function contexto(roster, bajas) {
   const libre = (ocupa, f, id) => !(ocupa.get(f) || EMPTY).has(id);
   const ocupar = (ocupa, f, id) => { if (!ocupa.has(f)) ocupa.set(f, new Set()); ocupa.get(f).add(id); };
   const soltar = (ocupa, f, id) => { const s = ocupa.get(f); if (s) s.delete(id); };
+  // INV-15: ¿puede `id` coger `f` sin encadenar? `excluir` es la fecha que está soltando en el
+  // mismo movimiento (en un intercambio importa: si las dos fechas son vecinas, soltar una
+  // legaliza la otra).
+  const sinEncadenar = (asig, id, f, excluir = null) => {
+    const suyas = asig.get(id);
+    for (const vecina of [addDays(f, -1), addDays(f, 1)]) if (vecina !== excluir && suyas.has(vecina)) return false;
+    return true;
+  };
   const met = (fechas) => {
     const t = tally([...fechas].map((f) => ({ fecha: f, codigo: codigoDe(f) })), { start: VENTANA.start, end: VENTANA.end });
     let libres = 0; for (const p of puentes) if (!fechas.has(p)) libres++;
@@ -112,7 +131,7 @@ function contexto(roster, bajas) {
     return { duro, guia };
   };
   const peor = (x, y) => x.duro > y.duro + 1e-9 || (Math.abs(x.duro - y.duro) <= 1e-9 && x.guia > y.guia + 1e-9);
-  return { res, D, grupos, cohorteDe, mayores, puentes, fDe, poolDe, met, costeCohorte, peor, nuevoOcupa, libre, ocupar, soltar };
+  return { res, D, grupos, cohorteDe, mayores, puentes, fDe, poolDe, met, costeCohorte, peor, nuevoOcupa, libre, ocupar, soltar, sinEncadenar };
 }
 
 /** Busca un año entero de una vez. Devuelve el mejor cuadrante encontrado. */
@@ -126,7 +145,10 @@ function buscarAnual({ semilla = 1, intentos = 8, pasos = 40000, roster = {}, ba
     const ocupa = X.nuevoOcupa();
     const slots = [];
     for (const f of X.D) for (const puesto of ["M", "P"]) {
-      const pool = X.poolDe(puesto, f).filter((id) => X.libre(ocupa, f, id));
+      const pool = X.poolDe(puesto, f).filter((id) => X.libre(ocupa, f, id) && X.sinEncadenar(asig, id, f));
+      // Sin candidato legal el puesto se queda VACÍO, igual que hace schedule.js (V-31c): antes
+      // que encadenar, no cubrir. Un día con el otro puesto cubierto es aviso de INV-1, no error.
+      if (!pool.length) { slots.push({ fecha: f, puesto, id: null }); continue; }
       const id = pool[(rnd() * pool.length) | 0];
       asig.get(id).add(f); X.ocupar(ocupa, f, id); slots.push({ fecha: f, puesto, id });
     }
@@ -137,18 +159,21 @@ function buscarAnual({ semilla = 1, intentos = 8, pasos = 40000, roster = {}, ba
 
     for (let k = 0; k < pasos && duro > 1e-9; k++) {
       const a = slots[(rnd() * slots.length) | 0];
+      if (a.id === null) continue; // puesto vacío por INV-15: no hay nada que mover
       // MOVER la mitad de los pasos es imprescindible: un intercambio conserva el número de
       // guardias de cada uno, así que por sí solo no puede arreglar nunca el eje `total`.
       const mover = rnd() < 0.5;
       const b = mover ? null : slots[(rnd() * slots.length) | 0];
       let destino;
       if (mover) {
-        const cand = X.poolDe(a.puesto, a.fecha).filter((id) => id !== a.id && X.libre(ocupa, a.fecha, id));
+        const cand = X.poolDe(a.puesto, a.fecha).filter((id) => id !== a.id && X.libre(ocupa, a.fecha, id) && X.sinEncadenar(asig, id, a.fecha));
         if (!cand.length) continue;
         destino = cand[(rnd() * cand.length) | 0];
       } else {
-        if (b.puesto !== a.puesto || b.id === a.id) continue;
+        if (b.id === null || b.puesto !== a.puesto || b.id === a.id) continue;
         if (!X.poolDe(a.puesto, b.fecha).includes(a.id) || !X.poolDe(b.puesto, a.fecha).includes(b.id)) continue;
+        // Cada uno suelta su fecha al coger la del otro: por eso se excluye al comprobar.
+        if (!X.sinEncadenar(asig, a.id, b.fecha, a.fecha) || !X.sinEncadenar(asig, b.id, a.fecha, b.fecha)) continue;
       }
       const A = asig.get(a.id), B = asig.get(mover ? destino : b.id);
       const oA = M[a.id], oB = M[mover ? destino : b.id];
@@ -198,7 +223,10 @@ function erroresDuros(asignaciones, res, bloqueos = []) {
   for (const [k, delMes] of porMes) {
     if (k === "2026-05" || k === "2027-05") continue; // meses cortados por el aniversario
     const [anio, mes] = k.split("-").map(Number);
-    n += validateMonth(buildMonthContext({ mes, anio, residentes: res, asignacionesDelMes: delMes, bloqueos, festivos: FESTIVOS }))
+    // `historicas` es imprescindible desde INV-15: sin el mes anterior, el par que cruza el
+    // borde (día 31 + día 1) es invisible y el banco se daría por bueno sin haberlo mirado.
+    const ms = `${k}-01`;
+    n += validateMonth(buildMonthContext({ mes, anio, residentes: res, historicas: asignaciones.filter((a) => a.fecha < ms), asignacionesDelMes: delMes, bloqueos, festivos: FESTIVOS }))
       .filter((v) => v.severidad === "error").length;
   }
   return n;
