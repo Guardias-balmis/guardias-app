@@ -79,6 +79,53 @@ test("INV-8a: 3P asignado a un no voluntario", () => {
   assert.equal(e[0].residenteId, "r4-david");
 });
 
+// ── INV-8a con `periodosVoluntario3P` (decisión V-28): "¿era voluntario ESE día?", no "¿lo es
+// AHORA?". Sin este campo (los tests de arriba) se conserva el criterio antiguo a propósito.
+
+test("INV-8a + periodosVoluntario3P: retirado HOY no invalida un 3P legítimo de cuando SÍ era voluntario", () => {
+  // Bruno se apuntó en mayo y se retiró en diciembre — hoy ya no está en `voluntarios3P` (activos),
+  // pero en agosto sí lo era. Antes de V-28 esto se marcaba en falso: `voluntarios` (solo activos)
+  // no lo incluye, así que `voluntarios.has()` daba false.
+  const v = validateThirdPost({
+    mes: 8, anio: 2026, residentes: [BRUNO], voluntarios3P: [], historial3P: {},
+    asignaciones: [p3("r2-bruno", "2026-08-07")],
+    periodosVoluntario3P: [{ residenteId: "r2-bruno", desde: "2026-05-01", hasta: "2026-12-01" }],
+  });
+  assert.equal(only8(v).length, 0);
+});
+
+test("INV-8a + periodosVoluntario3P: apuntado HOY no exime un 3P de ANTES de apuntarse", () => {
+  // Carla se apuntó en septiembre. Antes de V-28 un 3P en junio (de cuando no era voluntaria)
+  // se daba por bueno porque `voluntarios` (la lista de HOY) ya la incluye.
+  const v = validateThirdPost({
+    mes: 6, anio: 2026, residentes: [CARLA], voluntarios3P: ["r2-carla"], historial3P: {},
+    asignaciones: [p3("r2-carla", "2026-06-05")],
+    periodosVoluntario3P: [{ residenteId: "r2-carla", desde: "2026-09-01" }],
+  });
+  const e = rotacion8(v);
+  assert.equal(e.length, 1);
+  assert.equal(e[0].residenteId, "r2-carla");
+});
+
+test("INV-8a + periodosVoluntario3P: dos periodos separados (se apuntó, se retiró, volvió) cubren cada uno su tramo", () => {
+  const periodos = [
+    { residenteId: "r2-bruno", desde: "2026-01-01", hasta: "2026-03-31" }, // primer periodo, cerrado
+    { residenteId: "r2-bruno", desde: "2026-08-01" },                     // segundo periodo, activo
+  ];
+  // Un 3P en febrero (dentro del primer periodo) es válido...
+  const feb = validateThirdPost({
+    mes: 2, anio: 2026, residentes: [BRUNO], voluntarios3P: [], historial3P: {},
+    asignaciones: [p3("r2-bruno", "2026-02-06")], periodosVoluntario3P: periodos,
+  });
+  assert.equal(only8(feb).length, 0);
+  // ...pero uno en mayo (el hueco entre los dos periodos) no lo es, aunque hoy vuelva a ser voluntario.
+  const mayo = validateThirdPost({
+    mes: 5, anio: 2026, residentes: [BRUNO], voluntarios3P: [], historial3P: {},
+    asignaciones: [p3("r2-bruno", "2026-05-01")], periodosVoluntario3P: periodos,
+  });
+  assert.equal(rotacion8(mayo).length, 1);
+});
+
 test("INV-8c: diferencia 2 a mitad de año no es error", () => {
   const historial3P = {
     "r3-ana": ["2026-06-03", "2026-07-07", "2026-08-13", "2026-09-05"],
