@@ -28,6 +28,12 @@ export const EXIME_DEL_MINIMO = ["VACACIONES", "BAJA"];
 export const AUSENCIA_SIMULTANEA = ["ROTACION", "VACACIONES"];
 // INV-3, nota [a] de p.2: «se descontará de forma proporcional». Solo la baja.
 export const DESCUENTA_DISPONIBILIDAD = ["BAJA"];
+// Eje `puentesLibres` de INV-3 (decisión V-27): un puente que cae dentro de CUALQUIER ausencia
+// concedida no cuenta como "libre" — no fue el reparto quien se lo dio, no estaba en el hospital
+// ese día. A diferencia de DESCUENTA_DISPONIBILIDAD (solo BAJA, nota [a] literal), aquí van los
+// TRES motivos: el sesgo de que una ausencia inflara este eje no distinguía tipo de ausencia, y
+// ROTACION/VACACIONES son más frecuentes que BAJA.
+export const AUSENTE_EN_PUENTE = ["BAJA", "VACACIONES", "ROTACION"];
 
 // INV-7: la rotación «cercana» que obliga a cubrir viernes y sábado del periodo. La lista de
 // provincias vivía duplicada en `rotationHistoryStart` y en el propio INV-7.

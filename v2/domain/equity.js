@@ -16,7 +16,7 @@
 
 import { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow, bridgesOfMonth, bridgesBetween } from "./calendar.js";
 import { tally } from "./tally.js";
-import { absences, DESCUENTA_DISPONIBILIDAD } from "./absences.js";
+import { absences, DESCUENTA_DISPONIBILIDAD, AUSENTE_EN_PUENTE } from "./absences.js";
 import { accumulatedTally } from "./accumulate.js";
 import { periodsOfResident } from "./residents.js";
 
@@ -26,7 +26,10 @@ const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "do
 // Las cedidas/compradas SÍ cuentan aquí aunque no sumen a `total`: quien tiene la fila trabaja
 // ese día, que es justo lo que este eje pregunta.
 const GUARDIA = ["G", "GF", "GP"];
-const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes"]); // se normalizan por disponibilidad
+// Se normalizan por disponibilidad (÷f, la fracción de la ventana sin BAJA — nota [a], V-8).
+// `puentesLibres` entra desde V-27: junto con la exclusión de `residentIsFreeOnBridge`, una
+// ausencia larga deja de inflar este eje sin más que quitarle oportunidad de ganarlo.
+const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes", "puentesLibres"]);
 const EPS = 1e-9;
 
 // Severidad SIEMPRE aviso, en los dos cierres (decisión V-14): un desequilibrio de equidad se
@@ -70,7 +73,7 @@ export function validateResidencyYearClose(ctx) {
     // Contribución del mes, respetando la fecha de cierre (guardias posteriores no cuentan).
     const contribEnd = compareISO(monthEnd, win.end) <= 0 ? monthEnd : win.end;
     const t = tally(asignaciones.filter((a) => a.residenteId === r.id), { start: monthStart, end: contribEnd });
-    const puentesLibresMes = puentesDelMes.filter((p) => residentIsFreeOnBridge(r.id, asignaciones, p, win)).length;
+    const puentesLibresMes = puentesDelMes.filter((p) => residentIsFreeOnBridge(r.id, asignaciones, p, win, bloqueos)).length;
 
     const dims = {
       total: acc.total + t.total,
@@ -196,7 +199,7 @@ export function buildYearCloseContext({ mes, anio, residentes, historicas = [], 
     const win = closingWindowThisMonth(r, mes, anio);
     if (!win || !acumulados[r.id] || compareISO(win.start, finAcumulado) > 0) continue;
     acumulados[r.id].puentesLibres = bridgesBetween(win.start, finAcumulado, festivos)
-      .filter((p) => residentIsFreeOnBridge(r.id, historicas, p, win)).length;
+      .filter((p) => residentIsFreeOnBridge(r.id, historicas, p, win, bloqueos)).length;
   }
 
   return {
@@ -358,9 +361,16 @@ function intersect(a, b) {
  * fin de semana contiguo, no le quita el puente: eso sería medir el descanso largo, que es
  * justamente el modelo de puntos ponderados de P-1 —propuesto y no vigente, y en contra de la
  * normativa según §8—, no el recuento entero que exige «diferencia máxima de 1».
+ *
+ * Un puente dentro de una ausencia concedida (BAJA/VACACIONES/ROTACION) NO cuenta como libre
+ * (decisión V-27): sin guardia porque no estaba, no porque el reparto se lo diera. Antes
+ * cualquier ausencia larga inflaba este eje sin límite —ni siquiera la BAJA se descontaba aquí,
+ * a diferencia de los demás ejes (nota [a])—, y era el sesgo más frecuente porque ROTACION y
+ * VACACIONES no bloquean la asignación (V-8) pero tampoco generan guardia en la práctica.
  */
-function residentIsFreeOnBridge(id, asignaciones, puente, win) {
+function residentIsFreeOnBridge(id, asignaciones, puente, win, bloqueos = []) {
   if (!inRange(puente, win.start, win.end)) return false; // fuera de su ventana → no es suyo
+  if (absences(bloqueos, { residenteId: id, motivos: AUSENTE_EN_PUENTE, fecha: puente }).length) return false;
   return !asignaciones.some((a) => a.residenteId === id && GUARDIA.includes(a.codigo) && a.fecha === puente);
 }
 
