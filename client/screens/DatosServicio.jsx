@@ -1,7 +1,8 @@
-// DatosServicioScreen — las dos tablas de datos de entrada del servicio: FESTIVOS (INV-12 y los
-// puentes de INV-3, decisión V-17) y EVENTOS del servicio (INV-10, decisión V-20).
+// DatosServicioScreen — las tablas de datos de entrada del servicio: FESTIVOS (INV-12 y los
+// puentes de INV-3, decisión V-17), EVENTOS del servicio (INV-10, decisión V-20) y EXCEPCIONES
+// (INV-9, decisión V-29).
 //
-// Existe porque las dos estaban en vigor y sin forma de rellenarse desde la app: los invariantes
+// Existe porque las tres estaban en vigor y sin forma de rellenarse desde la app: los invariantes
 // se comprobaban contra tablas vacías, que es como no comprobar nada. Los festivos NUNCA se
 // derivan ni se le piden a la IA (S-4: el cliente v1 le decía al modelo «identifícalos tú»), así
 // que la única vía posible es que alguien los escriba — y esta pantalla es esa vía.
@@ -280,6 +281,107 @@ function Eventos({ api, residentes, showToast, puedoEscribir }) {
   );
 }
 
+/** Excepciones (INV-9, V-29): degradan un 2×R2 documentado dentro de un rango de fechas. */
+function Excepciones({ api, showToast, puedoEscribir }) {
+  const [excepciones, setExcepciones] = useState(null);
+  const [error, setError] = useState(null);
+  const [desde, setDesde] = useState(todayISO());
+  const [hasta, setHasta] = useState(todayISO());
+  const [justificacion, setJustificacion] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const cargar = async () => {
+    const r = await api.listExcepciones();
+    if (r.ok) { setExcepciones(r.excepciones.slice().sort((a, b) => (a.desde < b.desde ? 1 : -1))); setError(null); }
+    else { setExcepciones(null); setError(r.error); }
+  };
+  useEffect(() => { cargar(); }, []);
+
+  const crear = async () => {
+    setBusy(true);
+    const r = await api.crearExcepcion("2xR2", desde, hasta, justificacion);
+    setBusy(false);
+    if (r.ok) { showToast("Excepción registrada ✓"); setJustificacion(""); cargar(); }
+    else showToast("No se pudo registrar: " + r.error, "err");
+  };
+
+  const anular = async (id) => {
+    setBusy(true);
+    const r = await api.anularExcepcion(id);
+    setBusy(false);
+    if (r.ok) { showToast("Excepción anulada"); cargar(); }
+    else showToast("No se pudo anular: " + r.error, "err");
+  };
+
+  if (error) {
+    return <Card title="📋 Excepciones"><Aviso>No se pudieron cargar: {error}</Aviso><div style={{ marginTop: 10 }}><Btn onClick={cargar} color={COLOR.gray} textColor={COLOR.blueDark}>Reintentar</Btn></div></Card>;
+  }
+
+  return (
+    <Card title="📋 Excepciones">
+      <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
+        Documenta un <b>2×R2 el mismo día</b> (INV-9) por rotación de mayores o necesidad
+        organizativa objetiva. Solo aplica desde diciembre del año académico — la normativa no
+        cubre antes. Sin excepción documentada, INV-9 avisa igual, nunca bloquea.
+      </div>
+
+      {excepciones === null ? (
+        <div style={{ fontSize: 13, color: COLOR.grayDark }}>Cargando…</div>
+      ) : excepciones.length === 0 ? (
+        <Aviso>No hay ninguna excepción registrada.</Aviso>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+          {excepciones.map((e) => (
+            <div key={e.id} style={{
+              background: COLOR.bluePale, borderLeft: `4px solid ${COLOR.blue}`,
+              borderRadius: 8, padding: "8px 10px",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <div style={{ fontSize: 13, color: COLOR.blueDark }}>
+                  <b>2×R2</b> · {fechaLarga(e.desde)}–{fechaLarga(e.hasta)}
+                </div>
+                {puedoEscribir && (
+                  <button onClick={() => anular(e.id)} disabled={busy}
+                    style={{ ...S.smallBtn, background: "#fff", color: COLOR.red, flexShrink: 0 }}>Anular</button>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 4 }}>{e.justificacion}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {puedoEscribir && (
+        <div style={{ paddingTop: 10, borderTop: `1px solid ${COLOR.grayMid}` }}>
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <label style={S.label}>Desde</label>
+              <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)}
+                style={{ ...S.input, width: "100%", marginTop: 4, boxSizing: "border-box" }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={S.label}>Hasta</label>
+              <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)}
+                style={{ ...S.input, width: "100%", marginTop: 4, boxSizing: "border-box" }} />
+            </div>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <label style={S.label}>Justificación</label>
+            <textarea value={justificacion} onChange={(e) => setJustificacion(e.target.value)} rows={2}
+              placeholder="p. ej. mayores en rotación, no hay otra combinación posible"
+              style={{ ...S.input, width: "100%", marginTop: 4, boxSizing: "border-box", resize: "vertical" }} />
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Btn onClick={crear} disabled={busy || desde > hasta || !justificacion.trim()}>
+              Registrar excepción
+            </Btn>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function DatosServicioScreen() {
   const app = window.useApp();
   const { api, residentes, showToast, setTab } = app;
@@ -300,7 +402,7 @@ function DatosServicioScreen() {
 
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 480, margin: "0 auto" }}>
-      <SectionTitle>🗓️ Festivos y eventos</SectionTitle>
+      <SectionTitle>🗓️ Datos del servicio</SectionTitle>
 
       {!puedoEscribir && (
         <Info>
@@ -319,6 +421,7 @@ function DatosServicioScreen() {
 
       <Festivos api={api} anio={anio} showToast={showToast} puedoEscribir={puedoEscribir} />
       <Eventos api={api} residentes={residentes} showToast={showToast} puedoEscribir={puedoEscribir} />
+      <Excepciones api={api} showToast={showToast} puedoEscribir={puedoEscribir} />
 
       <Btn onClick={() => setTab("settings")} color={COLOR.gray} textColor={COLOR.blueDark}>← Volver</Btn>
     </div>

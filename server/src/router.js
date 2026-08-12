@@ -17,6 +17,10 @@ const CUAD_KEY = (r) => `${r.mes}|${r.anio}`;
 // última fila por residente+año — nunca se reescribe ni se borra ninguna.
 const PERIODO_KEY = (r) => `${r.residenteId}|${r.anio}`;
 const EVENTO_TIPOS = new Set(["NAVIDAD", "DESPEDIDA"]); // los dos eventos del servicio (INV-10)
+// Tipos de Excepcion que el dominio realmente consume (V-29). Lista blanca deliberada: crear una
+// excepción de un tipo que `validateMonth` no lee sería una fila muerta que nadie avisa que no
+// sirve para nada.
+const EXCEPCION_TIPOS = new Set(["2xR2"]);
 const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA"]); // enum de motivos válidos (severidad mixta desde V-8: solo BAJA bloquea la asignación)
 // Códigos de asignación (spec.md §2 + `CODES_CYCLE` del cliente). El "" es el BORRADO explícito:
 // `readLatest("asignaciones", …, { emptyField: "codigo" })` lo usa para quitar una asignación sin
@@ -504,6 +508,37 @@ export function handleRequest(rawBody, deps) {
           return { ok: true };
         });
 
+      // EXCEPCIONES (INV-9, decisión V-29): degradan un 2×R2 dentro de un rango de fechas, con
+      // justificación documentada. Mismo tratamiento que festivos/eventos: dato compartido del
+      // servicio, lectura abierta (la necesita el validador), escritura con el permiso del ciclo.
+      case "listExcepciones":
+        return authed(req, deps, () => ({ ok: true, excepciones: activeExcepciones(deps) }));
+
+      case "crearExcepcion":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "registrar una excepción");
+          if (denegado) return denegado;
+          if (!EXCEPCION_TIPOS.has(req.tipo)) return { ok: false, error: "tipo de excepción inválido (2xR2)" };
+          if (!req.justificacion || !String(req.justificacion).trim()) return { ok: false, error: "la excepción necesita una justificación" };
+          try { deps.domain.parseISO(req.desde); deps.domain.parseISO(req.hasta); } catch (e) { return { ok: false, error: "fecha inválida: " + e.message }; }
+          if (req.desde > req.hasta) return { ok: false, error: "«desde» no puede ser posterior a «hasta»" };
+          const id = deps.store.appendRecord("excepciones", {
+            tipo: req.tipo, desde: req.desde, hasta: req.hasta, justificacion: String(req.justificacion).trim(),
+            registradaPor: session.sub, fecha: deps.today, activo: true,
+          });
+          return { ok: true, id };
+        });
+
+      case "anularExcepcion":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "anular una excepción");
+          if (denegado) return denegado;
+          const actual = activeExcepciones(deps).find((e) => e.id === req.id);
+          if (!actual) return { ok: false, error: "excepción no encontrada" };
+          deps.store.appendRecord("excepciones", { ...actual, activo: false });
+          return { ok: true };
+        });
+
       // El «a sorteo» de la normativa, hecho de verdad y reproducible: misma mecánica que el
       // sorteo del Responsable (INV-14, decisión V-7a) — semilla generada por la app, sorteo
       // puro sobre (candidatos, semilla), y la fila queda en `sorteos` para recomputarlo. Un
@@ -773,6 +808,11 @@ function activeEventos(deps) {
   return deps.store.readLatest("eventos", (r) => r.id).filter((e) => e.activo === true);
 }
 
+/** Excepciones vigentes (INV-9, V-29): última reinserción gana; anular reinserta con activo=false. */
+function activeExcepciones(deps) {
+  return deps.store.readLatest("excepciones", (r) => r.id).filter((e) => e.activo === true);
+}
+
 /** Coberturas de imaginaria vigentes: son las que mueven la cola derivada. */
 function activeImaginaria(deps) {
   return deps.store.readLatest("imaginaria", (r) => r.id).filter((c) => c.activo === true);
@@ -909,6 +949,7 @@ function monthSnapshot(deps) {
     bloqueosCorruptos: corruptas,
     festivos: allFestivos(deps).filter((f) => f.activo === true),
     eventos: activeEventos(deps),
+    excepciones: activeExcepciones(deps),
   };
 }
 
@@ -1082,8 +1123,9 @@ function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps)) {
   const mesSiguiente = mes === 12 ? `${anio + 1}-01` : `${anio}-${String(mes + 1).padStart(2, "0")}`;
   const festivos = (snap.festivos || []).filter((f) => f.fecha >= `${mesAnterior}-01` && f.fecha <= `${mesSiguiente}-01`);
   // Los eventos van SIN filtrar por mes: `buildMonthContext` se queda con los del año académico,
-  // que es lo que empareja la Navidad de diciembre con la despedida del mayo siguiente.
-  return deps.domain.buildMonthContext({ mes, anio, residentes: snap.residentes, historicas, asignacionesDelMes, bloqueos, festivos, eventos: snap.eventos || [] });
+  // que es lo que empareja la Navidad de diciembre con la despedida del mayo siguiente. Las
+  // excepciones también van sin filtrar: `twoR2Justified` ya comprueba tipo y rango él mismo.
+  return deps.domain.buildMonthContext({ mes, anio, residentes: snap.residentes, historicas, asignacionesDelMes, bloqueos, festivos, eventos: snap.eventos || [], excepciones: snap.excepciones || [] });
 }
 
 /**

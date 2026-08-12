@@ -800,6 +800,14 @@ test("buildMonthContext: historicas es opcional (por defecto [])", () => {
   assert.deepEqual(ctx.asignaciones, mesActual);
 });
 
+test("buildMonthContext: pasa `excepciones` tal cual (por defecto []), sin moldearlas (V-29)", () => {
+  const exc = [{ tipo: "2xR2", desde: "2026-12-01", hasta: "2026-12-31", justificacion: "mayores en rotación" }];
+  const sinExcepciones = buildMonthContext({ mes: 7, anio: 2026, residentes: [], asignacionesDelMes: [], bloqueos: [] });
+  assert.deepEqual(sinExcepciones.excepciones, []);
+  const conExcepciones = buildMonthContext({ mes: 7, anio: 2026, residentes: [], asignacionesDelMes: [], bloqueos: [], excepciones: exc });
+  assert.deepEqual(conExcepciones.excepciones, exc);
+});
+
 // ─────────────── Severidades: qué bloquea y qué no (decisión V-14) ───────────────
 // La lista de lo que impide pasar a VALIDADO es corta y deliberada: lo imposible de ejecutar
 // (INV-1) y lo ilegal (INV-5, INV-11 con un R1 en verano). Todo lo demás avisa. Estos tests

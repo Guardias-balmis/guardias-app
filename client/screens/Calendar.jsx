@@ -13,8 +13,15 @@ import { thirdPostViolations } from "./client/lib/thirdpost.js";
 import { puedeMoverCiclo as reglaCiclo } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 const { Card, Btn, Aviso } = window.UI;
+
+// Códigos que pueden llevar `origen` CEDIDA/COMPRADA (INV-4): los tres puestos de guardia y el
+// 3P, no V/R/B (esas no son guardias, no las lee `tally`). Mantener presionado ~500ms abre el
+// selector; un click normal sigue ciclando el código, instantáneo, sin demora (decisión: un
+// doble-click habría obligado a retrasar CADA click simple de la grilla más usada de la app).
+const ORIGEN_ELEGIBLE = new Set(["G", "GF", "GP", "3P"]);
+const PRESS_MS = 500;
 
 /**
  * Filas de la rejilla, ancladas al MES que se dibuja y no a hoy (decisión V-23), con la misma
@@ -67,7 +74,10 @@ function motivoNoAsignable(periodos, primerDia) {
  * cambia es la etiqueta, el color y qué hace la celda al pulsarla — en la de un no asignable,
  * `onCelda` solo borra.
  */
-function FilaRejilla({ nombre, etiqueta, bg, color, titulo, total, dias, porFecha, pulsable, onCelda }) {
+function FilaRejilla({
+  nombre, etiqueta, bg, color, titulo, total, dias, porFecha, pulsable, onCelda,
+  origenPorFecha, origenEditFecha, onPressStart, onPressEnd, onSeleccionaOrigen,
+}) {
   return (
     <tr>
       <td style={{ ...S.td, textAlign: "center", fontWeight: 700, background: bg, color }} title={titulo}>{etiqueta}</td>
@@ -75,12 +85,35 @@ function FilaRejilla({ nombre, etiqueta, bg, color, titulo, total, dias, porFech
       <td style={{ ...S.td, textAlign: "center", fontWeight: 700, color: COLOR.blue }}>{total}</td>
       {dias.map((fecha) => {
         const codigo = porFecha[fecha] || "";
+        const origen = (origenPorFecha && origenPorFecha[fecha]) || "";
+        const editando = origenEditFecha === fecha;
+        const prensable = onPressStart && ORIGEN_ELEGIBLE.has(codigo);
         return (
-          <td key={fecha} onClick={() => onCelda(fecha, codigo)} style={{
-            ...S.td, textAlign: "center", cursor: pulsable(codigo) ? "pointer" : "default", userSelect: "none",
-            background: CODE_COLORS[codigo] || "transparent",
-            fontWeight: codigo ? 700 : 400, color: COLOR.cellText,
-          }}>{codigo || "·"}</td>
+          <td key={fecha} onClick={() => onCelda(fecha, codigo)}
+            onMouseDown={prensable ? () => onPressStart(fecha, codigo) : undefined}
+            onMouseUp={prensable ? onPressEnd : undefined}
+            onMouseLeave={prensable ? onPressEnd : undefined}
+            onTouchStart={prensable ? () => onPressStart(fecha, codigo) : undefined}
+            onTouchEnd={prensable ? onPressEnd : undefined}
+            onTouchCancel={prensable ? onPressEnd : undefined}
+            style={{
+              ...S.td, textAlign: "center", cursor: pulsable(codigo) ? "pointer" : "default", userSelect: "none",
+              background: CODE_COLORS[codigo] || "transparent",
+              fontWeight: codigo ? 700 : 400, color: COLOR.cellText, position: "relative",
+            }}>
+            {editando ? (
+              <select autoFocus value={origen} onClick={(e) => e.stopPropagation()}
+                onChange={(e) => onSeleccionaOrigen(fecha, e.target.value)}
+                onBlur={() => onSeleccionaOrigen(null)}
+                style={{ fontSize: 10, width: 44, padding: 0 }}>
+                <option value="">normal</option>
+                <option value="CEDIDA">cedida</option>
+                <option value="COMPRADA">comprada</option>
+              </select>
+            ) : (
+              `${codigo || "·"}${origen ? "*" : ""}`
+            )}
+          </td>
         );
       })}
     </tr>
@@ -97,7 +130,15 @@ function CalendarScreen() {
   const { anio, mes, setAnio, setMes, residentes, showToast, isResponsable, grupo } = app;
 
   const [asignaciones, setAsignaciones] = useState({}); // {[residenteId]: {[fecha]: codigo}}
-  const [pendientes, setPendientes] = useState({});     // {[residenteId+"|"+fecha]: {fecha,residenteId,codigo}}
+  const [origenes, setOrigenes] = useState({});         // {[residenteId]: {[fecha]: "CEDIDA"|"COMPRADA"}} (INV-4)
+  const [pendientes, setPendientes] = useState({});     // {[residenteId+"|"+fecha]: {fecha,residenteId,codigo,origen}}
+  // Celda con el selector de origen abierto (mantener presionado), como `"residenteId|fecha"`.
+  const [origenEditando, setOrigenEditando] = useState(null);
+  const pressTimerRef = useRef(null);
+  // Un mousedown/touchstart que llega a disparar el timer marca el click que le sigue como
+  // "parte de una pulsación larga", para que ese click no cicle el código además de haber
+  // abierto el selector — sin esto, soltar tras mantener presionado also dispara `onClick`.
+  const longPressFiredRef = useRef(false);
   const [guardando, setGuardando] = useState(false);
   const [validando, setValidando] = useState(false);
   const [violaciones, setViolaciones] = useState(null); // null = aún no validado
@@ -140,11 +181,17 @@ function CalendarScreen() {
       if (cancelled) return;
       if (r.ok) {
         const idx = {};
+        const idxOrigen = {};
         for (const a of r.asignaciones) {
           if (!idx[a.residenteId]) idx[a.residenteId] = {};
           idx[a.residenteId][a.fecha] = a.codigo;
+          if (a.origen) {
+            if (!idxOrigen[a.residenteId]) idxOrigen[a.residenteId] = {};
+            idxOrigen[a.residenteId][a.fecha] = a.origen;
+          }
         }
         setAsignaciones(idx);
+        setOrigenes(idxOrigen);
       } else {
         showToast("Error cargando cuadrante: " + r.error, "err");
       }
@@ -179,9 +226,12 @@ function CalendarScreen() {
 
   // Escribir una celda invalida siempre el resultado de validación que se esté enseñando: es de
   // antes del cambio, y dejarlo puesto haría creer que el mes sigue validado contra lo que hay.
-  const aplica = (residenteId, fecha, codigo) => {
+  // `origen` por defecto "" (no cedida/comprada): cambiar el CÓDIGO de una celda es una guardia
+  // nueva, y una guardia nueva no hereda la marca de la que hubiera antes.
+  const aplica = (residenteId, fecha, codigo, origen = "") => {
     setAsignaciones((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: codigo } }));
-    setPendientes((prev) => ({ ...prev, [`${residenteId}|${fecha}`]: { fecha, residenteId, codigo } }));
+    setOrigenes((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: origen } }));
+    setPendientes((prev) => ({ ...prev, [`${residenteId}|${fecha}`]: { fecha, residenteId, codigo, origen } }));
     setViolaciones(null);
     setEquidadPorConfirmar(null);
     setCierresError(null);
@@ -189,6 +239,9 @@ function CalendarScreen() {
   };
 
   const cicla = (residenteId, fecha) => {
+    // Una pulsación larga que llegó a abrir el selector de origen ya hizo su trabajo: el click
+    // que el navegador dispara al soltar no debe ciclar el código además.
+    if (longPressFiredRef.current) { longPressFiredRef.current = false; return; }
     // Bloqueado mientras validando: validar() encadena dos peticiones de red y resuelve
     // contra el `asignaciones` capturado por closure al empezar — una edición a mitad de
     // esa ventana quedaría silenciosamente ignorada por el resultado que llegue después. Por
@@ -209,6 +262,29 @@ function CalendarScreen() {
   const quita = (residenteId, fecha, codigo) => {
     if (busy || bloqueadoPorPublicado || !codigo) return;
     aplica(residenteId, fecha, "");
+  };
+
+  // Origen CEDIDA/COMPRADA (INV-4): mantener presionado ~500ms sobre una celda con guardia abre
+  // un selector inline; soltar antes lo cancela. No usa doble-click a propósito — hubiera exigido
+  // retrasar CADA click simple de la grilla para poder distinguirlo de la primera mitad de un
+  // doble-click, y esta es la interacción más repetida de toda la app.
+  const iniciaPress = (residenteId, fecha, codigo) => {
+    if (busy || bloqueadoPorPublicado || !ORIGEN_ELEGIBLE.has(codigo)) return;
+    clearTimeout(pressTimerRef.current);
+    pressTimerRef.current = setTimeout(() => {
+      longPressFiredRef.current = true;
+      setOrigenEditando(`${residenteId}|${fecha}`);
+    }, PRESS_MS);
+  };
+  const terminaPress = () => clearTimeout(pressTimerRef.current);
+
+  // `fecha === null` es solo "cerrar sin cambiar" (blur del <select> al perder foco sin elegir).
+  const seleccionaOrigen = (fecha, origen) => {
+    if (fecha === null) { setOrigenEditando(null); return; }
+    const [residenteId] = origenEditando.split("|");
+    const codigoActual = (asignaciones[residenteId] || {})[fecha] || "";
+    aplica(residenteId, fecha, codigoActual, origen);
+    setOrigenEditando(null);
   };
 
   const cambios = Object.values(pendientes);
@@ -262,8 +338,15 @@ function CalendarScreen() {
     if (!rFestivos.ok) showToast("No se pudieron cargar los festivos: " + rFestivos.error + " — INV-12 no se ha comprobado", "err");
     const festivos = rFestivos.ok ? rFestivos.festivos : [];
 
+    // Excepciones (INV-9, V-29): sin ellas, un 2×R2 con justificación documentada avisaría aquí
+    // igual que uno sin justificar — el servidor sí las ve en marcarValidado, así que el aviso
+    // desaparecería al validar de verdad. Es aviso, nunca bloquea (V-14), así que un fallo de red
+    // no impide seguir: solo deja este chequeo local sin la excepción.
+    const rExcepciones = await app.api.listExcepciones();
+    const excepciones = rExcepciones.ok ? rExcepciones.excepciones : [];
+
     const asignacionesDelMes = residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo })));
-    const ctx = buildMonthContext({ mes, anio, residentes, historicas, asignacionesDelMes, bloqueos, festivos });
+    const ctx = buildMonthContext({ mes, anio, residentes, historicas, asignacionesDelMes, bloqueos, festivos, excepciones });
 
     // Cierres de equidad de INV-3 (P-8, decisión V-13): el trimestral en ago/nov/feb/may y el
     // anual en el mes del aniversario de alguien. Es la MISMA comprobación que hará el
@@ -419,6 +502,11 @@ function CalendarScreen() {
                   dias={dias} porFecha={asignaciones[r.id] || {}}
                   pulsable={() => !bloqueadoPorPublicado}
                   onCelda={(fecha) => cicla(r.id, fecha)}
+                  origenPorFecha={origenes[r.id] || {}}
+                  origenEditFecha={origenEditando && origenEditando.startsWith(`${r.id}|`) ? origenEditando.slice(r.id.length + 1) : null}
+                  onPressStart={(fecha, codigo) => iniciaPress(r.id, fecha, codigo)}
+                  onPressEnd={terminaPress}
+                  onSeleccionaOrigen={seleccionaOrigen}
                 />
               )))}
               {/* Decisión V-23: al final, después de R1, porque no es un nivel más — es trabajo
