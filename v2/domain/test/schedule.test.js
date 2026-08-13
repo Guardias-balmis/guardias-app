@@ -11,6 +11,8 @@ import assert from "node:assert/strict";
 import { generateMonth } from "../schedule.js";
 import { buildMonthContext, validateMonth } from "../validate.js";
 import { validateQuarterClose, quarterCloseWindow } from "../equity.js";
+import { validateThirdPost } from "../thirdpost.js";
+import { levelOn, periodsOfResident } from "../residents.js";
 import { addDays, datesOfMonth } from "../calendar.js";
 
 const mk = (prefijo, n, anio) => Array.from({ length: n }, (_, i) => ({
@@ -226,4 +228,104 @@ test("el trimestre cierra dentro del ±1 sobre un año ya empezado (juez: valida
     asignaciones: acumulado.filter((a) => a.fecha >= win.start && a.fecha <= win.end),
   });
   assert.deepEqual(v, [], "el cierre trimestral debería quedar dentro del ±1");
+});
+
+// ── Tercer puesto (INV-8, decisión V-38) ────────────────────────────────────────────────────────
+// El juez vuelve a ser el dominio: `validateThirdPost` para INV-8 y `validateMonth` para INV-15.
+// Aquí no se reimplementa ni el ciclo L-D ni la mochila.
+
+const VOLS = [
+  { residenteId: "r3_2", desde: "2026-06-01" },
+  { residenteId: "r2_2", desde: "2026-06-01" },
+  { residenteId: "r4_2", desde: "2026-06-01" },
+];
+const tresP = (propuesta) => propuesta.filter((a) => a.codigo === "3P");
+/** Los avisos de INV-8 sobre la propuesta, según el validador real. */
+function inv8De(propuesta, { mes = 10, anio = 2026, voluntarios3P = VOLS, historial3P = {} } = {}) {
+  return validateThirdPost({ mes, anio, residentes: PLANTILLA, asignaciones: propuesta, voluntarios3P, historial3P });
+}
+/** Los días en que el Pequeño es un R1: los de «mochila» de INV-8d. */
+function diasMochila(propuesta) {
+  const out = new Set();
+  for (const a of propuesta.filter((x) => x.codigo !== "3P")) {
+    const r = PLANTILLA.find((x) => x.id === a.residenteId);
+    if (r && levelOn(periodsOfResident(r), a.fecha) === "R1") out.add(a.fecha);
+  }
+  return out;
+}
+
+test("por defecto NO propone ningún 3P: el reparto del 3.º puesto sigue siendo una decisión humana", () => {
+  const { asignaciones, diagnostico } = generar({ mes: 10, anio: 2026, voluntarios3P: VOLS });
+  assert.deepEqual(tresP(asignaciones), []);
+  assert.equal(diagnostico.tercerPuesto.pedidas, 0);
+});
+
+test("propone los 3P que se le piden sin un solo aviso de INV-8 ni error de INV-15", () => {
+  for (const n of [1, 4, 10]) {
+    const { asignaciones } = generar({ mes: 10, anio: 2026, tercerPuesto: n, voluntarios3P: VOLS });
+    assert.equal(tresP(asignaciones).length, n, `pedidas ${n}`);
+    assert.deepEqual(inv8De(asignaciones), [], `pedidas ${n}: INV-8 debería callar`);
+    assert.deepEqual(erroresDe(asignaciones), [], `pedidas ${n}: INV-15 debería callar`);
+  }
+});
+
+test("INV-8a: el 3P solo va a quien consta voluntario, aunque otro lleve menos carga", () => {
+  const { asignaciones } = generar({ mes: 10, anio: 2026, tercerPuesto: 8, voluntarios3P: [VOLS[0]] });
+  const ids = new Set(tresP(asignaciones).map((a) => a.residenteId));
+  assert.deepEqual([...ids], ["r3_2"]);
+});
+
+test("INV-8d: mientras quepa, todos los 3P caen en día de mochila (el Pequeño es R1)", () => {
+  const { asignaciones } = generar({ mes: 10, anio: 2026, tercerPuesto: 5, voluntarios3P: VOLS });
+  const mochila = diasMochila(asignaciones);
+  for (const a of tresP(asignaciones)) {
+    assert.ok(mochila.has(a.fecha), `el 3P del ${a.fecha} no cae en día de mochila`);
+  }
+});
+
+test("INV-8b: el ciclo L-D arrastra del mes anterior, no empieza de cero cada mes", () => {
+  const historial3P = { r3_2: ["2026-09-07", "2026-09-08", "2026-09-09"] }; // lunes, martes, miércoles
+  const { asignaciones } = generar({ mes: 10, anio: 2026, tercerPuesto: 4, voluntarios3P: [VOLS[0]], historial3P });
+  assert.deepEqual(inv8De(asignaciones, { voluntarios3P: [VOLS[0]], historial3P }), []);
+});
+
+test("INV-15: un 3P nunca queda pegado a una guardia (ni a otro 3P) del mismo residente", () => {
+  const { asignaciones } = generar({ mes: 10, anio: 2026, tercerPuesto: 10, voluntarios3P: VOLS });
+  for (const id of VOLS.map((v) => v.residenteId)) {
+    const suyos = fechasDe(asignaciones, id);
+    for (const f of suyos) assert.ok(!suyos.has(addDays(f, 1)), `${id} encadena ${f} con ${addDays(f, 1)}`);
+  }
+  assert.deepEqual(erroresDe(asignaciones), []);
+});
+
+test("un 3P del mes ANTERIOR veta el día 1, igual que una guardia (INV-15 cuenta el 3P)", () => {
+  // Antes de V-38 el generador solo miraba G/GF/GP en el histórico, así que proponía la guardia
+  // del 1-oct pegada al 3P del 30-sep y se producía él mismo un `error` de INV-15.
+  const historicas = [];
+  for (const r of PLANTILLA) {
+    if (r.id === "r3_1") continue;
+    for (let d = 1; d <= 12; d++) historicas.push({ fecha: `2026-09-${String(d).padStart(2, "0")}`, residenteId: r.id, codigo: "G" });
+  }
+  historicas.push({ fecha: "2026-09-30", residenteId: "r3_1", codigo: "3P" });
+
+  const { asignaciones } = generar({ mes: 10, anio: 2026, historicas });
+  assert.ok(!fechasDe(asignaciones, "r3_1").has("2026-10-01"),
+    "r3_1 hizo 3P el 30-sep, así que el 1-oct le encadena igual que si hubiera sido guardia");
+});
+
+test("si no caben las pedidas lo DICE, en vez de colocarlas rompiendo el ciclo", () => {
+  const { asignaciones, diagnostico } = generar({ mes: 10, anio: 2026, tercerPuesto: 30, voluntarios3P: [VOLS[0]] });
+  const d = diagnostico.tercerPuesto;
+  assert.equal(d.pedidas, 30);
+  assert.ok(d.colocadas > 0 && d.colocadas < 30, `colocadas ${d.colocadas}: el techo lo pone el ciclo L-D de un solo voluntario`);
+  assert.equal(d.colocadas, tresP(asignaciones).length);
+  assert.ok(d.motivo, "tiene que decir por qué no salieron todas");
+  assert.deepEqual(inv8De(asignaciones, { voluntarios3P: [VOLS[0]] }), []);
+});
+
+test("sin voluntarios no inventa ninguno: 0 colocadas y el motivo dicho", () => {
+  const { asignaciones, diagnostico } = generar({ mes: 10, anio: 2026, tercerPuesto: 5, voluntarios3P: [] });
+  assert.deepEqual(tresP(asignaciones), []);
+  assert.equal(diagnostico.tercerPuesto.motivo, "sin-voluntarios");
+  assert.equal(typeof diagnostico.tercerPuesto.diasMochila, "number");
 });

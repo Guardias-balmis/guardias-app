@@ -65,11 +65,25 @@ test("una guardia propuesta sobre un marcador del mismo residente/día lo pisa s
   assert.deepEqual(plan.marcadores, [a("2026-08-10", "r1", "V")]);
 });
 
-test("el 3P también le pertenece al generador: una propuesta que lo quita lo borra", () => {
+// Decisión V-38: el 3P le pertenece al generador SOLO cuando lo propone. Antes estaba fijo entre
+// los borrables, y como `schedule.js` no repartía 3P, regenerar un mes se llevaba por delante los
+// 3P puestos a mano — los únicos que había — contándolos además como «guardias» en el aviso.
+test("una propuesta SIN 3P no toca los 3P que ya haya: no son suyos", () => {
   const plan = monthReplacementPlan({
     ...MES,
     existentes: [a("2026-08-03", "r4", "3P")],
     propuesta: [a("2026-08-03", "r4x", "G")],
+  });
+
+  assert.deepEqual(borrados(plan), []);
+  assert.deepEqual(plan.marcadores.map((x) => x.codigo), ["3P"]);
+});
+
+test("una propuesta CON 3P sí manda sobre ellos: el 3P que no reemplaza, lo borra", () => {
+  const plan = monthReplacementPlan({
+    ...MES,
+    existentes: [a("2026-08-03", "r4", "3P")],
+    propuesta: [a("2026-08-03", "r4x", "G"), a("2026-08-10", "r2", "3P")],
   });
 
   assert.deepEqual(borrados(plan), [{ fecha: "2026-08-03", residenteId: "r4", codigo: "" }]);

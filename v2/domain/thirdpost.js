@@ -90,23 +90,9 @@ export function validateThirdPost(ctx) {
   for (const id of idsCon3P) {
     const historial = (historial3P[id] || []).slice().sort(compareISO);
     const propiasMes = thisMonth3P.filter((a) => a.residenteId === id).map((a) => a.fecha);
-    // El ciclo arranca en el alta del residente (V-18b): lo que hiciera antes de apuntarse —o en
-    // una etapa anterior, si se retiró y volvió— no cuenta. Sin recortar, esos 3P añaden
-    // repeticiones falsas y, peor, pueden completar los 7 días y reiniciar el ciclo, tapando una
-    // repetición real. El histórico llega sin recortar a propósito: 8c lo necesita entero.
-    const alta = altaDe.get(id);
-    const combinadas = historial.concat(propiasMes).filter((f) => !alta || compareISO(f, alta) >= 0);
-    let cycle = new Set();
-    for (const fecha of combinadas) {
-      const wd = weekday(fecha);
-      if (cycle.has(wd)) {
-        if (inMonth(fecha, mes, anio)) {
-          violations.push(aviso(`${id} repite ${wd} en 3P el ${fecha} sin completar el ciclo de 7 días`, { fecha, residenteId: id }));
-        }
-        // no se reinicia el ciclo por una repetición; se sigue evaluando
-      } else {
-        cycle.add(wd);
-        if (cycle.size === 7) cycle = new Set(); // ciclo completo → se reinicia
+    for (const fecha of thirdPostCycleRepeats(historial.concat(propiasMes), altaDe.get(id))) {
+      if (inMonth(fecha, mes, anio)) {
+        violations.push(aviso(`${id} repite ${weekday(fecha)} en 3P el ${fecha} sin completar el ciclo de 7 días`, { fecha, residenteId: id }));
       }
     }
   }
@@ -154,6 +140,39 @@ export function validateThirdPost(ctx) {
   }
 
   return violations;
+}
+
+/**
+ * Las fechas de `fechas` que REPITEN día de la semana sin haber completado el ciclo de 7 (INV-8b).
+ *
+ * Se exporta porque el generador (`schedule.js`, V-38) tiene que saber si un 3P que se plantea
+ * proponer va a repetir día ANTES de proponerlo — y la única forma de que no acabe habiendo dos
+ * versiones del ciclo es que use esta misma. Es el mismo motivo por el que `equity.js` exporta
+ * `DIMS`/`PROPORCIONAL` y `validate.js` exporta `OCUPA_PUESTO`: la copia es lo que se
+ * desincroniza en silencio, y aquí sería peor de ver, porque el ciclo depende del orden.
+ *
+ * El ciclo arranca en el alta del residente (V-18b): lo que hiciera antes de apuntarse —o en una
+ * etapa anterior, si se retiró y volvió— no cuenta. Sin recortar, esos 3P añaden repeticiones
+ * falsas y, peor, pueden completar los 7 días y reiniciar el ciclo, tapando una repetición real.
+ * El histórico llega sin recortar a propósito: 8c lo necesita entero.
+ *
+ * @param {string[]} fechas  todas las de ese residente, se ordenan aquí
+ * @param {string=} alta     su `voluntarios3P.desde`; sin él no se recorta nada
+ */
+export function thirdPostCycleRepeats(fechas, alta) {
+  const repes = [];
+  let cycle = new Set();
+  for (const fecha of fechas.slice().sort(compareISO).filter((f) => !alta || compareISO(f, alta) >= 0)) {
+    const wd = weekday(fecha);
+    if (cycle.has(wd)) {
+      repes.push(fecha);
+      // no se reinicia el ciclo por una repetición; se sigue evaluando
+    } else {
+      cycle.add(wd);
+      if (cycle.size === 7) cycle = new Set(); // ciclo completo → se reinicia
+    }
+  }
+  return repes;
 }
 
 /**

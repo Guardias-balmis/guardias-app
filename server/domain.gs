@@ -983,23 +983,9 @@ function validateThirdPost(ctx) {
   for (const id of idsCon3P) {
     const historial = (historial3P[id] || []).slice().sort(compareISO);
     const propiasMes = thisMonth3P.filter((a) => a.residenteId === id).map((a) => a.fecha);
-    // El ciclo arranca en el alta del residente (V-18b): lo que hiciera antes de apuntarse —o en
-    // una etapa anterior, si se retiró y volvió— no cuenta. Sin recortar, esos 3P añaden
-    // repeticiones falsas y, peor, pueden completar los 7 días y reiniciar el ciclo, tapando una
-    // repetición real. El histórico llega sin recortar a propósito: 8c lo necesita entero.
-    const alta = altaDe.get(id);
-    const combinadas = historial.concat(propiasMes).filter((f) => !alta || compareISO(f, alta) >= 0);
-    let cycle = new Set();
-    for (const fecha of combinadas) {
-      const wd = weekday(fecha);
-      if (cycle.has(wd)) {
-        if (inMonth(fecha, mes, anio)) {
-          violations.push(aviso(`${id} repite ${wd} en 3P el ${fecha} sin completar el ciclo de 7 días`, { fecha, residenteId: id }));
-        }
-        // no se reinicia el ciclo por una repetición; se sigue evaluando
-      } else {
-        cycle.add(wd);
-        if (cycle.size === 7) cycle = new Set(); // ciclo completo → se reinicia
+    for (const fecha of thirdPostCycleRepeats(historial.concat(propiasMes), altaDe.get(id))) {
+      if (inMonth(fecha, mes, anio)) {
+        violations.push(aviso(`${id} repite ${weekday(fecha)} en 3P el ${fecha} sin completar el ciclo de 7 días`, { fecha, residenteId: id }));
       }
     }
   }
@@ -1050,6 +1036,39 @@ function validateThirdPost(ctx) {
 }
 
 /**
+ * Las fechas de `fechas` que REPITEN día de la semana sin haber completado el ciclo de 7 (INV-8b).
+ *
+ * Se exporta porque el generador (`schedule.js`, V-38) tiene que saber si un 3P que se plantea
+ * proponer va a repetir día ANTES de proponerlo — y la única forma de que no acabe habiendo dos
+ * versiones del ciclo es que use esta misma. Es el mismo motivo por el que `equity.js` exporta
+ * `DIMS`/`PROPORCIONAL` y `validate.js` exporta `OCUPA_PUESTO`: la copia es lo que se
+ * desincroniza en silencio, y aquí sería peor de ver, porque el ciclo depende del orden.
+ *
+ * El ciclo arranca en el alta del residente (V-18b): lo que hiciera antes de apuntarse —o en una
+ * etapa anterior, si se retiró y volvió— no cuenta. Sin recortar, esos 3P añaden repeticiones
+ * falsas y, peor, pueden completar los 7 días y reiniciar el ciclo, tapando una repetición real.
+ * El histórico llega sin recortar a propósito: 8c lo necesita entero.
+ *
+ * @param {string[]} fechas  todas las de ese residente, se ordenan aquí
+ * @param {string=} alta     su `voluntarios3P.desde`; sin él no se recorta nada
+ */
+function thirdPostCycleRepeats(fechas, alta) {
+  const repes = [];
+  let cycle = new Set();
+  for (const fecha of fechas.slice().sort(compareISO).filter((f) => !alta || compareISO(f, alta) >= 0)) {
+    const wd = weekday(fecha);
+    if (cycle.has(wd)) {
+      repes.push(fecha);
+      // no se reinicia el ciclo por una repetición; se sigue evaluando
+    } else {
+      cycle.add(wd);
+      if (cycle.size === 7) cycle = new Set(); // ciclo completo → se reinicia
+    }
+  }
+  return repes;
+}
+
+/**
  * Primer día de histórico de 3P que hace falta para evaluar INV-8 en este mes, o `null` si no
  * hace falta ninguno (nadie apuntado y nadie cerrando: 8a y 8d se resuelven solo con el mes).
  * Mismo papel que `rotationHistoryStart` (C-2) y `yearCloseHistoryStart`: el rango lo decide el
@@ -1094,7 +1113,7 @@ function countThirdPostInWindow(id, historial3P, thisMonth3P, win) {
   return todas.filter((f) => inRange(f, win.start, win.end)).length;
 }
 
-  return { THIRD_POST_PERMANENCIA_MESES, thirdPostCommitmentEnd, canWithdrawThirdPost, validateThirdPost, thirdPostHistoryStart };
+  return { THIRD_POST_PERMANENCIA_MESES, thirdPostCommitmentEnd, canWithdrawThirdPost, validateThirdPost, thirdPostCycleRepeats, thirdPostHistoryStart };
 })();
 
 // ── equity.js ──
@@ -2586,6 +2605,8 @@ var Schedule = (function () {
   const { periodsOfResident, levelOn, groupOf, periodOn } = Residents;
   const { tally } = Tally;
   const { absences, BLOQUEA_ASIGNACION, DESCUENTA_DISPONIBILIDAD } = Absences;
+  const { thirdPostCycleRepeats } = Thirdpost;
+  const { OCUPA_PUESTO } = Validate;
   const { availabilityFraction, DIMS, PROPORCIONAL } = Equity;
 
 // Los seis ejes y su normalización vienen de `equity.js`, no de una copia aquí: el generador
@@ -2633,7 +2654,11 @@ const cohorteDe = (r) => Number(r.fechaInicio.slice(0, 4));
  */
 function generateMonth(ctx, opciones = {}) {
   const { mes, anio, residentes = [], asignaciones: historicoBruto = [], bloqueos = [], festivos = [] } = ctx;
-  const { semilla = 1, pasos = 20000 } = opciones;
+  // `tercerPuesto`, `voluntarios3P` e `historial3P` viajan por OPCIONES y no por `ctx` a
+  // propósito: `ctx` es el que arma `buildMonthContext` para `validateMonth`, y INV-8 no lo
+  // valida `validateMonth` sino `validateThirdPost`, con sus propias entradas. Meterlos en el ctx
+  // habría hecho creer que el validador del mes los mira.
+  const { semilla = 1, pasos = 20000, tercerPuesto = 0, voluntarios3P = [], historial3P = {} } = opciones;
 
   const dias = datesOfMonth(anio, mes);
   const monthStart = dias[0];
@@ -2700,7 +2725,13 @@ function generateMonth(ctx, opciones = {}) {
       // Guardias YA hechas antes del mes. Solo importa la víspera del día 1, pero se guardan
       // todas: un Set es más barato de leer que de recortar, y así la regla de adyacencia no
       // depende de que el invocador haya pedido el histórico con el borde justo.
-      previas: new Set((historicoDe.get(r.id) || []).filter((x) => GUARDIA.has(x.codigo)).map((x) => x.fecha)),
+      // OCUPA_PUESTO y no una lista propia: INV-15 cuenta el 3P (V-35), así que un 3P del mes
+      // anterior veta el día 1 igual que una guardia. Con el conjunto local de G/GF/GP que había
+      // aquí no lo vetaba, y el generador proponía —medido— una guardia el 1-oct pegada a un 3P
+      // del 30-sep: un `error` de INV-15 producido por el propio generador, que dice no proponer
+      // nunca lo que el validador rechaza. Cuarta vez que una copia de un conjunto del dominio se
+      // desincroniza; `validate.js` lo exporta desde V-36 justo para esto.
+      previas: new Set((historicoDe.get(r.id) || []).filter((x) => OCUPA_PUESTO.has(x.codigo)).map((x) => x.fecha)),
       fechas: new Set(), // lo que le vaya asignando la búsqueda
     });
   }
@@ -2958,10 +2989,14 @@ function generateMonth(ctx, opciones = {}) {
   // ── Salida ─────────────────────────────────────────────────────────────────────────────────
   // Ordenada por fecha y puesto: una propuesta que cambia de orden entre ejecuciones es
   // imposible de comparar a ojo con la anterior.
-  const asignaciones = slots
+  const guardias = slots
     .slice()
     .sort((x, y) => (x.fecha < y.fecha ? -1 : x.fecha > y.fecha ? 1 : x.puesto < y.puesto ? -1 : 1))
     .map((s) => ({ fecha: s.fecha, residenteId: s.id, codigo: codigoDe(s.fecha, festivos) }));
+
+  const tp = repartirTercerPuesto({ dias, guardias, activos, porId, rnd, tercerPuesto, voluntarios3P, historial3P });
+  const asignaciones = [...guardias, ...tp.asignaciones]
+    .sort((x, y) => (x.fecha < y.fecha ? -1 : x.fecha > y.fecha ? 1 : x.codigo < y.codigo ? -1 : x.codigo > y.codigo ? 1 : 0));
 
   return {
     asignaciones,
@@ -2980,11 +3015,120 @@ function generateMonth(ctx, opciones = {}) {
         id: a.id, cohorte: a.cohorte, guardiasDelMes: a.fechas.size,
         disponibilidad: Math.round(a.f * 100) / 100, acumulado: M[a.id],
       })),
+      tercerPuesto: tp.diagnostico,
     },
   };
 }
 
-const GUARDIA = new Set(["G", "GF", "GP"]);
+/**
+ * Reparte `tercerPuesto` 3P sobre el mes ya resuelto (decisión V-38). Devuelve las asignaciones y
+ * un diagnóstico que dice cuántas se pidieron, cuántas salieron y por qué no más.
+ *
+ * VA DESPUÉS DE LAS GUARDIAS, y eso lo permite INV-4: `tally` excluye el 3P de los seis ejes, así
+ * que colocarlo no puede estropear la equidad que la búsqueda acaba de cuadrar. Al revés sí
+ * importaría: un 3P puesto antes bloquearía días por adyacencia y estrecharía el reparto de lo
+ * obligatorio por lo voluntario, que es al revés de como manda la normativa.
+ *
+ * Las cuatro reglas de INV-8, todas por construcción y ninguna reimplementada aquí:
+ *  - **8a** solo a quien constaba voluntario ESE día (su `desde`, y su `hasta` si se retiró).
+ *  - **8b** el ciclo L-D lo juzga `thirdpost.js:thirdPostCycleRepeats`, la MISMA función que usa
+ *    el validador. Copiarla habría sido peor que de costumbre: el ciclo depende del orden, así
+ *    que dos versiones divergen en cuanto una coloca los días en otra secuencia.
+ *  - **8c** entre dos candidatos gana el que menos 3P lleva en SU año de residencia (histórico
+ *    incluido), que es lo que compara el cierre.
+ *  - **8d** primero los días de mochila (los que cubre un R1), y NO se sale de ellos mientras
+ *    quede alguno sin cubrir. Así el aviso de 8d no puede llegar a existir: solo salta cuando hay
+ *    un 3P en un día sin R1 *y* un día de mochila descubierto. En verano no hay ninguno (INV-11
+ *    saca a los R1), y entonces cualquier día vale, que es justo lo que dice la regla.
+ *
+ * Y **INV-15**, que es `error`: el 3P es tercer puesto de GUARDIA y encadena igual, así que no se
+ * propone pegado a nada que ese residente ya ocupe —guardia, 3P o el borde con el mes anterior—,
+ * ni el mismo día en que ya tiene guardia.
+ */
+function repartirTercerPuesto({ dias, guardias, activos, porId, rnd, tercerPuesto, voluntarios3P, historial3P }) {
+  const pedidas = Math.max(0, Math.floor(Number(tercerPuesto) || 0));
+
+  // Días de mochila: los que cubre un R1 (INV-8d). Se leen de la propuesta ya hecha, no de una
+  // regla propia: el nivel del día lo decidió `nivelPorDia` al armar los activos. Se cuentan
+  // SIEMPRE, incluso al salir sin colocar nada: el diagnóstico tiene una sola forma, o la pantalla
+  // que lo pinte tendría que distinguir «cero» de «no se miró».
+  const mochila = new Set();
+  for (const g of guardias) {
+    const a = porId.get(g.residenteId);
+    if (a && a.nivelPorDia.get(g.fecha) === "R1") mochila.add(g.fecha);
+  }
+  const base = { pedidas, colocadas: 0, motivo: null, diasMochila: mochila.size, porResidente: [] };
+  if (!pedidas) return { asignaciones: [], diagnostico: base };
+  if (!voluntarios3P.length) return { asignaciones: [], diagnostico: { ...base, motivo: "sin-voluntarios" } };
+
+  // Estado por voluntario: sus 3P previos (para el ciclo y para la equidad) y lo que se le va
+  // colocando. `ocupados` son los días en que ya está puesto para algo, que es lo que mira INV-15.
+  const vol = [];
+  for (const v of voluntarios3P) {
+    const a = porId.get(v.residenteId);
+    if (!a) continue; // no está activo este mes: ni puede coger 3P ni hay a quién medirle nada
+    const previas = (historial3P[v.residenteId] || []).slice();
+    vol.push({
+      a, desde: v.desde, hasta: v.hasta || null,
+      previas,
+      // Solo los de SU año de residencia en curso cuentan para 8c, que es la ventana del cierre.
+      acumulado: previas.filter((f) => compareISO(f, a.win.start) >= 0 && compareISO(f, a.win.end) <= 0).length,
+      puestas: [],
+    });
+  }
+  if (!vol.length) return { asignaciones: [], diagnostico: { ...base, motivo: "sin-voluntarios-activos" } };
+
+  const ocupado = (v, f) => v.a.fechas.has(f) || v.a.previas.has(f) || v.puestas.includes(f);
+  const puede = (v, f) => {
+    if (compareISO(f, v.desde) < 0 || (v.hasta && compareISO(f, v.hasta) > 0)) return false; // 8a
+    if (v.a.vetados.has(f)) return false;                                                    // INV-5
+    if (ocupado(v, f) || ocupado(v, addDays(f, -1)) || ocupado(v, addDays(f, 1))) return false; // INV-15
+    // 8b: ¿repetiría día de semana? Se le pregunta al dominio con la secuencia COMPLETA, porque
+    // el ciclo depende del orden y un 3P colocado hoy puede volver repetición a uno de después.
+    const todas = v.previas.concat(v.puestas, [f]);
+    return thirdPostCycleRepeats(todas, v.desde).length <= thirdPostCycleRepeats(v.previas.concat(v.puestas), v.desde).length;
+  };
+
+  const barajar = (xs) => { const o = xs.slice(); for (let i = o.length - 1; i > 0; i--) { const j = (rnd() * (i + 1)) | 0; [o[i], o[j]] = [o[j], o[i]]; } return o; };
+  const diasMochila = barajar(dias.filter((f) => mochila.has(f)));
+  const diasResto = barajar(dias.filter((f) => !mochila.has(f)));
+
+  const asignaciones = [];
+  let motivo = null;
+  for (const grupo of [diasMochila, diasResto]) {
+    // No se pasa al resto de días mientras quede mochila por cubrir: ese es justo el par que
+    // hace saltar 8d. Con `pedidas` por debajo de los días de mochila, el corte lo pone `pedidas`
+    // y no esto; con la mochila entera cubierta, `quedanMochila` es 0 y se puede seguir.
+    const quedanMochila = grupo === diasResto && diasMochila.some((f) => !asignaciones.some((x) => x.fecha === f));
+    if (quedanMochila) { motivo = motivo || "mochila-sin-cubrir"; break; }
+    for (const f of grupo) {
+      if (asignaciones.length >= pedidas) break;
+      const candidatos = vol.filter((v) => puede(v, f));
+      if (!candidatos.length) { motivo = motivo || "sin-candidato"; continue; }
+      // 8c: el que menos lleva en su año; empate por id, que no depende del orden de llegada.
+      candidatos.sort((x, y) => (x.acumulado + x.puestas.length) - (y.acumulado + y.puestas.length)
+        || (x.a.id < y.a.id ? -1 : x.a.id > y.a.id ? 1 : 0));
+      const elegido = candidatos[0];
+      elegido.puestas.push(f);
+      asignaciones.push({ fecha: f, residenteId: elegido.a.id, codigo: "3P" });
+    }
+    if (asignaciones.length >= pedidas) break;
+  }
+
+  asignaciones.sort((x, y) => (x.fecha < y.fecha ? -1 : x.fecha > y.fecha ? 1 : 0));
+  return {
+    asignaciones,
+    diagnostico: {
+      pedidas,
+      colocadas: asignaciones.length,
+      // Solo se nombra el motivo si de verdad faltaron: pedir 3 y colocar 3 no tiene motivo.
+      motivo: asignaciones.length < pedidas ? (motivo || "sin-hueco") : null,
+      diasMochila: mochila.size,
+      porResidente: vol.filter((v) => v.puestas.length).map((v) => ({ id: v.a.id, n: v.puestas.length })),
+    },
+  };
+}
+
 
 /** Los días del mes cubiertos por alguno de esos bloqueos. */
 function diasCubiertosPor(bloqueos, dias) {

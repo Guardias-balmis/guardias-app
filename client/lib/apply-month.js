@@ -19,7 +19,20 @@ import { datesOfMonth } from "../../v2/domain/calendar.js";
 // pedido y que ningún invariante lee (`tally.js` solo computa G/GF/GP): borrarlos sería destruir
 // datos sobre los que el generador no tiene ninguna opinión. Y la ausencia de verdad, la que sí
 // leen INV-2/5/6/7, es una fila de `bloqueos` — no una «B» en la rejilla (V-19).
-const PROPONIBLES = new Set(["G", "GF", "GP", "3P"]);
+const PROPONIBLES = new Set(["G", "GF", "GP"]);
+
+/**
+ * Los códigos que ESTA propuesta puede borrar. El 3P entra solo si la propuesta trae 3P
+ * (decisión V-38). Antes estaba fijo en la lista, y como `schedule.js` no repartía 3P, regenerar
+ * un mes se llevaba por delante los 3P colocados a mano —los únicos que había— y el aviso los
+ * contaba como «guardias». Es la misma regla que ya justificaba dejar fuera a V/R/B, aplicada
+ * también aquí: se borra lo que se propone, y solo eso.
+ */
+function borrablesDe(propuesta) {
+  const s = new Set(PROPONIBLES);
+  if (propuesta.some((a) => a.codigo === "3P")) s.add("3P");
+  return s;
+}
 
 const clave = (a) => `${a.fecha}|${a.residenteId}`; // la misma ASIG_KEY que usa el servidor
 
@@ -57,10 +70,11 @@ export function monthReplacementPlan({ mes, anio, residentes = [], existentes = 
   const desconocidos = propuesta.filter((a) => !conocidos.has(a.residenteId));
   const propuestaKeys = new Set(propuesta.map(clave));
 
+  const borrables = borrablesDe(propuesta);
   const borradas = [];
   const marcadores = [];
   for (const a of existentes) {
-    if (!PROPONIBLES.has(a.codigo)) { marcadores.push(a); continue; }
+    if (!borrables.has(a.codigo)) { marcadores.push(a); continue; }
     if (propuestaKeys.has(clave(a))) continue; // la propuesta ya la pisa por clave: nada que borrar
     borradas.push(a);
   }

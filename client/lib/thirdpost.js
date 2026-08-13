@@ -47,13 +47,7 @@ export async function thirdPostViolations({ api, mes, anio, residentes, asignaci
   if (desde && desde <= monthEnd) {
     const rAsig = await api.listAsignacionesRango(desde, monthEnd);
     if (!rAsig.ok) return { ok: false, error: rAsig.error };
-    for (const a of rAsig.asignaciones) {
-      // Solo lo ANTERIOR al mes: lo del mes llega por `asignacionesDelMes`, que es lo que se ve
-      // en la rejilla. Contarlo por las dos vías rompería el ciclo de 7 días de INV-8b.
-      if (a.codigo !== "3P" || a.fecha >= monthStart) continue;
-      (historial3P[a.residenteId] = historial3P[a.residenteId] || []).push(a.fecha);
-    }
-    for (const id of Object.keys(historial3P)) historial3P[id].sort();
+    Object.assign(historial3P, shapeThirdPostHistory(rAsig.asignaciones, monthStart));
   }
 
   return {
@@ -65,4 +59,27 @@ export async function thirdPostViolations({ api, mes, anio, residentes, asignaci
       historial3P,
     }),
   };
+}
+
+/**
+ * Asignaciones crudas → el `historial3P` que esperan `validateThirdPost` y el generador:
+ * `{ residenteId: [fechas ordenadas] }`, SOLO con los 3P anteriores al mes.
+ *
+ * Ese recorte es el contrato C-4 y no es opcional: los 3P del propio mes llegan por
+ * `asignaciones` (lo que se ve en la rejilla, o lo que el generador está proponiendo), y
+ * contarlos por las dos vías rompe el ciclo de 7 días de INV-8b — el mismo día aparecería dos
+ * veces en la secuencia y saldría como repetición.
+ *
+ * Se exporta porque `Generator.jsx` monta el mismo historial desde el histórico que ya tiene
+ * cargado, sin una segunda petición: la alternativa era una segunda copia de este recorte, que
+ * es exactamente la clase de duplicado que se desincroniza sin que falle ningún test.
+ */
+export function shapeThirdPostHistory(asignaciones, monthStart) {
+  const historial3P = {};
+  for (const a of asignaciones) {
+    if (a.codigo !== "3P" || a.fecha >= monthStart) continue;
+    (historial3P[a.residenteId] = historial3P[a.residenteId] || []).push(a.fecha);
+  }
+  for (const id of Object.keys(historial3P)) historial3P[id].sort();
+  return historial3P;
 }

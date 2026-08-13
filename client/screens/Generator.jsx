@@ -17,7 +17,11 @@ import { monthReplacementPlan } from "./client/lib/apply-month.js";
 // vuelve `comprobar()` asíncrono. Son los mismos módulos que usa Calendar.jsx: el veredicto de
 // las dos pantallas tiene que salir del mismo sitio.
 import { closeViolations } from "./client/lib/closes.js";
-import { thirdPostViolations } from "./client/lib/thirdpost.js";
+import { thirdPostViolations, shapeThirdPostHistory } from "./client/lib/thirdpost.js";
+// El rango de histórico que necesita INV-8b lo decide el dominio (contrato C-4), igual que
+// `rotationHistoryStart` decide el de INV-7: el `desde` de un voluntario puede ser anterior al
+// año de residencia en curso, y entonces el histórico que ya se pedía no lo alcanzaba.
+import { thirdPostHistoryStart } from "./v2/domain/thirdpost.js";
 // El generador determinista (V-34). Escribe en el MISMO textarea que se pega a mano: así el
 // camino de salida —comprobar(), el rechazo de fechas/ids y el reemplazo de mes de V-31— es
 // exactamente el mismo, y no hay una segunda vía de escritura que pueda saltarse esos controles.
@@ -344,7 +348,8 @@ function GeneratorScreen() {
         })
         .filter(Boolean);
       const desdeRotacion = rotationHistoryStart(rBloqueos.bloqueos, monthStart);
-      const candidatos = desdeRotacion ? [...desdesAcumulado, desdeRotacion] : desdesAcumulado;
+      const desde3P = thirdPostHistoryStart(r3P.ok ? (r3P.voluntarios || []) : [], residentes, mes, anio);
+      const candidatos = [...desdesAcumulado, desdeRotacion, desde3P].filter(Boolean);
 
       const rHist = candidatos.length === 0
         ? { ok: true, asignaciones: [] }
@@ -455,6 +460,15 @@ function GeneratorScreen() {
   // «no me convence» en algo accionable sin tener que editar la rejilla a mano.
   const [semilla, setSemilla] = useState(1);
   const [diagnostico, setDiagnostico] = useState(null);
+  // Cuántos 3P se le piden al generador. CERO por defecto (decisión V-38): el 3.º puesto es
+  // voluntario y la tabla `voluntarios3P` dice quién se apunta, no cuántos quiere hacer, así que
+  // la cantidad la pone una persona. Con 0 el generador se comporta como antes de V-38 y, además,
+  // no toca los 3P que ya hubiera puestos a mano (apply-month.js).
+  const [tercerPuesto, setTercerPuesto] = useState(0);
+  // Los 3P ANTERIORES al mes, para el ciclo L-D de INV-8b. Salen del histórico que ya está
+  // cargado —cuyo rango incluye el `desde` de los voluntarios— y se recortan con la misma
+  // función que usa la validación, no con una copia.
+  const historial3P = useMemo(() => shapeThirdPostHistory(historicas, monthStart), [historicas, monthStart]);
 
   const generar = (nuevaSemilla) => {
     const s = nuevaSemilla === undefined ? semilla : nuevaSemilla;
@@ -467,7 +481,7 @@ function GeneratorScreen() {
       bloqueos, festivos, eventos,
     });
     try {
-      const { asignaciones, diagnostico: d } = generateMonth(ctx, { semilla: s });
+      const { asignaciones, diagnostico: d } = generateMonth(ctx, { semilla: s, tercerPuesto, voluntarios3P, historial3P });
       // Por onRespuestaChange y no por setRespuesta: tiene que invalidar el veredicto anterior
       // igual que si el usuario hubiera pegado texto nuevo. Va ANTES de fijar el diagnóstico,
       // porque es quien lo limpia: al revés, se borraría el diagnóstico recién calculado.
@@ -656,6 +670,20 @@ function GeneratorScreen() {
           asignar a nadie dos días seguidos ni sobre una baja. La propuesta cae en el cuadro de
           abajo, donde puedes revisarla o retocarla antes de comprobarla.
         </div>
+        {/* El 3.º puesto es VOLUNTARIO: la app no decide cuántos se hacen (V-38). Por eso el número
+            lo pone una persona y arranca en 0, que es el comportamiento de siempre. Sin voluntarios
+            apuntados no se ofrece: pedirlos no haría nada y el diagnóstico tendría que explicarlo. */}
+        {voluntarios3P.length > 0 && (
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: COLOR.grayDark, marginBottom: 10 }}>
+            Terceros puestos (3P) a repartir:
+            <input
+              type="number" min={0} max={31} value={tercerPuesto}
+              onChange={(e) => setTercerPuesto(Math.max(0, Math.min(31, Number(e.target.value) || 0)))}
+              style={{ width: 64, padding: "4px 6px", border: `1px solid ${COLOR.gray}`, borderRadius: 6, fontSize: 12 }}
+            />
+            <span>entre los {voluntarios3P.length} voluntario{voluntarios3P.length === 1 ? "" : "s"} apuntados. Se colocan primero en los días con R1.</span>
+          </label>
+        )}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Btn onClick={() => generar(1)} disabled={cargandoContexto || !!contextError} color={COLOR.blue}>
             {cargandoContexto ? "Cargando contexto…" : "⚙️ Generar propuesta"}
@@ -688,20 +716,47 @@ function GeneratorScreen() {
                 compensarla — no es un error, es lo mejor alcanzable ahora.
               </Aviso>
             )}
+            {diagnostico.tercerPuesto && diagnostico.tercerPuesto.pedidas > 0 && (
+              diagnostico.tercerPuesto.colocadas === diagnostico.tercerPuesto.pedidas ? (
+                <div style={{ fontSize: 12, color: COLOR.grayDark }}>
+                  3P repartidos: {diagnostico.tercerPuesto.porResidente.map((x) => `${nombreDe(x.id)} ${x.n}`).join(" · ")}
+                  {diagnostico.tercerPuesto.diasMochila > 0 ? ` — en días con R1 (${diagnostico.tercerPuesto.diasMochila} disponibles)` : ""}
+                </div>
+              ) : (
+                <Aviso>
+                  Se pidieron {diagnostico.tercerPuesto.pedidas} terceros puestos y solo caben{" "}
+                  {diagnostico.tercerPuesto.colocadas}
+                  {diagnostico.tercerPuesto.motivo === "sin-voluntarios" ? ": no hay nadie apuntado al 3P"
+                    : diagnostico.tercerPuesto.motivo === "sin-voluntarios-activos" ? ": los apuntados no hacen guardias este mes"
+                    : diagnostico.tercerPuesto.motivo === "mochila-sin-cubrir" ? ": quedan días con R1 que ningún voluntario puede cubrir, y salirse de ellos incumpliría la prioridad de INV-8d"
+                    : ": el ciclo de 7 días de INV-8b y el descanso de INV-15 no dejan hueco a más"}.
+                  El resto hay que colocarlos a mano, o apuntar a más gente al 3P.
+                </Aviso>
+              )
+            )}
+            {/* Los dos motivos de `sinCubrir` se dicen por separado porque tienen arreglos
+                distintos, y V-35 los distingue justo para poder decirlo: «sin elegibles» es que
+                ese día no había nadie a quien asignar, y «descanso» es que quien quedaba venía de
+                guardia la víspera. Antes había aquí un segundo bloque para `adyacenciaForzada`,
+                que V-35 eliminó del diagnóstico al dejar de ceder — y como el `.length` seguía
+                leyéndose, generar una propuesta tumbaba la pantalla ENTERA. */}
             {diagnostico.sinCubrir.length > 0 && (
               <Aviso color={COLOR.red} bg={COLOR.redLight}>
-                {diagnostico.sinCubrir.length} puesto(s) sin nadie a quien asignar
-                ({[...new Set(diagnostico.sinCubrir.map((s) => s.puesto))].join(" y ")}): no hay
-                residente elegible esos días. El validador lo marcará como error de INV-1; hay que
-                resolverlo fuera de la herramienta.
-              </Aviso>
-            )}
-            {diagnostico.adyacenciaForzada.length > 0 && (
-              <Aviso>
-                En {diagnostico.adyacenciaForzada.length} día(s) no había forma de evitar dos
-                guardias seguidas sin dejar el puesto vacío:{" "}
-                {diagnostico.adyacenciaForzada.slice(0, 5).map((s) => s.fecha).join(", ")}
-                {diagnostico.adyacenciaForzada.length > 5 ? "…" : ""}. Repásalos.
+                {diagnostico.sinCubrir.length} puesto(s) sin cubrir
+                ({[...new Set(diagnostico.sinCubrir.map((s) => s.puesto))].join(" y ")}):{" "}
+                {diagnostico.sinCubrir.filter((s) => s.motivo === "sin elegibles").length > 0 && (
+                  <>{diagnostico.sinCubrir.filter((s) => s.motivo === "sin elegibles").length} sin
+                  ningún residente elegible ese día</>
+                )}
+                {diagnostico.sinCubrir.some((s) => s.motivo === "sin elegibles")
+                  && diagnostico.sinCubrir.some((s) => s.motivo === "descanso") ? ", y " : ""}
+                {diagnostico.sinCubrir.filter((s) => s.motivo === "descanso").length > 0 && (
+                  <>{diagnostico.sinCubrir.filter((s) => s.motivo === "descanso").length} porque a
+                  quien quedaba le tocaba descansar tras la guardia de la víspera (INV-15)</>
+                )}
+                . Días: {diagnostico.sinCubrir.slice(0, 5).map((s) => s.fecha).join(", ")}
+                {diagnostico.sinCubrir.length > 5 ? "…" : ""}. Un día con los dos puestos vacíos es
+                error de INV-1 e impide validar el mes; hay que resolverlo fuera de la herramienta.
               </Aviso>
             )}
           </div>
