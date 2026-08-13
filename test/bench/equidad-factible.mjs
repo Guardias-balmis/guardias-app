@@ -36,7 +36,7 @@
 
 import { addDays, compareISO, datesOfMonth, bridgesBetween } from "../../v2/domain/calendar.js";
 import { tally } from "../../v2/domain/tally.js";
-import { buildYearCloseContext, validateResidencyYearClose, DIMS, PROPORCIONAL } from "../../v2/domain/equity.js";
+import { buildYearCloseContext, validateResidencyYearClose, DIMS, PROPORCIONAL, residentIsFreeOnBridge } from "../../v2/domain/equity.js";
 import { buildMonthContext, validateMonth } from "../../v2/domain/validate.js";
 
 // Calendario laboral real de Alicante (nacional + Comunitat Valenciana + local), contrastado
@@ -108,9 +108,20 @@ function contexto(roster, bajas) {
     for (const vecina of [addDays(f, -1), addDays(f, 1)]) if (vecina !== excluir && suyas.has(vecina)) return false;
     return true;
   };
-  const met = (fechas) => {
+  // `puentesLibres` NO es "no trabajó ese día": desde V-27 un puente dentro de una ausencia
+  // tampoco cuenta como libre (no lo tuvo porque no estaba, no porque el reparto se lo diera).
+  // La regla la pone `equity.js`; calcularla aquí a mano fue la SEGUNDA divergencia con el juez
+  // que apareció hoy, y la que hacía que el buscador se parase creyendo haber terminado.
+  // Se precalcula por residente: con el reparto VACÍO, `residentIsFreeOnBridge` responde justo la
+  // parte que no depende del reparto (¿cae en su ventana? ¿está de ausencia ese día?). Lo que
+  // queda es «¿lo trabajó?», que es un `has` sobre el Set. Así la regla la sigue poniendo el
+  // dominio pero no se recorre un array en cada paso de la búsqueda.
+  const puentesElegibles = {};
+  for (const r of res) puentesElegibles[r.id] = puentes.filter((p) => residentIsFreeOnBridge(r.id, [], p, VENTANA, bajas));
+  const met = (id, fechas) => {
     const t = tally([...fechas].map((f) => ({ fecha: f, codigo: codigoDe(f) })), { start: VENTANA.start, end: VENTANA.end });
-    let libres = 0; for (const p of puentes) if (!fechas.has(p)) libres++;
+    let libres = 0;
+    for (const p of puentesElegibles[id]) if (!fechas.has(p)) libres++;
     return { total: t.total, findes: t.finde, festivos: t.festivos, prefestivos: t.prefestivos, dobletes: t.dobletes, puentesLibres: libres };
   };
   // Qué eje se normaliza lo dice `equity.js`, no este fichero: tener aquí la copia es lo que dejó
@@ -152,7 +163,7 @@ function buscarAnual({ semilla = 1, intentos = 8, pasos = 40000, roster = {}, ba
       const id = pool[(rnd() * pool.length) | 0];
       asig.get(id).add(f); X.ocupar(ocupa, f, id); slots.push({ fecha: f, puesto, id });
     }
-    const M = {}; for (const r of X.res) M[r.id] = X.met(asig.get(r.id));
+    const M = {}; for (const r of X.res) M[r.id] = X.met(r.id, asig.get(r.id));
     const C = {}; for (const g of Object.keys(X.grupos)) C[g] = X.costeCohorte(g, M);
     const suma = () => Object.values(C).reduce((a, b) => a + b.duro, 0);
     let duro = suma();
@@ -179,7 +190,7 @@ function buscarAnual({ semilla = 1, intentos = 8, pasos = 40000, roster = {}, ba
       const oA = M[a.id], oB = M[mover ? destino : b.id];
       A.delete(a.fecha); B.add(a.fecha);
       if (!mover) { B.delete(b.fecha); A.add(b.fecha); }
-      M[a.id] = X.met(A); M[mover ? destino : b.id] = X.met(B);
+      M[a.id] = X.met(a.id, A); M[mover ? destino : b.id] = X.met(mover ? destino : b.id, B);
       const gs = [...new Set([X.cohorteDe[a.id], X.cohorteDe[mover ? destino : b.id]])];
       const antes = gs.reduce((x, g) => ({ duro: x.duro + C[g].duro, guia: x.guia + C[g].guia }), { duro: 0, guia: 0 });
       const nuevos = gs.map((g) => X.costeCohorte(g, M));
@@ -244,18 +255,18 @@ function incremental({ semilla = 1, pasosMes = 25000, bajas = [], normalizar = t
 
   const asig = new Map(X.res.map((r) => [r.id, new Set()]));
   const ocupa = X.nuevoOcupa();
-  const M = {}; for (const r of X.res) M[r.id] = X.met(asig.get(r.id));
+  const M = {}; for (const r of X.res) M[r.id] = X.met(r.id, asig.get(r.id));
 
   for (const [, ds] of meses) {
     const slots = [];
     for (const f of ds) for (const puesto of ["M", "P"]) {
       const pool = X.poolDe(puesto, f).filter((id) => X.libre(ocupa, f, id));
       const id = pool.reduce((a, b) => (M[b].total < M[a].total ? b : a));
-      asig.get(id).add(f); X.ocupar(ocupa, f, id); M[id] = X.met(asig.get(id)); slots.push({ fecha: f, puesto, id });
+      asig.get(id).add(f); X.ocupar(ocupa, f, id); M[id] = X.met(id, asig.get(id)); slots.push({ fecha: f, puesto, id });
     }
     // `ambito: "mes"` mide la variante ingenua: equilibrar DENTRO del mes, sin memoria anual.
     const marco = ambito === "mes" ? new Map(X.res.map((r) => [r.id, new Set([...asig.get(r.id)].filter((f) => f.startsWith(ds[0].slice(0, 7))))])) : asig;
-    const metrica = (id) => X.met(ambito === "mes" ? marco.get(id) : asig.get(id));
+    const metrica = (id) => X.met(id, ambito === "mes" ? marco.get(id) : asig.get(id));
     const C = {}; for (const g of Object.keys(X.grupos)) { const Mx = {}; for (const id of X.grupos[g]) Mx[id] = metrica(id); C[g] = X.costeCohorte(g, Mx, normalizar); }
     const duroTotal = () => Object.values(C).reduce((a, b) => a + b.duro, 0);
 
@@ -277,7 +288,7 @@ function incremental({ semilla = 1, pasosMes = 25000, bajas = [], normalizar = t
         if (ambito === "mes") { marco.get(a.id).add(a.fecha); marco.get(nuevoId).delete(a.fecha); }
       }
     }
-    for (const r of X.res) M[r.id] = X.met(asig.get(r.id));
+    for (const r of X.res) M[r.id] = X.met(r.id, asig.get(r.id));
   }
   return { asignaciones: aplanar(asig), res: X.res };
 }

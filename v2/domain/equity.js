@@ -379,7 +379,7 @@ function intersect(a, b) {
  * a diferencia de los demás ejes (nota [a])—, y era el sesgo más frecuente porque ROTACION y
  * VACACIONES no bloquean la asignación (V-8) pero tampoco generan guardia en la práctica.
  */
-function residentIsFreeOnBridge(id, asignaciones, puente, win, bloqueos = []) {
+export function residentIsFreeOnBridge(id, asignaciones, puente, win, bloqueos = []) {
   if (!inRange(puente, win.start, win.end)) return false; // fuera de su ventana → no es suyo
   if (absences(bloqueos, { residenteId: id, motivos: AUSENTE_EN_PUENTE, fecha: puente }).length) return false;
   return !asignaciones.some((a) => a.residenteId === id && GUARDIA.includes(a.codigo) && a.fecha === puente);

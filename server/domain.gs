@@ -1496,7 +1496,7 @@ function labelDim(dim) {
   return { total: "Totales", findes: "Fines de semana", festivos: "Festivos", prefestivos: "Prefestivos", puentesLibres: "Puentes libres", dobletes: "Dobletes V-D" }[dim];
 }
 
-  return { DIMS, PROPORCIONAL, validateResidencyYearClose, yearCloseHistoryStart, buildYearCloseContext, yearCloseFestivosRange, quarterCloseWindow, validateQuarterClose, availabilityFraction };
+  return { DIMS, PROPORCIONAL, validateResidencyYearClose, yearCloseHistoryStart, buildYearCloseContext, yearCloseFestivosRange, quarterCloseWindow, validateQuarterClose, availabilityFraction, residentIsFreeOnBridge };
 })();
 
 // ── validate.js ──
