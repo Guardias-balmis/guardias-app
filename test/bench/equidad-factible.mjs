@@ -35,9 +35,9 @@
 // un trimestre y vaciar otro mientras el año cuadra.
 //
 // Pero NO son incompatibles: pidiéndole al coste los dos a la vez (`conTrimestre: true`) salen los
-// DOS, 3/3 en los seis escenarios y con cero errores duros. O sea que lo que le falta al generador
-// es objetivo, no espacio — que son arreglos muy distintos. Se paga en tiempo de búsqueda: entre
-// 2× y 3× en casi todos, y 14× en el peor (la baja de 6 meses, de 2,2 s a 30 s).
+// DOS, en los seis escenarios y con cero errores duros. O sea que lo que le falta al generador es
+// objetivo, no espacio — que son arreglos muy distintos. Se paga en tiempo de búsqueda: entre 2,5×
+// y 5× (el peor, «dos bajas simultáneas», de 1,5 s a 7,9 s).
 //
 // TRES COSAS QUE SE APRENDIERON MIDIENDO, y que quien escriba el solver necesita saber:
 //   1. Un buscador que solo INTERCAMBIA asignaciones no puede arreglar nunca el eje `total`: un
@@ -166,9 +166,18 @@ function contexto(roster, bajas) {
     const ids = grupos[g]; if (ids.length < 2) return { duro: 0, guia: 0 };
     let duro = 0, guia = 0;
     for (const eje of DIMS) {
-      let mx = -Infinity, mn = Infinity;
-      for (const id of ids) { const v = normalizar && PROPORCIONAL.has(eje) ? M[id][eje] / fDe[id] : M[id][eje]; if (v > mx) mx = v; if (v < mn) mn = v; }
-      duro += Math.max(0, mx - mn - 1); guia += mx - mn;
+      let mx = -Infinity, mn = Infinity, fMx = 1, fMn = 1;
+      const norm = normalizar && PROPORCIONAL.has(eje);
+      for (const id of ids) {
+        const v = norm ? M[id][eje] / fDe[id] : M[id][eje];
+        if (v > mx) { mx = v; fMx = fDe[id]; }
+        if (v < mn) { mn = v; fMn = fDe[id]; }
+      }
+      // Tolerancia `1/min(f)` del par, la del juez desde V-37: el ±1 es una guardia de verdad y
+      // al dividir por la disponibilidad vale `1/f`. Con el 1 fijo que había, el banco se exigía
+      // MÁS que el cierre en cuanto alguien tenía f<1 y habría dado por inalcanzable lo que el
+      // juez sí aprueba — la misma divergencia coste/juez que ya se pagó dos veces aquí.
+      duro += Math.max(0, mx - mn - (norm ? 1 / Math.min(fMx, fMn) : 1)); guia += mx - mn;
     }
     // El cierre TRIMESTRAL, cuando se le pide perseguirlo además del anual. Imita a
     // `validateQuarterClose`: un solo eje (`total`), normalizado por la disponibilidad DEL
