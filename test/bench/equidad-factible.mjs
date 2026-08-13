@@ -1,4 +1,4 @@
-// Banco de medición de la factibilidad de INV-3 (decisión V-28). NO es un test y NO entra en
+// Banco de medición de la factibilidad de INV-3 (decisión V-32). NO es un test y NO entra en
 // `npm test` a propósito: es una búsqueda aleatorizada que tarda entre segundos y minutos, y la
 // suite del repo corre en un segundo. Lo determinista de esta medición está fijado aparte, en
 // `test/equidad-factible.test.js`.
@@ -16,7 +16,7 @@
 // nunca una reimplementación. Aquí solo se buscan asignaciones; quién decide si valen es el código
 // que está en producción. Un banco que se juzga a sí mismo no mide nada.
 //
-// INV-15 (decisión V-31, posterior a la primera versión de este banco): nadie hace guardia dos
+// INV-15 (decisión V-35, posterior a la primera versión de este banco): nadie hace guardia dos
 // días consecutivos, y es `error`. Se aplica aquí como PODA dura — nunca se crea una asignación
 // que encadene —, no como coste. Sin esto el banco medía un problema más fácil que el real: su
 // propia salida producía ~90 errores duros por semilla, todos INV-15.
@@ -146,7 +146,7 @@ function buscarAnual({ semilla = 1, intentos = 8, pasos = 40000, roster = {}, ba
     const slots = [];
     for (const f of X.D) for (const puesto of ["M", "P"]) {
       const pool = X.poolDe(puesto, f).filter((id) => X.libre(ocupa, f, id) && X.sinEncadenar(asig, id, f));
-      // Sin candidato legal el puesto se queda VACÍO, igual que hace schedule.js (V-31c): antes
+      // Sin candidato legal el puesto se queda VACÍO, igual que hace schedule.js (V-35c): antes
       // que encadenar, no cubrir. Un día con el otro puesto cubierto es aviso de INV-1, no error.
       if (!pool.length) { slots.push({ fecha: f, puesto, id: null }); continue; }
       const id = pool[(rnd() * pool.length) | 0];

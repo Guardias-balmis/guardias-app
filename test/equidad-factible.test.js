@@ -1,5 +1,5 @@
 // Lo que se midió el 2026-08-08 sobre la factibilidad de INV-3 y de INV-2, fijado como test para
-// que la respuesta no haya que volver a calcularla (decisión V-28). Cero dependencias, node:test.
+// que la respuesta no haya que volver a calcularla (decisión V-32). Cero dependencias, node:test.
 //
 // POR QUÉ EXISTE. Al revisar el generador surgió la duda de si el «±1 en seis ejes» de INV-3 es
 // siquiera ALCANZABLE: si no lo fuera, dejaría de ser una restricción que perseguir y habría que

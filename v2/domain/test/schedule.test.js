@@ -1,6 +1,6 @@
-// Tests del generador determinista (v2/domain/schedule.js, decisión V-30).
+// Tests del generador determinista (v2/domain/schedule.js, decisión V-34).
 //
-// REGLA DE ORO, heredada del banco de V-28: el juez es SIEMPRE el dominio real
+// REGLA DE ORO, heredada del banco de V-32: el juez es SIEMPRE el dominio real
 // (`validateMonth`, `validateResidencyYearClose`), nunca una reimplementación de las reglas
 // dentro del test. Un generador que se juzga a sí mismo no demuestra nada — solo demuestra que
 // dos copias del mismo error coinciden.
@@ -104,9 +104,9 @@ test("es determinista: misma entrada y misma semilla → mismo cuadrante, siempr
   assert.deepEqual(erroresDe(c), []);
 });
 
-// ── Las dos reglas de V-28 que deciden el diseño ────────────────────────────────────────────────
+// ── Las dos reglas de V-32 que deciden el diseño ────────────────────────────────────────────────
 
-test("V-28 regla 1: persigue el ACUMULADO del año, no el mes (a quien llega cargado le da menos)", () => {
+test("V-32 regla 1: persigue el ACUMULADO del año, no el mes (a quien llega cargado le da menos)", () => {
   // `r3_1` llega con 10 guardias de ventaja sobre sus tres compañeros de cohorte.
   const historicas = [];
   for (let d = 1; d <= 10; d++) historicas.push({ fecha: `2026-09-${String(d).padStart(2, "0")}`, residenteId: "r3_1", codigo: "G" });
@@ -120,9 +120,9 @@ test("V-28 regla 1: persigue el ACUMULADO del año, no el mes (a quien llega car
   }
 });
 
-test("V-28 regla 2: divide por disponibilidad — a quien vuelve de una baja larga NO le iguala en crudo", () => {
+test("V-32 regla 2: divide por disponibilidad — a quien vuelve de una baja larga NO le iguala en crudo", () => {
   // Baja de medio año: su `f` es ~0,5, así que el juez espera que acabe con ~la mitad de guardias.
-  // Igualarle el total EN CRUDO es exactamente lo que INV-3 penaliza (0/6 medido en V-28).
+  // Igualarle el total EN CRUDO es exactamente lo que INV-3 penaliza (0/6 medido en V-32).
   const bloqueos = [{ residenteId: "r3_1", motivo: "BAJA", desde: "2026-05-27", hasta: "2026-11-26", activo: true }];
   const { asignaciones } = generar({ mes: 12, anio: 2026, bloqueos });
   const n = (id) => fechasDe(asignaciones, id).size;
@@ -180,7 +180,7 @@ test("no propone nada para quien ya terminó la residencia ni para quien no ha e
 test("el histórico que cae DENTRO del mes se descarta: la propuesta reemplaza el mes, no se suma", () => {
   // El invocador pide el histórico con lookahead de doblete (contrato C-1), así que llegan filas
   // del propio mes. Si contaran, el generador perseguiría un acumulado inflado — y además esas
-  // filas las va a borrar `apply-month.js` al aplicar (V-27).
+  // filas las va a borrar `apply-month.js` al aplicar (V-31).
   const historicas = [
     { fecha: "2026-10-01", residenteId: "r3_1", codigo: "G" },
     { fecha: "2026-10-02", residenteId: "r3_1", codigo: "G" },

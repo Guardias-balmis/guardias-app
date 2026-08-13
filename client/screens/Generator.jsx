@@ -18,8 +18,8 @@ import { monthReplacementPlan } from "./client/lib/apply-month.js";
 // las dos pantallas tiene que salir del mismo sitio.
 import { closeViolations } from "./client/lib/closes.js";
 import { thirdPostViolations } from "./client/lib/thirdpost.js";
-// El generador determinista (V-30). Escribe en el MISMO textarea que se pega a mano: así el
-// camino de salida —comprobar(), el rechazo de fechas/ids y el reemplazo de mes de V-27— es
+// El generador determinista (V-34). Escribe en el MISMO textarea que se pega a mano: así el
+// camino de salida —comprobar(), el rechazo de fechas/ids y el reemplazo de mes de V-31— es
 // exactamente el mismo, y no hay una segunda vía de escritura que pueda saltarse esos controles.
 import { generateMonth } from "./v2/domain/schedule.js";
 

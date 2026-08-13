@@ -1,12 +1,12 @@
-// Generador determinista de cuadrante mensual (spec.md §5, decisión V-30). PURO: sin red, sin
+// Generador determinista de cuadrante mensual (spec.md §5, decisión V-34). PURO: sin red, sin
 // Sheets, sin React y sin dependencias — recibe el MISMO `ctx` que arma `buildMonthContext` y
 // devuelve una propuesta de asignaciones. No la escribe en ningún sitio: quien la aplique pasa
 // por `comprobar()`/`aplicar()` como si la hubiera pegado a mano, así que sigue vigente todo el
-// guardarraíl de V-27 (reemplazo del mes, rechazo de fechas ajenas e ids inventados) y sigue
+// guardarraíl de V-31 (reemplazo del mes, rechazo de fechas ajenas e ids inventados) y sigue
 // mandando el validador — «la IA propone, el validador dispone» vale igual para esto, que no es
 // más que otro proponente.
 //
-// LAS TRES REGLAS DE V-28, QUE SON LO QUE DECIDE EL DISEÑO. No son preferencias de estilo: se
+// LAS TRES REGLAS DE V-32, QUE SON LO QUE DECIDE EL DISEÑO. No son preferencias de estilo: se
 // midieron el 2026-08-08 contra el juez real y cada una tiene un contraejemplo medido.
 //   1. Se persigue el ACUMULADO DEL AÑO DE RESIDENCIA, nunca el mes. Equilibrar dentro del mes
 //      da 0/6 al cierre anual: un mes perfectamente repartido encima de un acumulado torcido lo
@@ -214,7 +214,7 @@ export function generateMonth(ctx, opciones = {}) {
   };
 
   // ── Coste: lo mismo que mide INV-3, por cohorte ────────────────────────────────────────────
-  // Devuelve DOS números a propósito (igual que el banco de V-28). `duro` es lo que se pasa de
+  // Devuelve DOS números a propósito (igual que el banco de V-32). `duro` es lo que se pasa de
   // ±1 y llega a 0 exacto, que es lo que permite parar en cuanto hay solución; `guia` es la
   // dispersión total, que orienta cuando el duro ya está a 0 en un eje pero no en otro — pero
   // nunca llega a cero, así que mezclarlos dejaría el bucle sin condición de parada.
@@ -244,7 +244,7 @@ export function generateMonth(ctx, opciones = {}) {
   const peor = (x, y) => x.duro > y.duro + EPS || (Math.abs(x.duro - y.duro) <= EPS && x.guia > y.guia + EPS);
 
   // ── Siembra: el que menos lleva, primero ───────────────────────────────────────────────────
-  // Greedy por `total/f` (regla 2 de V-28 desde el primer reparto, no solo en la búsqueda). Sin
+  // Greedy por `total/f` (regla 2 de V-32 desde el primer reparto, no solo en la búsqueda). Sin
   // esta siembra la búsqueda local parte de un reparto aleatorio y necesita un orden de magnitud
   // más de pasos para llegar al mismo sitio.
   const slots = [];
@@ -298,7 +298,7 @@ export function generateMonth(ctx, opciones = {}) {
     if (desdeLaUltimaMejora >= ESTANCAMIENTO) break;
     desdeLaUltimaMejora++;
     const a = slots[(rnd() * slots.length) | 0];
-    // MOVER la mitad de los pasos es imprescindible (regla 3 de V-28): un intercambio conserva el
+    // MOVER la mitad de los pasos es imprescindible (regla 3 de V-32): un intercambio conserva el
     // número de guardias de cada uno, así que sin mover el eje `total` es inalcanzable.
     const mover = rnd() < 0.5;
     const actual = porId.get(a.id);

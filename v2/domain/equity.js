@@ -329,8 +329,8 @@ function closingWindowThisMonth(r, mes, anio) {
 
 /** Fracción de disponibilidad = (días de la ventana − días de baja) / días de la ventana. */
 /**
- * Exportada desde V-30: `schedule.js` divide por el MISMO `f` que este validador, o el generador
- * perseguiría un objetivo distinto del que el cierre le va a medir (regla 2 de V-28). Duplicarla
+ * Exportada desde V-34: `schedule.js` divide por el MISMO `f` que este validador, o el generador
+ * perseguiría un objetivo distinto del que el cierre le va a medir (regla 2 de V-32). Duplicarla
  * allí era la vía rápida y es justo lo que V-19 prohíbe: dos definiciones de la misma pregunta
  * que empiezan iguales y se separan sin que nadie lo note.
  */
