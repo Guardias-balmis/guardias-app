@@ -26,7 +26,13 @@ import { tally } from "./tally.js";
 import { absences, isNearbyRotation, BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA } from "./absences.js";
 
 const GUARDIA = new Set(["G", "GF", "GP"]);          // ocupan puesto obligatorio
-const ASIGNACION = new Set(["G", "GF", "GP", "3P"]); // cualquier asignación (INV-5, INV-7)
+// Los códigos que OCUPAN un puesto de guardia esa noche (INV-5, INV-7 y el descanso de INV-15).
+// V/R/B no están: son marcas de la rejilla, no presencia en el hospital. Se exporta porque el
+// cliente necesita el mismo conjunto para avisar en el momento de escribir una celda, y tenerlo
+// dos veces es la clase de duplicado que se desincroniza sin que nada falle (ver `absences.js`,
+// que existe por lo mismo).
+export const OCUPA_PUESTO = new Set(["G", "GF", "GP", "3P"]);
+const ASIGNACION = OCUPA_PUESTO;
 // Qué motivo de `bloqueos` cuenta para qué invariante vive en `absences.js`, no aquí: eran
 // cinco criterios escritos a mano en cinco sitios. Decisión V-8 (Fase 5.x): solo BAJA bloquea
 // la asignación —no se puede exigir una guardia a alguien de baja médica/embarazo—, mientras

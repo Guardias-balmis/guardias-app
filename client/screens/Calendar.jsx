@@ -12,6 +12,11 @@ import { closeViolations } from "./client/lib/closes.js";
 import { thirdPostViolations } from "./client/lib/thirdpost.js";
 import { puedeMoverCiclo as reglaCiclo } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
+// Aviso de descanso (INV-15) en el instante de escribir la celda. Existe sobre todo por el 3P:
+// `schedule.js` no lo reparte, así que siempre lo pone una persona encima de un mes ya generado,
+// y medido resulta que uno de cada tres colocados a ciegas crea un error — con 4 al mes, el 74%
+// de los meses dejan de poder validarse. Sin esto, eso se descubre al pulsar Validar.
+import { chainedNeighbour } from "./client/lib/rest.js";
 
 const { useState, useEffect, useRef } = React;
 const { Card, Btn, Aviso } = window.UI;
@@ -131,6 +136,9 @@ function CalendarScreen() {
 
   const [asignaciones, setAsignaciones] = useState({}); // {[residenteId]: {[fecha]: codigo}}
   const [origenes, setOrigenes] = useState({});         // {[residenteId]: {[fecha]: "CEDIDA"|"COMPRADA"}} (INV-4)
+  const [bordes, setBordes] = useState([]);             // asignaciones de los días de FUERA del mes
+  const [bordesError, setBordesError] = useState(false);
+  const [avisoDescanso, setAvisoDescanso] = useState(null); // {residenteId, fecha, vecina}
   const [pendientes, setPendientes] = useState({});     // {[residenteId+"|"+fecha]: {fecha,residenteId,codigo,origen}}
   // Celda con el selector de origen abierto (mantener presionado), como `"residenteId|fecha"`.
   const [origenEditando, setOrigenEditando] = useState(null);
@@ -177,7 +185,17 @@ function CalendarScreen() {
     let cancelled = false;
     (async () => {
       app.setLoading(true);
-      const [r, rEstado] = await Promise.all([app.api.listAsignaciones(anio, mes), app.api.estadoCuadrante(anio, mes)]);
+      // Los dos días de FUERA del mes: sin ellos, el par que cruza el borde (día 1 con el último
+      // del mes anterior) es invisible para el aviso de descanso. Es el mismo agujero del
+      // contrato C-1, y el que tenía el banco de equidad hasta que se corrigió.
+      const diasDelMes = datesOfMonth(anio, mes);
+      const antesDelMes = addDays(diasDelMes[0], -1);
+      const trasElMes = addDays(diasDelMes[diasDelMes.length - 1], 1);
+      const [r, rEstado, rBordes] = await Promise.all([
+        app.api.listAsignaciones(anio, mes),
+        app.api.estadoCuadrante(anio, mes),
+        app.api.listAsignacionesRango(antesDelMes, trasElMes),
+      ]);
       if (cancelled) return;
       if (r.ok) {
         const idx = {};
@@ -195,6 +213,11 @@ function CalendarScreen() {
       } else {
         showToast("Error cargando cuadrante: " + r.error, "err");
       }
+      // Un fallo aquí NO tumba la pantalla ni bloquea la edición: el aviso es orientativo y quien
+      // decide de verdad sigue siendo Validar. Pero se deja constancia, porque degradarlo en
+      // silencio a «no hay conflicto» sería afirmar algo que no se ha podido comprobar.
+      setBordes(rBordes.ok ? rBordes.asignaciones.filter((a) => a.fecha === antesDelMes || a.fecha === trasElMes) : []);
+      setBordesError(!rBordes.ok);
       setEstadoError(!rEstado.ok);
       if (rEstado.ok) { setEstado(rEstado.estado); setSinResponsable(rEstado.sinResponsable === true); } // en error se conserva el último estado conocido; estadoError ya bloquea la edición
       else showToast("Error comprobando el estado del cuadrante: " + rEstado.error, "err");
@@ -202,6 +225,7 @@ function CalendarScreen() {
       setViolaciones(null);
       setEquidadPorConfirmar(null);
       setCierresError(null);
+      setAvisoDescanso(null); // el aviso es de una celda concreta: al cambiar de mes deja de aplicar
       app.setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -215,6 +239,10 @@ function CalendarScreen() {
   };
 
   const dias = datesOfMonth(anio, mes);
+  const nombreDe = (id) => (residentes.find((r) => r.id === id) || {}).nombre || id;
+  // Dentro del mes basta el número; fuera se enseña la fecha entera, porque «día 31» sin decir de
+  // qué mes es justo lo confuso del par que cruza el borde.
+  const diaCorto = (iso) => (iso.slice(0, 7) === `${anio}-${String(mes).padStart(2, "0")}` ? `día ${Number(iso.slice(8))}` : iso);
   const monthWindow = { start: dias[0], end: dias[dias.length - 1] };
 
   const { porNivel, noAsignables } = filasDelMes(residentes, dias, asignaciones);
@@ -229,6 +257,15 @@ function CalendarScreen() {
   // `origen` por defecto "" (no cedida/comprada): cambiar el CÓDIGO de una celda es una guardia
   // nueva, y una guardia nueva no hereda la marca de la que hubiera antes.
   const aplica = (residenteId, fecha, codigo, origen = "") => {
+    // El aviso se calcula sobre el estado ANTERIOR de la celda más el código que se escribe: es
+    // exactamente lo que quedará. Solo mira a este residente, así que ciclar una celda no tiene
+    // que barrer la rejilla entera.
+    const vecina = chainedNeighbour({
+      codigos: { ...(asignaciones[residenteId] || {}), [fecha]: codigo },
+      bordes: bordes.filter((b) => b.residenteId === residenteId),
+      fecha, codigo,
+    });
+    setAvisoDescanso(vecina ? { residenteId, fecha, vecina } : null);
     setAsignaciones((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: codigo } }));
     setOrigenes((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: origen } }));
     setPendientes((prev) => ({ ...prev, [`${residenteId}|${fecha}`]: { fecha, residenteId, codigo, origen } }));
@@ -346,7 +383,16 @@ function CalendarScreen() {
     const excepciones = rExcepciones.ok ? rExcepciones.excepciones : [];
 
     const asignacionesDelMes = residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo })));
-    const ctx = buildMonthContext({ mes, anio, residentes, historicas, asignacionesDelMes, bloqueos, festivos, excepciones });
+
+    // Los dos días de fuera del mes (ya cargados al abrir el mes) entran en el histórico: INV-15
+    // juzga el PAR, y su comentario da por hecho que el invocador aporta ese contexto — pero
+    // `historicas` solo se llenaba cuando había una rotación cercana, así que en el caso normal el
+    // par que cruza el borde (día 1 con el último del mes anterior, o el último con el día 1 del
+    // siguiente) no se veía NI al validar. Se deduplica porque el tramo de rotación ya puede
+    // traer el día anterior, y contarlo dos veces falsearía el `propias` de INV-7.
+    const porClave = new Map(historicas.map((a) => [`${a.residenteId}|${a.fecha}`, a]));
+    for (const b of bordes) if (!porClave.has(`${b.residenteId}|${b.fecha}`)) porClave.set(`${b.residenteId}|${b.fecha}`, b);
+    const ctx = buildMonthContext({ mes, anio, residentes, historicas: [...porClave.values()], asignacionesDelMes, bloqueos, festivos, excepciones });
 
     // Cierres de equidad de INV-3 (P-8, decisión V-13): el trimestral en ago/nov/feb/may y el
     // anual en el mes del aniversario de alguien. Es la MISMA comprobación que hará el
@@ -443,6 +489,27 @@ function CalendarScreen() {
           (podría estar PUBLICADO sin que esta pantalla lo sepa todavía).
           <div style={{ marginTop: 8 }}>
             <Btn onClick={() => setRetryTick((t) => t + 1)}>🔄 Reintentar</Btn>
+          </div>
+        </Aviso>
+      )}
+
+      {bordesError && (
+        <Aviso>
+          No se pudieron leer las guardias de los días vecinos a este mes: el aviso de descanso no
+          podrá avisar de un encadenamiento con el mes anterior o el siguiente. Validar sí lo
+          comprobará.
+        </Aviso>
+      )}
+
+      {avisoDescanso && (
+        <Aviso color={COLOR.red} bg={COLOR.redLight}>
+          ⛔ <b>{nombreDe(avisoDescanso.residenteId)}</b> quedaría con guardia el {diaCorto(avisoDescanso.vecina)} y
+          el {diaCorto(avisoDescanso.fecha)}, dos días seguidos. Tras una guardia corresponde el descanso del día
+          siguiente (INV-15), así que el mes no se podrá validar hasta quitar una de las dos.
+          <div style={{ marginTop: 8 }}>
+            <Btn onClick={() => { aplica(avisoDescanso.residenteId, avisoDescanso.fecha, ""); }}>
+              ↩️ Deshacer esta celda
+            </Btn>
           </div>
         </Aviso>
       )}
