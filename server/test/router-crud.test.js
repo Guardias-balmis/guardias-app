@@ -267,3 +267,45 @@ test("misPreferencias/guardarPreferencias requieren sesión", () => {
   assert.equal(call({ action: "misPreferencias", anio: 2026, mes: 7 }, makeDeps()).ok, false);
   assert.equal(call({ action: "guardarPreferencias", anio: 2026, mes: 7, prefs: {} }, makeDeps()).ok, false);
 });
+
+// listPreferencias es el alcance EQUIPO que faltaba: hasta ahora la tabla era de solo escritura
+// (misPreferencias filtra por session.sub) y nadie leía jamás lo que los residentes rellenaban.
+test("listPreferencias devuelve las de TODO el equipo, no solo las propias", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  call({ action: "guardarPreferencias", session, anio: 2026, mes: 7, prefs: { maxGuardias: 5, notas: "las mías" } }, deps);
+  deps.store.appendRecord("preferencias", {
+    residenteId: "uuid-otro", anio: 2026, mes: 7, maxGuardias: 3, fechasEvitar: ["2026-07-14"], notas: "las de otro",
+  });
+
+  const r = call({ action: "listPreferencias", session, anio: 2026, mes: 7 }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(r.preferencias.length, 2);
+  const otro = r.preferencias.find((p) => p.residenteId === "uuid-otro");
+  assert.equal(otro.maxGuardias, 3);
+  assert.deepEqual(otro.fechasEvitar, ["2026-07-14"]);
+});
+
+test("listPreferencias solo trae las del mes pedido y aplica última-gana por residente", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  call({ action: "guardarPreferencias", session, anio: 2026, mes: 7, prefs: { maxGuardias: 4 } }, deps);
+  call({ action: "guardarPreferencias", session, anio: 2026, mes: 7, prefs: { maxGuardias: 6 } }, deps);
+  call({ action: "guardarPreferencias", session, anio: 2026, mes: 8, prefs: { maxGuardias: 2 } }, deps);
+
+  const julio = call({ action: "listPreferencias", session, anio: 2026, mes: 7 }, deps);
+  assert.equal(julio.preferencias.length, 1);
+  assert.equal(julio.preferencias[0].maxGuardias, 6); // la segunda escritura pisa a la primera
+  const agosto = call({ action: "listPreferencias", session, anio: 2026, mes: 8 }, deps);
+  assert.equal(agosto.preferencias[0].maxGuardias, 2);
+  // un mes sin nada no es un error, es una lista vacía
+  assert.deepEqual(call({ action: "listPreferencias", session, anio: 2026, mes: 9 }, deps).preferencias, []);
+});
+
+test("listPreferencias requiere sesión y valida mes/anio", () => {
+  const deps = makeDeps();
+  assert.equal(call({ action: "listPreferencias", anio: 2026, mes: 7 }, deps).ok, false);
+  const session = loggedIn(deps);
+  assert.equal(call({ action: "listPreferencias", session, anio: 2026, mes: 13 }, deps).ok, false);
+  assert.equal(call({ action: "listPreferencias", session, anio: 0, mes: 7 }, deps).ok, false);
+});

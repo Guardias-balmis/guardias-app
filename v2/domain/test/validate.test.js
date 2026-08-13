@@ -940,6 +940,65 @@ test("INV-12 nunca bloquea: un mes lleno de incoherencias sigue siendo validable
   assert.deepEqual([...new Set(v.map((x) => x.severidad))], ["aviso"]);
 });
 
+// ─────────────── INV-15: descanso tras guardia (decisión del autor, 2026-08-10) ───────────────
+// Es `error` y eso NO contradice V-14: tras una guardia de 24 h el descanso del día siguiente es
+// una obligación legal, así que cae en «lo ilegal», igual que INV-5.
+
+test("INV-15: dos guardias en días consecutivos son ERROR y apuntan al residente", () => {
+  const v = only(validateMonth({
+    mes: 10, anio: 2026, residentes: [ANA, ELENA],
+    asignaciones: coverMonth(10, 2026, 31),
+  }), "INV-15");
+  // 31 días seguidos cubiertos por los mismos dos → 30 pares por cabeza.
+  assert.equal(v.length, 60);
+  assert.deepEqual([...new Set(v.map((x) => x.severidad))], ["error"]);
+  assert.deepEqual([...new Set(v.map((x) => x.residenteId))].sort(), ["ANA", "ELENA"]);
+});
+
+test("INV-15: días alternos no dicen nada", () => {
+  const asgs = [];
+  for (const d of [1, 3, 5, 7, 9]) {
+    asgs.push(asg("ANA", `2026-10-0${d}`, "G"), asg("ELENA", `2026-10-0${d}`, "G"));
+  }
+  const v = only(validateMonth({ mes: 10, anio: 2026, residentes: [ANA, ELENA], asignaciones: asgs }), "INV-15");
+  assert.deepEqual(v, []);
+});
+
+test("INV-15: el par que cruza el borde del mes SÍ se juzga (el 30-sep veta el 1-oct)", () => {
+  // El histórico llega por `asignaciones` (contrato C-2): sin esto la regla se cumpliría solo
+  // dentro de cada mes y se rompería justo en el borde, que es donde nadie mira.
+  const v = only(validateMonth({
+    mes: 10, anio: 2026, residentes: [ANA, ELENA],
+    asignaciones: [asg("ANA", "2026-09-30", "G"), asg("ANA", "2026-10-01", "G")],
+  }), "INV-15");
+  assert.equal(v.length, 1);
+  assert.equal(v[0].fecha, "2026-10-01");
+});
+
+test("INV-15: un par ocurrido ENTERO fuera del mes no se juzga aquí (lo juzgó su propio mes)", () => {
+  // El histórico de INV-7 puede traer meses enteros: contarlos otra vez duplicaría cada violación
+  // en todos los meses posteriores.
+  const v = only(validateMonth({
+    mes: 10, anio: 2026, residentes: [ANA, ELENA],
+    asignaciones: [asg("ANA", "2026-08-10", "G"), asg("ANA", "2026-08-11", "G")],
+  }), "INV-15");
+  assert.deepEqual(v, []);
+});
+
+test("INV-15: el 3P cuenta (es tercer puesto de GUARDIA), pero V/R/B no", () => {
+  const con3P = only(validateMonth({
+    mes: 10, anio: 2026, residentes: [ANA, ELENA],
+    asignaciones: [asg("ANA", "2026-10-05", "G"), asg("ANA", "2026-10-06", "3P")],
+  }), "INV-15");
+  assert.equal(con3P.length, 1, "una guardia seguida de un 3P es la misma noche encadenada");
+
+  const conMarcas = only(validateMonth({
+    mes: 10, anio: 2026, residentes: [ANA, ELENA],
+    asignaciones: [asg("ANA", "2026-10-05", "G"), asg("ANA", "2026-10-06", "V"), asg("ANA", "2026-10-07", "B")],
+  }), "INV-15");
+  assert.deepEqual(conMarcas, [], "V/R/B no son guardias: no encadenan nada");
+});
+
 // ─────────────── INV-10: de MUDO a en vigor (decisión V-20) ───────────────
 // Hasta V-20, `validateEvents` leía un `ctx.eventos` que `buildMonthContext` ni aceptaba ni
 // propagaba, y no había tabla: con `eventos = {}` no podía emitir ni una violación. Ahora las

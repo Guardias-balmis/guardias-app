@@ -222,6 +222,24 @@ export function handleRequest(rawBody, deps) {
           return { ok: true, prefs: mine || null };
         });
 
+      // Alcance EQUIPO, a diferencia de misPreferencias. Existe porque hasta ahora la tabla
+      // `preferencias` era de solo escritura: los residentes llevaban meses rellenando el
+      // formulario de Prefs.jsx y nadie —ni el dominio, ni el validador, ni el generador— leía
+      // jamás `fechasEvitar`, `maxGuardias`, `preferDobles` ni `notas`. Quien monta el cuadrante
+      // necesita verlas para poder tenerlas en cuenta.
+      //
+      // Abierta a cualquier sesión, como listBloqueos: las preferencias son BLANDAS (nunca
+      // bloquean una asignación, CLAUDE.md/V-6) y las ausencias ajenas, que sí mandan sobre los
+      // invariantes, ya son visibles para todos. Restringirla al permiso del ciclo (V-16) habría
+      // dejado al generador sin ellas justo cuando no hay Responsable, que es el caso que V-16
+      // existe para desbloquear.
+      case "listPreferencias":
+        return authed(req, deps, () => {
+          if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
+          const all = deps.store.readLatest("preferencias", PREF_KEY);
+          return { ok: true, preferencias: all.filter((p) => p.anio === req.anio && p.mes === req.mes) };
+        });
+
       // Lista blanca de columnas, no spread del cliente: con `...req.prefs` al final, un residente
       // podía escribir preferencias EN NOMBRE de otro (su `residenteId` pisaba el de la sesión) y
       // colar un `id` propio, que el store honra. Invertir el orden del spread no bastaría: el `id`

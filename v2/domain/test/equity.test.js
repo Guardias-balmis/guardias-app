@@ -547,3 +547,60 @@ test("yearCloseFestivosRange: años naturales COMPLETOS con un día de margen, y
   assert.deepEqual(yearCloseFestivosRange([A, B], 5, 2027), { desde: "2025-12-31", hasta: "2028-01-01" });
   assert.equal(yearCloseFestivosRange([A, B], 10, 2026), null);
 });
+
+// --- La tolerancia viaja con la normalización (decisión V-37) --------------------------------
+// El ±1 es UNA GUARDIA de verdad. Al dividir por `f`, una guardia deja de valer 1 y pasa a valer
+// `1/f`, así que compararla contra un 1 fijo encogía el margen a `f` y solo dejaba pasar el
+// empate exacto. Lo que sigue fija los dos lados: que el margen ya no se encoge, y que la
+// normalización NO se ha apagado por el camino.
+
+// Cohorte que TERMINA la residencia el 26 de mayo: en T4 (mar→31 de mayo) sus dos miembros
+// comparten f = 87/92, que es el caso real que destapó el fallo — se repite cada mayo.
+const SALE_A = R("r4a", "2023-05-27", "2027-05-26");
+const SALE_B = R("r4b", "2023-05-27", "2027-05-26");
+const enT4 = (id, n) => Array.from({ length: n }, (_, i) => g(id, `2027-03-${String(i + 1).padStart(2, "0")}`));
+
+test("INV-3 trimestral: una cohorte que sale a media ventana conserva el ±1 (no se encoge a f)", () => {
+  const v = validateQuarterClose({
+    mes: 5, anio: 2027, residentes: [SALE_A, SALE_B],
+    asignaciones: [...enT4("r4a", 10), ...enT4("r4b", 11)], // diferencia CRUDA exactamente 1
+  });
+  // Antes de V-37: 11/0,9456 = 11,63 vs 10,57 → 1,06 > 1 → avisaba por un reparto correcto.
+  assert.deepEqual(inv3(v), []);
+});
+
+test("INV-3 trimestral: a esa misma cohorte, una diferencia de 2 le sigue avisando", () => {
+  const v = validateQuarterClose({
+    mes: 5, anio: 2027, residentes: [SALE_A, SALE_B],
+    asignaciones: [...enT4("r4a", 10), ...enT4("r4b", 12)],
+  });
+  assert.equal(inv3(v).length, 1);
+  assert.equal(inv3(v)[0].severidad, "aviso");
+});
+
+test("INV-3 trimestral: la normalización SIGUE mordiendo cuando las `f` son distintas", () => {
+  // `debaja` está fuera media ventana, así que sus 10 guardias son el ritmo de 20 y `sano` hizo
+  // 11: en crudo se llevan 1, pero el ritmo se lleva 9. Esto es lo que INV-3 existe para cazar y
+  // es justo lo que se perdía con la primera versión de V-37 (poner un suelo en la diferencia
+  // cruda), que además tumbaba el test hermano de las «MISMAS guardias en crudo tras una baja».
+  const SANO = R("r3s", "2024-05-27", "2028-05-26");
+  const BAJA = R("r3b2", "2024-05-27", "2028-05-26");
+  const v = validateQuarterClose({
+    mes: 5, anio: 2027, residentes: [SANO, BAJA],
+    bloqueos: [{ residenteId: "r3b2", motivo: "BAJA", desde: "2027-03-01", hasta: "2027-04-15", activo: true }],
+    asignaciones: [...enT4("r3s", 11), ...enT4("r3b2", 10)],
+  });
+  assert.equal(inv3(v).length, 1);
+  assert.match(inv3(v)[0].detalle, /nota \[a\]/);
+});
+
+test("INV-3 anual: una baja IDÉNTICA en toda la cohorte tampoco encoge el ±1", () => {
+  const bloqueos = ["r3a", "r3b"].map((id) => ({ residenteId: id, motivo: "BAJA", desde: "2026-09-01", hasta: "2026-11-30", activo: true }));
+  const v = validateResidencyYearClose({
+    mes: 5, anio: 2027, residentes: [A, B], bloqueos,
+    acumulados: { r3a: acc(20), r3b: acc(21) }, // diferencia CRUDA exactamente 1
+    asignaciones: [],
+  });
+  // Antes de V-37: f = 0,75 para los dos → 26,64 vs 27,97 → avisaba en `total`, `findes` y más.
+  assert.deepEqual(inv3(v), []);
+});

@@ -26,7 +26,13 @@ import { tally } from "./tally.js";
 import { absences, isNearbyRotation, BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA } from "./absences.js";
 
 const GUARDIA = new Set(["G", "GF", "GP"]);          // ocupan puesto obligatorio
-const ASIGNACION = new Set(["G", "GF", "GP", "3P"]); // cualquier asignación (INV-5, INV-7)
+// Los códigos que OCUPAN un puesto de guardia esa noche (INV-5, INV-7 y el descanso de INV-15).
+// V/R/B no están: son marcas de la rejilla, no presencia en el hospital. Se exporta porque el
+// cliente necesita el mismo conjunto para avisar en el momento de escribir una celda, y tenerlo
+// dos veces es la clase de duplicado que se desincroniza sin que nada falle (ver `absences.js`,
+// que existe por lo mismo).
+export const OCUPA_PUESTO = new Set(["G", "GF", "GP", "3P"]);
+const ASIGNACION = OCUPA_PUESTO;
 // Qué motivo de `bloqueos` cuenta para qué invariante vive en `absences.js`, no aquí: eran
 // cinco criterios escritos a mano en cinco sitios. Decisión V-8 (Fase 5.x): solo BAJA bloquea
 // la asignación —no se puede exigir una guardia a alguien de baja médica/embarazo—, mientras
@@ -350,6 +356,32 @@ export function validateMonth(ctx) {
         violations.push(aviso("INV-11", detalle + " (compensable antes del cierre del año de residencia)", { fecha: null }));
       }
     }
+  }
+
+  // ── INV-15: descanso obligatorio tras una guardia (decisión del autor, 2026-08-10) ──
+  // Nadie hace dos guardias en días consecutivos. Es `error`, y eso NO es una excepción a V-14
+  // sino un caso suyo: V-14 bloquea «lo imposible y lo ILEGAL», y tras una guardia de 24 h el
+  // descanso del día siguiente es una obligación legal, igual que INV-5 (no se le puede exigir
+  // una guardia a quien está de baja). No hay respaldo en `normativa.pdf` — está declarado como
+  // extensión en §5.1.
+  //
+  // Se juzga el PAR, así que se recorre una sola vez por asignación mirando el día siguiente. El
+  // par que cruza el borde del mes entra porque `asignaciones` trae el histórico (contrato C-2):
+  // por eso se exige que al menos uno de los dos días sea del mes validado, o validar octubre
+  // reportaría también un par ocurrido entero en agosto.
+  //
+  // Cuenta el 3P: es «tercer puesto de guardia», la misma noche en el hospital, y el descanso
+  // legal no distingue si era voluntario. Excluirlo dejaría que la herramienta bendijera
+  // exactamente el encadenamiento que esta regla existe para impedir.
+  const conPuesto = asignaciones.filter((a) => ASIGNACION.has(a.codigo));
+  const puestoPorClave = new Set(conPuesto.map((a) => `${a.residenteId}|${a.fecha}`));
+  for (const a of conPuesto) {
+    const siguiente = addDays(a.fecha, 1);
+    if (!dayset.has(a.fecha) && !dayset.has(siguiente)) continue;
+    if (!puestoPorClave.has(`${a.residenteId}|${siguiente}`)) continue;
+    violations.push(err("INV-15",
+      `Guardias en días consecutivos: ${a.fecha} y ${siguiente} (tras una guardia corresponde el descanso del día siguiente)`,
+      { fecha: siguiente, residenteId: a.residenteId }));
   }
 
   return violations;
