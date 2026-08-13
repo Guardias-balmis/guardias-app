@@ -36,7 +36,7 @@
 
 import { addDays, compareISO, datesOfMonth, bridgesBetween } from "../../v2/domain/calendar.js";
 import { tally } from "../../v2/domain/tally.js";
-import { buildYearCloseContext, validateResidencyYearClose } from "../../v2/domain/equity.js";
+import { buildYearCloseContext, validateResidencyYearClose, DIMS, PROPORCIONAL } from "../../v2/domain/equity.js";
 import { buildMonthContext, validateMonth } from "../../v2/domain/validate.js";
 
 // Calendario laboral real de Alicante (nacional + Comunitat Valenciana + local), contrastado
@@ -64,7 +64,6 @@ const FESTIVOS = [
 const VENTANA = { start: "2026-05-27", end: "2027-05-26" };
 const CIERRE = { mes: 5, anio: 2027 };
 const FEST = new Set(FESTIVOS.map((f) => f.fecha));
-const EJES = ["total", "findes", "festivos", "prefestivos", "dobletes", "puentesLibres"];
 const EMPTY = new Set();
 const esVerano = (iso) => [6, 7, 8].includes(Number(iso.slice(5, 7)));
 const codigoDe = (iso) => (FEST.has(iso) ? "GF" : FEST.has(addDays(iso, 1)) ? "GP" : "G");
@@ -114,7 +113,8 @@ function contexto(roster, bajas) {
     let libres = 0; for (const p of puentes) if (!fechas.has(p)) libres++;
     return { total: t.total, findes: t.finde, festivos: t.festivos, prefestivos: t.prefestivos, dobletes: t.dobletes, puentesLibres: libres };
   };
-  // `puentesLibres` es el ÚNICO de los seis ejes que el dominio no normaliza por disponibilidad.
+  // Qué eje se normaliza lo dice `equity.js`, no este fichero: tener aquí la copia es lo que dejó
+  // al banco midiendo un objetivo distinto del juez cuando `puentesLibres` pasó a normalizarse.
   // Devuelve DOS números y no uno a propósito. `duro` es lo que se pasa de ±1: es el objetivo real
   // y llega a 0 exacto, que es lo que permite parar en cuanto hay solución. `guia` es la dispersión
   // total, que orienta la búsqueda cuando el duro ya está a 0 en un eje pero no en otro — pero
@@ -123,9 +123,9 @@ function contexto(roster, bajas) {
   const costeCohorte = (g, M, normalizar = true) => {
     const ids = grupos[g]; if (ids.length < 2) return { duro: 0, guia: 0 };
     let duro = 0, guia = 0;
-    for (const eje of EJES) {
+    for (const eje of DIMS) {
       let mx = -Infinity, mn = Infinity;
-      for (const id of ids) { const v = normalizar && eje !== "puentesLibres" ? M[id][eje] / fDe[id] : M[id][eje]; if (v > mx) mx = v; if (v < mn) mn = v; }
+      for (const id of ids) { const v = normalizar && PROPORCIONAL.has(eje) ? M[id][eje] / fDe[id] : M[id][eje]; if (v > mx) mx = v; if (v < mn) mn = v; }
       duro += Math.max(0, mx - mn - 1); guia += mx - mn;
     }
     return { duro, guia };

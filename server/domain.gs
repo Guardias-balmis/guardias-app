@@ -1121,6 +1121,11 @@ var Equity = (function () {
   const { accumulatedTally } = Accumulate;
   const { periodsOfResident } = Residents;
 
+// Los seis ejes de INV-3 y cuáles se normalizan por disponibilidad. Se EXPORTAN porque el
+// generador (`schedule.js`) y el banco de equidad tienen que perseguir exactamente lo que este
+// validador va a medirles: cuando cada uno tenía su copia, la entrada de `puentesLibres` en
+// PROPORCIONAL (V-27) los dejó a los dos optimizando un objetivo distinto del juez sin que nada
+// fallara. Mismo motivo que `OCUPA_PUESTO` en validate.js.
 const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "dobletes"];
 // Los tres códigos que ocupan puesto. El 3P queda fuera a propósito (INV-4): es voluntario, así
 // que quien lo hace en un puente renuncia él al puente — el eje mide si el reparto se lo quitó.
@@ -1491,7 +1496,7 @@ function labelDim(dim) {
   return { total: "Totales", findes: "Fines de semana", festivos: "Festivos", prefestivos: "Prefestivos", puentesLibres: "Puentes libres", dobletes: "Dobletes V-D" }[dim];
 }
 
-  return { validateResidencyYearClose, yearCloseHistoryStart, buildYearCloseContext, yearCloseFestivosRange, quarterCloseWindow, validateQuarterClose, availabilityFraction };
+  return { DIMS, PROPORCIONAL, validateResidencyYearClose, yearCloseHistoryStart, buildYearCloseContext, yearCloseFestivosRange, quarterCloseWindow, validateQuarterClose, availabilityFraction };
 })();
 
 // ── validate.js ──
@@ -2547,13 +2552,12 @@ var Schedule = (function () {
   const { periodsOfResident, levelOn, groupOf, periodOn } = Residents;
   const { tally } = Tally;
   const { absences, BLOQUEA_ASIGNACION, DESCUENTA_DISPONIBILIDAD } = Absences;
-  const { availabilityFraction } = Equity;
+  const { availabilityFraction, DIMS, PROPORCIONAL } = Equity;
 
-// Los mismos seis ejes de INV-3 y la misma normalización: `puentesLibres` es el único que el
-// dominio NO divide por disponibilidad, y aquí tampoco, o el generador perseguiría un objetivo
-// distinto del que el cierre le va a medir.
-const EJES = ["total", "findes", "festivos", "prefestivos", "dobletes", "puentesLibres"];
-const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes"]);
+// Los seis ejes y su normalización vienen de `equity.js`, no de una copia aquí: el generador
+// tiene que perseguir EXACTAMENTE lo que el cierre le va a medir. La copia que había se quedó
+// desfasada en cuanto `puentesLibres` pasó a normalizarse (V-27) y el generador estuvo
+// optimizando un objetivo distinto del juez sin que ningún test fallara.
 const EPS = 1e-9;
 const VERANO = new Set([6, 7, 8]);
 
@@ -2734,7 +2738,7 @@ function generateMonth(ctx, opciones = {}) {
   const costeCohorte = (cohorte, M) => {
     const grupo = cohortes.get(cohorte);
     let duro = 0, guia = 0;
-    for (const eje of EJES) {
+    for (const eje of DIMS) {
       let mx = -Infinity, mn = Infinity;
       for (const a of grupo) {
         const v = PROPORCIONAL.has(eje) ? M[a.id][eje] / a.f : M[a.id][eje];

@@ -20,7 +20,12 @@ import { absences, DESCUENTA_DISPONIBILIDAD, AUSENTE_EN_PUENTE } from "./absence
 import { accumulatedTally } from "./accumulate.js";
 import { periodsOfResident } from "./residents.js";
 
-const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "dobletes"];
+// Los seis ejes de INV-3 y cuáles se normalizan por disponibilidad. Se EXPORTAN porque el
+// generador (`schedule.js`) y el banco de equidad tienen que perseguir exactamente lo que este
+// validador va a medirles: cuando cada uno tenía su copia, la entrada de `puentesLibres` en
+// PROPORCIONAL (V-27) los dejó a los dos optimizando un objetivo distinto del juez sin que nada
+// fallara. Mismo motivo que `OCUPA_PUESTO` en validate.js.
+export const DIMS = ["total", "findes", "festivos", "prefestivos", "puentesLibres", "dobletes"];
 // Los tres códigos que ocupan puesto. El 3P queda fuera a propósito (INV-4): es voluntario, así
 // que quien lo hace en un puente renuncia él al puente — el eje mide si el reparto se lo quitó.
 // Las cedidas/compradas SÍ cuentan aquí aunque no sumen a `total`: quien tiene la fila trabaja
@@ -29,7 +34,7 @@ const GUARDIA = ["G", "GF", "GP"];
 // Se normalizan por disponibilidad (÷f, la fracción de la ventana sin BAJA — nota [a], V-8).
 // `puentesLibres` entra desde V-27: junto con la exclusión de `residentIsFreeOnBridge`, una
 // ausencia larga deja de inflar este eje sin más que quitarle oportunidad de ganarlo.
-const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes", "puentesLibres"]);
+export const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes", "puentesLibres"]);
 const EPS = 1e-9;
 
 // Severidad SIEMPRE aviso, en los dos cierres (decisión V-14): un desequilibrio de equidad se

@@ -42,13 +42,12 @@ import { datesOfMonth, addDays, isHoliday, bridgesOfMonth, bridgesBetween, compa
 import { periodsOfResident, levelOn, groupOf, periodOn } from "./residents.js";
 import { tally } from "./tally.js";
 import { absences, BLOQUEA_ASIGNACION, DESCUENTA_DISPONIBILIDAD } from "./absences.js";
-import { availabilityFraction } from "./equity.js";
+import { availabilityFraction, DIMS, PROPORCIONAL } from "./equity.js";
 
-// Los mismos seis ejes de INV-3 y la misma normalización: `puentesLibres` es el único que el
-// dominio NO divide por disponibilidad, y aquí tampoco, o el generador perseguiría un objetivo
-// distinto del que el cierre le va a medir.
-const EJES = ["total", "findes", "festivos", "prefestivos", "dobletes", "puentesLibres"];
-const PROPORCIONAL = new Set(["total", "findes", "festivos", "prefestivos", "dobletes"]);
+// Los seis ejes y su normalización vienen de `equity.js`, no de una copia aquí: el generador
+// tiene que perseguir EXACTAMENTE lo que el cierre le va a medir. La copia que había se quedó
+// desfasada en cuanto `puentesLibres` pasó a normalizarse (V-27) y el generador estuvo
+// optimizando un objetivo distinto del juez sin que ningún test fallara.
 const EPS = 1e-9;
 const VERANO = new Set([6, 7, 8]);
 
@@ -229,7 +228,7 @@ export function generateMonth(ctx, opciones = {}) {
   const costeCohorte = (cohorte, M) => {
     const grupo = cohortes.get(cohorte);
     let duro = 0, guia = 0;
-    for (const eje of EJES) {
+    for (const eje of DIMS) {
       let mx = -Infinity, mn = Infinity;
       for (const a of grupo) {
         const v = PROPORCIONAL.has(eje) ? M[a.id][eje] / a.f : M[a.id][eje];
