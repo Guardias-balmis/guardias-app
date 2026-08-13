@@ -27,6 +27,18 @@
 // INV-15 solo obliga a dejar puestos vacíos cuando el pool elegible de un puesto baja a UNA
 // persona —solo puede hacer días alternos—, y esos huecos son aviso de INV-1, no error.
 //
+// EL CIERRE TRIMESTRAL (decisión V-37, 2026-08-13). Hasta esta fecha NINGUNA medición había
+// invocado `validateQuarterClose` —ni este banco ni los tests del generador—, pese a llevar desde
+// V-13 cableado en `marcarValidado` y en `closes.js`. Medido ya, lo que sale es que perseguir el
+// año NO trae el trimestre: el óptimo anual, que saca 3/3 en el cierre anual, falla el trimestral
+// en los seis escenarios y en todas las semillas (17-33 avisos), porque nada le impide amontonar
+// un trimestre y vaciar otro mientras el año cuadra.
+//
+// Pero NO son incompatibles: pidiéndole al coste los dos a la vez (`conTrimestre: true`) salen los
+// DOS, 3/3 en los seis escenarios y con cero errores duros. O sea que lo que le falta al generador
+// es objetivo, no espacio — que son arreglos muy distintos. Se paga en tiempo de búsqueda: entre
+// 2× y 3× en casi todos, y 14× en el peor (la baja de 6 meses, de 2,2 s a 30 s).
+//
 // TRES COSAS QUE SE APRENDIERON MIDIENDO, y que quien escriba el solver necesita saber:
 //   1. Un buscador que solo INTERCAMBIA asignaciones no puede arreglar nunca el eje `total`: un
 //      intercambio conserva el número de guardias de cada uno. Hace falta un operador que reasigne.
@@ -34,9 +46,10 @@
 //   3. Con una baja, igualar totales EN CRUDO falla (0/6); hay que dividir por disponibilidad (4/6).
 //      Es lo que INV-3 compara, y es el error que un generador incremental comete por defecto.
 
+import { pathToFileURL } from "node:url";
 import { addDays, compareISO, datesOfMonth, bridgesBetween } from "../../v2/domain/calendar.js";
 import { tally } from "../../v2/domain/tally.js";
-import { buildYearCloseContext, validateResidencyYearClose, DIMS, PROPORCIONAL, residentIsFreeOnBridge } from "../../v2/domain/equity.js";
+import { buildYearCloseContext, validateResidencyYearClose, validateQuarterClose, quarterCloseWindow, DIMS, PROPORCIONAL, residentIsFreeOnBridge } from "../../v2/domain/equity.js";
 import { buildMonthContext, validateMonth } from "../../v2/domain/validate.js";
 
 // Calendario laboral real de Alicante (nacional + Comunitat Valenciana + local), contrastado
@@ -118,11 +131,29 @@ function contexto(roster, bajas) {
   // dominio pero no se recorre un array en cada paso de la búsqueda.
   const puentesElegibles = {};
   for (const r of res) puentesElegibles[r.id] = puentes.filter((p) => residentIsFreeOnBridge(r.id, [], p, VENTANA, bajas));
+  // Disponibilidad de cada residente DENTRO de cada trimestre, que es la que usa el cierre
+  // trimestral (divide por los días del trimestre completo, no por los que estuvo). Se precalcula
+  // porque no depende del reparto.
+  const TRIMS = trimestresDeLaVentana().dentro;
+  const diasDe = (a, b) => { let n = 0; for (let d = a; compareISO(d, b) <= 0; d = addDays(d, 1)) n++; return n; };
+  const fTrim = {};
+  for (const r of res) {
+    fTrim[r.id] = TRIMS.map((w) => {
+      let fuera = 0;
+      for (const b of bajas.filter((b) => b.residenteId === r.id)) {
+        for (let d = w.start; compareISO(d, w.end) <= 0; d = addDays(d, 1)) if (d >= b.desde && d <= b.hasta) fuera++;
+      }
+      return (diasDe(w.start, w.end) - fuera) / diasDe(w.start, w.end);
+    });
+  }
   const met = (id, fechas) => {
     const t = tally([...fechas].map((f) => ({ fecha: f, codigo: codigoDe(f) })), { start: VENTANA.start, end: VENTANA.end });
     let libres = 0;
     for (const p of puentesElegibles[id]) if (!fechas.has(p)) libres++;
-    return { total: t.total, findes: t.finde, festivos: t.festivos, prefestivos: t.prefestivos, dobletes: t.dobletes, puentesLibres: libres };
+    // Contar fechas equivale al `total` del cierre trimestral porque aquí todo código es G/GF/GP
+    // y ninguna asignación lleva `origen` (las cedidas/compradas no suman a `total`, tally.js:15).
+    const trim = TRIMS.map((w) => { let n = 0; for (const f of fechas) if (f >= w.start && f <= w.end) n++; return n; });
+    return { total: t.total, findes: t.finde, festivos: t.festivos, prefestivos: t.prefestivos, dobletes: t.dobletes, puentesLibres: libres, trim };
   };
   // Qué eje se normaliza lo dice `equity.js`, no este fichero: tener aquí la copia es lo que dejó
   // al banco midiendo un objetivo distinto del juez cuando `puentesLibres` pasó a normalizarse.
@@ -131,13 +162,32 @@ function contexto(roster, bajas) {
   // total, que orienta la búsqueda cuando el duro ya está a 0 en un eje pero no en otro — pero
   // nunca llega a cero, así que mezclarlo con el duro dejaba el bucle sin condición de parada y
   // hacía que el banco tardase 60 veces más de lo necesario.
-  const costeCohorte = (g, M, normalizar = true) => {
+  const costeCohorte = (g, M, normalizar = true, conTrimestre = false) => {
     const ids = grupos[g]; if (ids.length < 2) return { duro: 0, guia: 0 };
     let duro = 0, guia = 0;
     for (const eje of DIMS) {
       let mx = -Infinity, mn = Infinity;
       for (const id of ids) { const v = normalizar && PROPORCIONAL.has(eje) ? M[id][eje] / fDe[id] : M[id][eje]; if (v > mx) mx = v; if (v < mn) mn = v; }
       duro += Math.max(0, mx - mn - 1); guia += mx - mn;
+    }
+    // El cierre TRIMESTRAL, cuando se le pide perseguirlo además del anual. Imita a
+    // `validateQuarterClose`: un solo eje (`total`), normalizado por la disponibilidad DEL
+    // TRIMESTRE, tolerancia 1/min(f) del par comparado (V-37) y fuera quien no llegue a media
+    // disponibilidad (V-13). Sigue siendo una imitación para poder orientar la búsqueda —el juez
+    // del informe es el validador de verdad—, pero la tolerancia se copia de él a propósito: con
+    // la vieja (un 1 fijo) el buscador perseguiría un objetivo que el juez ya no mide.
+    if (conTrimestre) {
+      for (let q = 0; q < TRIMS.length; q++) {
+        let hi = null, lo = null;
+        for (const id of ids) {
+          if (fTrim[id][q] < 0.5) continue;
+          const v = M[id].trim[q] / fTrim[id][q];
+          if (!hi || v > hi.v) hi = { v, f: fTrim[id][q] };
+          if (!lo || v < lo.v) lo = { v, f: fTrim[id][q] };
+        }
+        if (!hi) continue; // nadie de la cohorte llega a media disponibilidad en este trimestre
+        duro += Math.max(0, hi.v - lo.v - 1 / Math.min(hi.f, lo.f)); guia += hi.v - lo.v;
+      }
     }
     return { duro, guia };
   };
@@ -146,7 +196,7 @@ function contexto(roster, bajas) {
 }
 
 /** Busca un año entero de una vez. Devuelve el mejor cuadrante encontrado. */
-function buscarAnual({ semilla = 1, intentos = 8, pasos = 40000, roster = {}, bajas = [] } = {}) {
+function buscarAnual({ semilla = 1, intentos = 8, pasos = 40000, roster = {}, bajas = [], conTrimestre = false } = {}) {
   const rnd = rng(semilla);
   const X = contexto(roster, bajas);
   let mejor = null;
@@ -164,7 +214,7 @@ function buscarAnual({ semilla = 1, intentos = 8, pasos = 40000, roster = {}, ba
       asig.get(id).add(f); X.ocupar(ocupa, f, id); slots.push({ fecha: f, puesto, id });
     }
     const M = {}; for (const r of X.res) M[r.id] = X.met(r.id, asig.get(r.id));
-    const C = {}; for (const g of Object.keys(X.grupos)) C[g] = X.costeCohorte(g, M);
+    const C = {}; for (const g of Object.keys(X.grupos)) C[g] = X.costeCohorte(g, M, true, conTrimestre);
     const suma = () => Object.values(C).reduce((a, b) => a + b.duro, 0);
     let duro = suma();
 
@@ -193,7 +243,7 @@ function buscarAnual({ semilla = 1, intentos = 8, pasos = 40000, roster = {}, ba
       M[a.id] = X.met(a.id, A); M[mover ? destino : b.id] = X.met(mover ? destino : b.id, B);
       const gs = [...new Set([X.cohorteDe[a.id], X.cohorteDe[mover ? destino : b.id]])];
       const antes = gs.reduce((x, g) => ({ duro: x.duro + C[g].duro, guia: x.guia + C[g].guia }), { duro: 0, guia: 0 });
-      const nuevos = gs.map((g) => X.costeCohorte(g, M));
+      const nuevos = gs.map((g) => X.costeCohorte(g, M, true, conTrimestre));
       const desp = nuevos.reduce((x, y) => ({ duro: x.duro + y.duro, guia: x.guia + y.guia }), { duro: 0, guia: 0 });
       if (!X.peor(desp, antes)) {
         gs.forEach((g, n) => (C[g] = nuevos[n])); duro = suma();
@@ -216,6 +266,52 @@ function buscarAnual({ semilla = 1, intentos = 8, pasos = 40000, roster = {}, ba
 }
 
 const aplanar = (asig) => { const o = []; for (const [id, fs] of asig) for (const f of fs) o.push({ fecha: f, residenteId: id, codigo: codigoDe(f) }); return o; };
+
+/**
+ * El OTRO juez de INV-3, el del cierre TRIMESTRAL (P-8 / decisión V-13), que hasta ahora no
+ * había invocado ninguna medición: ni este banco ni los tests del generador. Y no es el mismo
+ * problema en pequeño — mide un solo eje (`total`) pero sobre una ventana que NO es la que
+ * persigue el generador, así que aprobar el cierre anual no implica aprobar los cuatro
+ * trimestres que lleva dentro.
+ *
+ * Qué trimestre cierra en cada mes lo dice `quarterCloseWindow`, igual que en el router y en
+ * `closes.js`: la ventana no se adivina aquí. De los cuatro, este banco solo puede juzgar TRES,
+ * y el que se cae no es un descuido de esta ventana concreta sino algo estructural: T4 va de
+ * marzo a mayo y el año de residencia acaba el 26 de mayo, así que **T4 cruza siempre el
+ * aniversario**, sea cual sea el año. Juzgarlo aquí compararía los ~87 días que el banco genera
+ * contra los 92 del trimestre y todos saldrían bajos por igual, que es medir el corte y no el
+ * reparto. Se dice cuál queda fuera en vez de callarlo.
+ */
+/**
+ * Los trimestres que caben ENTEROS en la ventana, y el que no. Se calcula una vez y lo usan tanto
+ * el juez de abajo como la función de coste: si el buscador persiguiera unos trimestres y el juez
+ * midiera otros, volveríamos al fallo del día —dos copias de la misma regla que se separan— con
+ * la agravante de que aquí ni siquiera fallaría un test.
+ */
+function trimestresDeLaVentana() {
+  const dentro = [], fuera = [];
+  for (const f of dias()) {
+    if (!f.endsWith("-01")) continue;
+    const [anio, mes] = [Number(f.slice(0, 4)), Number(f.slice(5, 7))];
+    const win = quarterCloseWindow(mes, anio);
+    if (!win) continue;
+    if (compareISO(win.start, VENTANA.start) < 0 || compareISO(win.end, VENTANA.end) > 0) fuera.push(win.trimestre);
+    else dentro.push({ ...win, mes, anio });
+  }
+  return { dentro, fuera };
+}
+
+function juzgarTrimestres(asignaciones, res, bloqueos = []) {
+  const { dentro, fuera } = trimestresDeLaVentana();
+  const violaciones = [];
+  for (const win of dentro) {
+    violaciones.push(...validateQuarterClose({
+      mes: win.mes, anio: win.anio, residentes: res, bloqueos,
+      asignaciones: asignaciones.filter((a) => compareISO(a.fecha, win.start) >= 0 && compareISO(a.fecha, win.end) <= 0),
+    }));
+  }
+  return { dentro: dentro.map((w) => w.trimestre), fuera, violaciones };
+}
 
 /** El juez: el dominio real, nunca una copia. */
 function juzgar(asignaciones, res, bloqueos = []) {
@@ -293,7 +389,16 @@ function incremental({ semilla = 1, pasosMes = 25000, bajas = [], normalizar = t
   return { asignaciones: aplanar(asig), res: X.res };
 }
 
+// Las piezas de búsqueda se exportan para poder sondearlas desde fuera sin copiarlas. El informe
+// de abajo solo corre cuando el fichero se EJECUTA (`node test/bench/...`), no cuando se importa:
+// sin esta guarda, importar el banco para mirar un detalle dispara los ~4 minutos del informe.
+export { buscarAnual, incremental, juzgar, juzgarTrimestres, erroresDuros, plantilla, VENTANA };
+// `process.argv[1]` no existe si a alguien le da por importar esto desde `node -e`, y sin la
+// comprobación `pathToFileURL` revienta antes de exportar nada.
+const ejecutado = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+
 // ── Informe ─────────────────────────────────────────────────────────────────────────────────────
+if (ejecutado) {
 const SEMILLAS = Number(process.env.SEMILLAS || 6);
 const fmt = (n) => String(n).padEnd(44);
 
@@ -303,23 +408,53 @@ console.log(`Puentes derivados del calendario real: ${bridgesBetween(VENTANA.sta
 console.log("=== ¿Es alcanzable el ±1 en los seis ejes? (juez: validateResidencyYearClose) ===");
 const BAJA_3M = [{ residenteId: "r3_1", motivo: "BAJA", desde: "2026-09-01", hasta: "2026-11-30", activo: true }];
 const BAJA_6M = [{ residenteId: "r3_1", motivo: "BAJA", desde: "2026-09-01", hasta: "2027-02-28", activo: true }];
-for (const [nombre, o] of [
+const ESCENARIOS = [
   ["base · plantilla real del servicio", {}],
   ["baja de 3 meses en un R3", { bajas: BAJA_3M }],
   ["baja de 6 meses en un R3", { bajas: BAJA_6M }],
   ["dos bajas simultáneas (R3 y R2)", { bajas: [...BAJA_3M, { residenteId: "r2_1", motivo: "BAJA", desde: "2026-10-01", hasta: "2026-12-31", activo: true }] }],
   ["cohorte R4 de solo 2 miembros", { roster: { nR4: 2 } }],
   ["plantilla mínima 2/2/2/2", { roster: { nR4: 2, nR3: 2, nR2: 2, nR1: 2 } }],
-]) {
-  let ok = 0, ms = 0, duros = 0;
+];
+for (const [nombre, o] of ESCENARIOS) {
+  let ok = 0, ms = 0, duros = 0, trimOk = 0, trimViol = 0;
   for (let s = 1; s <= SEMILLAS; s++) {
     const t0 = Date.now();
     const r = buscarAnual({ semilla: s * 9176, intentos: 8, pasos: 40000, ...o });
     ms += Date.now() - t0;
     duros += erroresDuros(r.asignaciones, r.res, o.bajas || []);
     if (juzgar(r.asignaciones, r.res, o.bajas || []).length === 0) ok++;
+    // El MISMO cuadrante, juzgado por el otro cierre. Se mide sobre el mismo reparto y no sobre
+    // uno nuevo a propósito: la pregunta es si aprobar el año trae aprobado el trimestre.
+    const t = juzgarTrimestres(r.asignaciones, r.res, o.bajas || []);
+    trimViol += t.violaciones.length;
+    if (t.violaciones.length === 0) trimOk++;
   }
-  console.log(`  ${fmt(nombre)} ${ok}/${SEMILLAS} sin violaciones · ${(ms / SEMILLAS / 1000).toFixed(2)}s · ${duros} errores duros`);
+  console.log(`  ${fmt(nombre)} ${ok}/${SEMILLAS} anual · ${trimOk}/${SEMILLAS} trimestral (${trimViol} avisos) · ${(ms / SEMILLAS / 1000).toFixed(2)}s · ${duros} errores duros`);
+}
+{
+  const t = juzgarTrimestres([], plantilla(), []);
+  console.log(`  → trimestres juzgados: ${t.dentro.join(", ")} · fuera de la ventana: ${t.fuera.join(", ")} (cruza el aniversario)`);
+}
+
+// La pregunta que abre la sección anterior: si perseguir el año NO trae el trimestre, ¿es que son
+// incompatibles, o es solo que no se estaba pidiendo? Misma búsqueda, mismo juez, mismo esfuerzo:
+// lo único que cambia es que el coste incluye además el trimestre. Si aquí salen los dos a la vez,
+// el problema del generador es de objetivo y no de factibilidad, que son arreglos muy distintos.
+console.log("\n=== ¿Son alcanzables el cierre ANUAL y el TRIMESTRAL a la vez? ===");
+for (const [nombre, o] of ESCENARIOS) {
+  let ambos = 0, soloAnual = 0, ms = 0, duros = 0;
+  for (let s = 1; s <= SEMILLAS; s++) {
+    const t0 = Date.now();
+    const r = buscarAnual({ semilla: s * 9176, intentos: 8, pasos: 40000, conTrimestre: true, ...o });
+    ms += Date.now() - t0;
+    duros += erroresDuros(r.asignaciones, r.res, o.bajas || []);
+    const anualOk = juzgar(r.asignaciones, r.res, o.bajas || []).length === 0;
+    const trimOk = juzgarTrimestres(r.asignaciones, r.res, o.bajas || []).violaciones.length === 0;
+    if (anualOk && trimOk) ambos++;
+    if (anualOk) soloAnual++;
+  }
+  console.log(`  ${fmt(nombre)} ${ambos}/${SEMILLAS} los DOS · ${soloAnual}/${SEMILLAS} el anual · ${(ms / SEMILLAS / 1000).toFixed(2)}s · ${duros} errores duros`);
 }
 
 console.log("\n=== Control negativo: ¿se cumple por casualidad? ===");
@@ -339,12 +474,15 @@ for (const [nombre, o] of [
   ["contra el acumulado, con baja, en CRUDO", { bajas: BAJA_3M, normalizar: false }],
   ["contra el acumulado, con baja, normalizado", { bajas: BAJA_3M, normalizar: true }],
 ]) {
-  let ok = 0;
+  let ok = 0, trimOk = 0, trimViol = 0;
   for (let s = 1; s <= SEMILLAS; s++) {
     const r = incremental({ semilla: s * 4517, ...o });
     if (juzgar(r.asignaciones, r.res, o.bajas || []).length === 0) ok++;
+    const t = juzgarTrimestres(r.asignaciones, r.res, o.bajas || []);
+    trimViol += t.violaciones.length;
+    if (t.violaciones.length === 0) trimOk++;
   }
-  console.log(`  ${fmt(nombre)} ${ok}/${SEMILLAS} llegan al ±1 anual`);
+  console.log(`  ${fmt(nombre)} ${ok}/${SEMILLAS} anual · ${trimOk}/${SEMILLAS} trimestral (${trimViol} avisos)`);
 }
 
 console.log("\n=== INV-2 en verano (aritmética, sin buscador) ===");
@@ -355,3 +493,4 @@ console.log("\n=== INV-2 en verano (aritmética, sin buscador) ===");
     console.log(`  ${fmt(`con ${n} R2: techo ${techo} puestos, hacen falta ${verano}`)} ${techo >= verano ? "cabe" : `faltan ${verano - techo} días`}`);
   }
 }
+} // fin de `if (ejecutado)`

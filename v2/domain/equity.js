@@ -131,10 +131,10 @@ export function validateResidencyYearClose(ctx) {
   // Comparación por dimensión dentro de cada cohorte.
   for (const grupo of comparables) {
     for (const dim of DIMS) {
-      const vals = grupo.map((x) => ({ id: x.id, cierre: x.cierre, v: PROPORCIONAL.has(dim) ? x.dims[dim] / x.f : x.dims[dim] }));
-      const maxEntry = vals.reduce((a, b) => (b.v > a.v ? b : a));
-      const minEntry = vals.reduce((a, b) => (b.v < a.v ? b : a));
-      if (maxEntry.v - minEntry.v > 1 + EPS) {
+      const vals = grupo.map((x) => ({ id: x.id, cierre: x.cierre, f: x.f, v: PROPORCIONAL.has(dim) ? x.dims[dim] / x.f : x.dims[dim] }));
+      const par = excedeElUno(vals, PROPORCIONAL.has(dim));
+      if (par) {
+        const { maxEntry, minEntry } = par;
         violations.push(warn(
           `${labelDim(dim)} al cierre del año de residencia: ${maxEntry.id}=${round(maxEntry.v)} vs ${minEntry.id}=${round(minEntry.v)} (diferencia > 1)`,
           { fecha: maxEntry.cierre, residenteId: maxEntry.id }
@@ -294,14 +294,15 @@ export function validateQuarterClose(ctx) {
     // `ajustado` se separa en sus DOS causas: la baja de la nota [a] y el simple hecho de no
     // haber estado el trimestre entero (alta a mitad, o R4 que termina). Antes las dos colgaban
     // el mismo texto y el aviso afirmaba una baja que no existía ni en la tabla de bloqueos.
-    byCohort.get(cohorte).push({ id: r.id, v: total / f, porBaja: disponibles < diasPresente, parcial: diasPresente < quarterDays });
+    byCohort.get(cohorte).push({ id: r.id, f, v: total / f, porBaja: disponibles < diasPresente, parcial: diasPresente < quarterDays });
   }
 
   for (const [, grupo] of byCohort) {
     if (grupo.length < 2) continue;
-    const maxEntry = grupo.reduce((a, b) => (b.v > a.v ? b : a));
-    const minEntry = grupo.reduce((a, b) => (b.v < a.v ? b : a));
-    if (maxEntry.v - minEntry.v > 1 + EPS) {
+    // El eje del cierre trimestral es `total`, que SIEMPRE se normaliza (está en PROPORCIONAL).
+    const par = excedeElUno(grupo, true);
+    if (par) {
+      const { maxEntry, minEntry } = par;
       const porBaja = maxEntry.porBaja || minEntry.porBaja;
       const parcial = maxEntry.parcial || minEntry.parcial;
       const causa = porBaja ? "por baja (nota [a])" : "por el tramo del trimestre que le correspondía";
@@ -390,6 +391,39 @@ function daysInclusive(a, b) {
   for (let d = a; compareISO(d, b) <= 0; d = addDays(d, 1)) n++;
   return n;
 }
+/**
+ * ¿Se pasa del ±1 esta cohorte en este eje? Devuelve el par (máximo, mínimo) que hay que nombrar,
+ * o `null` si no hay nada que avisar. La usan LOS DOS cierres: la regla del ±1 se escribe una vez.
+ *
+ * LA TOLERANCIA VIAJA CON LA NORMALIZACIÓN (decisión V-37). El ±1 son UNA GUARDIA de verdad, y
+ * al dividir por `f` una guardia deja de valer 1: vale `1/f`. Comparar el cociente contra un 1
+ * fijo mezclaba las dos escalas, y el efecto no es teórico — cuando toda una cohorte comparte la
+ * misma `f` < 1, el cociente escala también la DIFERENCIA mientras la tolerancia se quedaba
+ * quieta, así que el ±1 se encogía a `f` y solo pasaba el empate exacto. Medido: la cohorte de R4
+ * que termina la residencia el 26 de mayo tiene f = 87/92 en el trimestre T4, que acaba el 31, de
+ * modo que **cada mayo** un reparto de 11 y 10 guardias —diferencia exactamente 1, o sea dentro
+ * de la norma— salía como 11,63 vs 10,57 y avisaba. Y como INV-3 está en `EQUITY_INVARIANTS`, eso
+ * obligaba al «Validar de todas formas» de V-14 justo cuando el reparto era perfecto: enseñar a
+ * saltarse el aviso es lo último que le conviene a esto.
+ *
+ * La `f` que manda es la MENOR de las dos que se comparan, o sea `1/f` la mayor: el margen tiene
+ * que dar para una guardia real de cualquiera de los dos, y para el menos disponible una guardia
+ * pesa más. Cuando la cohorte comparte `f` las dos coinciden y la escala se cancela exacta.
+ *
+ * Lo que esto NO hace es apagar la normalización, que es lo que primero se intentó —poner un
+ * suelo de «diferencia cruda ≤ 1 nunca avisa»— y que el propio banco tumbó: con ese suelo, dar
+ * las MISMAS 30 guardias en crudo a quien estuvo tres meses de baja dejaba de ser violación, y
+ * eso es exactamente lo que INV-3 existe para penalizar (regla 2 de V-32, y su test). Aquí ese
+ * caso sigue avisando, porque 30/0,751 = 39,95 frente a 30 se pasa de largo de la tolerancia de
+ * 1/0,751 = 1,33.
+ */
+function excedeElUno(vals, normalizado) {
+  const maxEntry = vals.reduce((a, b) => (b.v > a.v ? b : a));
+  const minEntry = vals.reduce((a, b) => (b.v < a.v ? b : a));
+  const tolerancia = normalizado ? 1 / Math.min(maxEntry.f, minEntry.f) : 1;
+  return maxEntry.v - minEntry.v > tolerancia + EPS ? { maxEntry, minEntry } : null;
+}
+
 const round = (x) => (Number.isInteger(x) ? x : Math.round(x * 100) / 100);
 function labelDim(dim) {
   return { total: "Totales", findes: "Fines de semana", festivos: "Festivos", prefestivos: "Prefestivos", puentesLibres: "Puentes libres", dobletes: "Dobletes V-D" }[dim];
