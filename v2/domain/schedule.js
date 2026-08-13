@@ -38,7 +38,7 @@
 // —solo habla en el mes del aniversario— y el generador necesita orientarse en CUALQUIER mes.
 // Si algún día divergen, manda el validador y hay que corregir esto.
 
-import { datesOfMonth, addDays, isHoliday, bridgesOfMonth, bridgesBetween, compareISO } from "./calendar.js";
+import { datesOfMonth, addDays, isHoliday, bridgesOfMonth, bridgesBetween, compareISO, trimesterWindow } from "./calendar.js";
 import { periodsOfResident, levelOn, groupOf, periodOn } from "./residents.js";
 import { tally } from "./tally.js";
 import { absences, BLOQUEA_ASIGNACION, DESCUENTA_DISPONIBILIDAD } from "./absences.js";
@@ -143,6 +143,11 @@ export function generateMonth(ctx, opciones = {}) {
       // Una baja futura ya baja `f` hoy, y eso es correcto: marca el ritmo al que ese residente
       // debe acumular para acabar cuadrado.
       f: availabilityFraction(win, bajas),
+      // Las mismas filas que descuentan disponibilidad en el juez. NO se reusa `vetados`, que
+      // hoy da la misma lista pero responde a otra pregunta (BLOQUEA_ASIGNACION, INV-5): los
+      // conjuntos de `absences.js` están separados a propósito y confundirlos es justo lo que
+      // V-19 prohíbe.
+      bajasDescuento: bajas,
       // Fin de la ventana de medida: su aniversario si cae dentro del mes, si no el fin de mes.
       medidaHasta: compareISO(win.end, monthEnd) < 0 ? win.end : monthEnd,
       historico: historicoDe.get(r.id) || [],
@@ -199,6 +204,35 @@ export function generateMonth(ctx, opciones = {}) {
     puentesDelMesHasta.set(a.id, puentesDelMes.filter((p) => compareISO(p, a.medidaHasta) <= 0));
   }
 
+  // ── El trimestre en curso (INV-3 trimestral, V-13 — objetivo añadido en V-37) ───────────────
+  // El cierre anual y el trimestral miden ventanas DISTINTAS, y perseguir solo la anual no trae
+  // la otra: medido, el óptimo anual falla el trimestral en los seis escenarios del banco (17-33
+  // avisos) porque nada le impide amontonar un trimestre y vaciar otro mientras el año cuadra.
+  // Y no son incompatibles — pidiendo los dos salen los dos, 3/3 —, así que aquí se piden.
+  //
+  // La ventana que se persigue es el trimestre HASTA EL FIN DE ESTE MES, no el trimestre entero:
+  // los meses que aún no existen no se pueden repartir, y equilibrar lo que va corriendo es lo
+  // que deja el trimestre cuadrado el día que cierra. `trimesterWindow` la da el dominio, igual
+  // que `quarterCloseWindow` se la da al router: aquí no se adivina ningún borde de trimestre.
+  const trimestre = trimesterWindow(monthStart);
+  const trimHasta = { start: trimestre.start, end: monthEnd };
+  let diasTrim = 0;
+  for (let d = trimHasta.start; compareISO(d, trimHasta.end) <= 0; d = addDays(d, 1)) diasTrim++;
+  for (const a of activos) {
+    // Lo que ya llevaba del trimestre antes de este mes es constante: la búsqueda no lo toca.
+    a.trimPrevio = tally(a.historico, { start: trimHasta.start, end: addDays(monthStart, -1) }).total;
+    // Disponibilidad DENTRO del trimestre en curso, que es distinta de la del año: quien está de
+    // baja justo estos tres meses tiene `f` anual alta y `fTrim` baja, y es la segunda la que el
+    // cierre trimestral le va a dividir.
+    let disponibles = 0;
+    for (let d = trimHasta.start; compareISO(d, trimHasta.end) <= 0; d = addDays(d, 1)) {
+      if (compareISO(d, a.win.start) < 0 || compareISO(d, a.win.end) > 0) continue;
+      if (a.bajasDescuento.some((b) => compareISO(d, b.desde) >= 0 && compareISO(d, b.hasta) <= 0)) continue;
+      disponibles++;
+    }
+    a.fTrim = disponibles / diasTrim;
+  }
+
   const metrica = (a) => {
     const t = tally([...a.historico, ...[...a.fechas].map((f) => ({ fecha: f, codigo: codigoPorDia.get(f) }))],
       { start: a.win.start, end: a.medidaHasta });
@@ -209,6 +243,10 @@ export function generateMonth(ctx, opciones = {}) {
       total: t.total, findes: t.finde, festivos: t.festivos,
       prefestivos: t.prefestivos, dobletes: t.dobletes,
       puentesLibres: a.puentesPrevios + delMes,
+      // Guardias del trimestre en curso. Todo lo que propone la búsqueda cae dentro del mes, y el
+      // mes cae entero dentro del trimestre, así que basta sumar el tamaño del Set: no hace falta
+      // un segundo `tally` en cada uno de los ~40.000 pasos.
+      trimestre: a.trimPrevio + a.fechas.size,
     };
   };
 
@@ -229,14 +267,34 @@ export function generateMonth(ctx, opciones = {}) {
     const grupo = cohortes.get(cohorte);
     let duro = 0, guia = 0;
     for (const eje of DIMS) {
-      let mx = -Infinity, mn = Infinity;
+      let mx = -Infinity, mn = Infinity, fMx = 1, fMn = 1;
       for (const a of grupo) {
         const v = PROPORCIONAL.has(eje) ? M[a.id][eje] / a.f : M[a.id][eje];
-        if (v > mx) mx = v;
-        if (v < mn) mn = v;
+        if (v > mx) { mx = v; fMx = a.f; }
+        if (v < mn) { mn = v; fMn = a.f; }
       }
-      duro += Math.max(0, mx - mn - 1);
+      // La tolerancia es la del juez, `1/min(f)` del par (V-37): el ±1 es una guardia de verdad y
+      // al dividir por la disponibilidad una guardia vale `1/f`. Con un 1 fijo aquí, el generador
+      // se exigiría más de lo que el cierre le va a medir en cuanto alguien tenga `f` < 1 — que es
+      // la misma clase de desajuste que ya costó que persiguiera otro `puentesLibres` que el juez.
+      duro += Math.max(0, mx - mn - (PROPORCIONAL.has(eje) ? 1 / Math.min(fMx, fMn) : 1));
       guia += mx - mn;
+    }
+    // El cierre TRIMESTRAL: un solo eje (`total`), normalizado por la disponibilidad DEL TRIMESTRE
+    // y no por la del año, y fuera quien no llegue a media disponibilidad (V-13).
+    {
+      let mx = -Infinity, mn = Infinity, fMx = 1, fMn = 1, n = 0;
+      for (const a of grupo) {
+        if (a.fTrim < 0.5) continue;
+        const v = M[a.id].trimestre / a.fTrim;
+        if (v > mx) { mx = v; fMx = a.fTrim; }
+        if (v < mn) { mn = v; fMn = a.fTrim; }
+        n++;
+      }
+      if (n >= 2) {
+        duro += Math.max(0, mx - mn - 1 / Math.min(fMx, fMn));
+        guia += mx - mn;
+      }
     }
     return { duro, guia };
   };

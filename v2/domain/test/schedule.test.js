@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import { generateMonth } from "../schedule.js";
 import { buildMonthContext, validateMonth } from "../validate.js";
+import { validateQuarterClose, quarterCloseWindow } from "../equity.js";
 import { addDays, datesOfMonth } from "../calendar.js";
 
 const mk = (prefijo, n, anio) => Array.from({ length: n }, (_, i) => ({
@@ -196,4 +197,33 @@ test("los seis ejes de INV-3 quedan dentro de ±1 en las cohortes comparables (c
     assert.equal(diagnostico.coste, 0, `mes ${mes} no llegó a repartir dentro de ±1`);
     assert.ok(diagnostico.cohortesComparadas >= 1);
   }
+});
+
+// El generador persigue TAMBIÉN el cierre trimestral (V-37). Se juzga con `validateQuarterClose`
+// de verdad, nunca con el coste interno, que es una imitación suya.
+//
+// La cadena arranca en JUNIO y el trimestre que se juzga es T3, y las dos cosas hacen falta para
+// que el test signifique algo. Medido: un T2 generado desde septiembre —o sea con el trimestre
+// empezando a la vez que el histórico— sale limpio en las 12 semillas probadas **también sin este
+// objetivo**, porque no hay desequilibrio previo que arrastrar. El desajuste aparece cuando el
+// trimestre cae sobre un año ya empezado, que es la situación normal. Con la semilla 2, el
+// generador anterior dejaba T3 en `r3_1=13 vs r3_4=11`; con la 5, `r1_2=14 vs r1_1=12`.
+test("el trimestre cierra dentro del ±1 sobre un año ya empezado (juez: validateQuarterClose)", () => {
+  const acumulado = [];
+  for (const [mes, anio] of [[6, 2026], [7, 2026], [8, 2026], [9, 2026], [10, 2026], [11, 2026], [12, 2026], [1, 2027], [2, 2027]]) {
+    const ctx = buildMonthContext({
+      mes, anio, residentes: PLANTILLA, historicas: [...acumulado], asignacionesDelMes: [], bloqueos: [], festivos: [],
+    });
+    const { asignaciones } = generateMonth(ctx, { semilla: 2, pasos: 20000 });
+    assert.deepEqual(erroresDe(asignaciones, { mes, anio }), [], `el mes ${anio}-${mes} no debería tener errores`);
+    acumulado.push(...asignaciones);
+  }
+
+  const win = quarterCloseWindow(2, 2027);
+  assert.deepEqual(win, { trimestre: "T3", start: "2026-12-01", end: "2027-02-28" });
+  const v = validateQuarterClose({
+    mes: 2, anio: 2027, residentes: PLANTILLA, bloqueos: [],
+    asignaciones: acumulado.filter((a) => a.fecha >= win.start && a.fecha <= win.end),
+  });
+  assert.deepEqual(v, [], "el cierre trimestral debería quedar dentro del ±1");
 });
