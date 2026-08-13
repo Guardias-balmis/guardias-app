@@ -329,3 +329,27 @@ test("sin voluntarios no inventa ninguno: 0 colocadas y el motivo dicho", () => 
   assert.equal(diagnostico.tercerPuesto.motivo, "sin-voluntarios");
   assert.equal(typeof diagnostico.tercerPuesto.diasMochila, "number");
 });
+
+// ── Previsión sobre el eje escaso (decisión V-39) ───────────────────────────────────────────────
+
+test("no gasta el puente de hoy en quien ya tiene perdido el de dentro de unos meses", () => {
+  // Dos puentes en la ventana: el 22-jun (víspera del 23) y el 7-dic (víspera del 8). `r3_1` está
+  // de baja en diciembre, así que el 7-dic NO le cuenta como libre (V-27) y nunca podrá
+  // recuperarlo. Si el generador solo mira lo ya transcurrido, en junio los ve a todos a cero y no
+  // tiene motivo para no darle el 22-jun — y en diciembre ya no queda puente con el que arreglarlo.
+  const festivos = [{ fecha: "2026-06-23" }, { fecha: "2026-12-08" }].map((f) => ({ ...f, nombre: "f", activo: true }));
+  const bloqueos = [{ residenteId: "r3_1", motivo: "BAJA", desde: "2026-11-15", hasta: "2026-12-31", activo: true }];
+  // Se le carga el acumulado a TODOS menos a `r3_1`, para que el generador quiera darle a él los
+  // días de junio: sin esto el puente le tocaría por azar y el test pasaría por suerte.
+  const historicas = [];
+  for (const r of PLANTILLA) {
+    if (r.id === "r3_1") continue;
+    for (let d = 1; d <= 10; d++) historicas.push({ fecha: `2026-06-${String(d).padStart(2, "0")}`, residenteId: r.id, codigo: "G" });
+  }
+
+  for (const semilla of [1, 2, 3, 4, 5]) {
+    const { asignaciones } = generar({ mes: 6, anio: 2026, festivos, bloqueos, historicas, semilla });
+    assert.ok(!fechasDe(asignaciones, "r3_1").has("2026-06-22"),
+      `semilla ${semilla}: a r3_1 le queda un solo puente aprovechable en todo el año, así que no debería gastarlo`);
+  }
+});

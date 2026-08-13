@@ -44,7 +44,7 @@ import { tally } from "./tally.js";
 import { absences, BLOQUEA_ASIGNACION, DESCUENTA_DISPONIBILIDAD } from "./absences.js";
 import { thirdPostCycleRepeats } from "./thirdpost.js";
 import { OCUPA_PUESTO } from "./validate.js";
-import { availabilityFraction, DIMS, PROPORCIONAL } from "./equity.js";
+import { availabilityFraction, residentIsFreeOnBridge, DIMS, PROPORCIONAL } from "./equity.js";
 
 // Los seis ejes y su normalización vienen de `equity.js`, no de una copia aquí: el generador
 // tiene que perseguir EXACTAMENTE lo que el cierre le va a medir. La copia que había se quedó
@@ -210,10 +210,40 @@ export function generateMonth(ctx, opciones = {}) {
   const codigoPorDia = new Map(dias.map((f) => [f, codigoDe(f, festivos)]));
   const puentesDelMesHasta = new Map();
   for (const a of activos) {
+    // Quién tiene un puente LIBRE lo decide `equity.js:residentIsFreeOnBridge`, no un filtro de
+    // aquí. El que había —«no lo trabajó»— se quedó desfasado con V-27, que además de normalizar
+    // este eje dejó de contar como libre el puente caído dentro de CUALQUIER ausencia: no fue el
+    // reparto quien se lo dio, no estaba en el hospital ese día. Medido, el generador le acreditaba
+    // a quien estaba de baja en diciembre el puente del 7-dic que el juez no le cuenta, y por eso
+    // su coste y el del cierre no hablaban de lo mismo. Quinta copia de una regla del dominio que
+    // se desincroniza en silencio.
     a.puentesPrevios = bridgesBetween(a.win.start, addDays(monthStart, -1), festivos)
-      .filter((p) => compareISO(p, a.win.start) >= 0 && !a.previas.has(p)).length;
-    // Los puentes del mes que caen dentro de SU ventana de medida (recortada si cierra este mes).
-    puentesDelMesHasta.set(a.id, puentesDelMes.filter((p) => compareISO(p, a.medidaHasta) <= 0));
+      .filter((p) => residentIsFreeOnBridge(a.id, a.historico, p, a.win, bloqueos)).length;
+    // Los puentes del mes que PUEDEN ser suyos: dentro de su ventana de medida y fuera de una
+    // ausencia. Se precalcula con el reparto VACÍO —igual que hace el banco— para que la regla la
+    // siga poniendo el dominio sin recorrer un array en cada uno de los ~20.000 pasos: lo que
+    // queda por preguntar en cada paso es solo «¿lo trabaja?», que es un `has` sobre un Set.
+    puentesDelMesHasta.set(a.id, puentesDelMes.filter((p) => compareISO(p, a.medidaHasta) <= 0
+      && residentIsFreeOnBridge(a.id, [], p, a.win, bloqueos)));
+    // PREVISIÓN SOBRE UN EJE ESCASO (decisión V-39). `puentesLibres` no se parece a los otros
+    // cinco: no se gana haciendo guardias, se conserva NO haciéndolas, y el año entero trae 3 o 4
+    // oportunidades. Midiéndolo solo hasta hoy, el generador de junio ve a todos a cero y no tiene
+    // motivo para no darle el puente de junio a quien en diciembre va a estar de baja — y cuando
+    // en diciembre se ve el desequilibrio ya no queda puente con el que arreglarlo. Medido: eso
+    // era el aviso de `puentesLibres` que quedaba en «dos bajas simultáneas».
+    //
+    // La previsión es el techo de cada uno: los puentes que aún le quedan por delante y podrían
+    // ser suyos (dentro de su ventana y fuera de una ausencia). Es constante para la búsqueda —los
+    // meses futuros no existen todavía— pero DISTINTA por residente, y esa diferencia es justo la
+    // que hace visible hoy que a alguien le quedan menos oportunidades que a los demás.
+    //
+    // Solo se proyecta este eje, y no por comodidad: los otros cinco cuentan lo que SÍ ocurrió y
+    // sus oportunidades futuras son muchas y compartidas, así que suponer que se las llevará todas
+    // no dice nada. Este cuenta lo que NO ocurrió sobre un calendario cerrado y conocido de
+    // antemano, que es lo que lo hace proyectable.
+    a.puentesFuturos = compareISO(addDays(monthEnd, 1), a.win.end) > 0 ? 0
+      : bridgesBetween(addDays(monthEnd, 1), a.win.end, festivos)
+        .filter((p) => residentIsFreeOnBridge(a.id, [], p, a.win, bloqueos)).length;
   }
 
   // ── El trimestre en curso (INV-3 trimestral, V-13 — objetivo añadido en V-37) ───────────────
@@ -254,7 +284,9 @@ export function generateMonth(ctx, opciones = {}) {
     return {
       total: t.total, findes: t.finde, festivos: t.festivos,
       prefestivos: t.prefestivos, dobletes: t.dobletes,
-      puentesLibres: a.puentesPrevios + delMes,
+      // + `puentesFuturos`: el techo que aún le queda (V-39). Sube el valor de todos, pero de
+      // cada uno lo suyo, y es la diferencia lo que el coste mira.
+      puentesLibres: a.puentesPrevios + delMes + a.puentesFuturos,
       // Guardias del trimestre en curso. Todo lo que propone la búsqueda cae dentro del mes, y el
       // mes cae entero dentro del trimestre, así que basta sumar el tamaño del Set: no hace falta
       // un segundo `tally` en cada uno de los ~40.000 pasos.
