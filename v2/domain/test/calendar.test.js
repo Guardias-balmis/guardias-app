@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   parseISO, toISO, weekday, isWeekend, addDays, addYears, daysInMonth,
   datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, compareISO, isHoliday, bridgesOfMonth, bridgesBetween,
+  autoGuardCode,
 } from "../calendar.js";
 
 test("parseISO acepta fechas válidas y devuelve componentes", () => {
@@ -128,6 +129,30 @@ test("isHoliday consulta la lista, acepta fechas o registros {fecha}, y no inven
   assert.equal(isHoliday("2026-12-25", []), false, "sin lista no hay festivos: no se deriva ninguno");
   assert.equal(isHoliday("2026-12-24", ["2026-12-25"]), false);
   assert.throws(() => isHoliday("25/12/2026", []), /fecha/i);
+});
+
+test("autoGuardCode: GF si la fecha es festiva", () => {
+  assert.equal(autoGuardCode("2026-12-25", ["2026-12-25"]), "GF");
+});
+
+test("autoGuardCode: GP si la fecha SIGUIENTE es festiva (la víspera)", () => {
+  assert.equal(autoGuardCode("2026-12-24", ["2026-12-25"]), "GP");
+});
+
+test("autoGuardCode: G si no es festiva ni víspera de festivo", () => {
+  assert.equal(autoGuardCode("2026-12-23", ["2026-12-25"]), "G");
+});
+
+test("autoGuardCode: sin festivos cargados no inventa ninguno, cae a G", () => {
+  assert.equal(autoGuardCode("2026-12-25", []), "G");
+});
+
+test("autoGuardCode: festivo dos días seguidos, GF gana sobre GP para el primero", () => {
+  assert.equal(autoGuardCode("2026-12-25", ["2026-12-25", "2026-12-26"]), "GF");
+});
+
+test("autoGuardCode: cruza el mes (31 dic víspera de festivo de enero)", () => {
+  assert.equal(autoGuardCode("2026-12-31", ["2027-01-01"]), "GP");
 });
 
 test("bridgesOfMonth: lunes ante martes festivo y viernes tras jueves festivo (§3.4)", () => {

@@ -164,6 +164,22 @@ export function isHoliday(iso, festivos = []) {
 }
 
 /**
+ * Código de guardia (G/GF/GP) que corresponde a `fecha` según el calendario de festivos
+ * (decisión V-41): GF si la propia fecha es festiva, GP si la fecha SIGUIENTE lo es (la víspera),
+ * G en cualquier otro caso. Mismo criterio que ya lee INV-12 al revés (`G`/`GP` nunca EN festivo,
+ * `GF` solo en festivo) — aquí se usa para PROPONER el código en vez de solo comprobarlo después.
+ *
+ * Como `isHoliday`, es una consulta pura sobre la lista que le pasan: si `festivos` no cubre el
+ * año de `fecha` (o de la fecha siguiente), esto no lo sabe y devuelve G por no asumir un festivo
+ * que no está cargado — el invocador es quien tiene que decidir si avisar de que no pudo comprobarlo.
+ */
+export function autoGuardCode(fecha, festivos = []) {
+  if (isHoliday(fecha, festivos)) return "GF";
+  if (isHoliday(addDays(fecha, 1), festivos)) return "GP";
+  return "G";
+}
+
+/**
  * Puentes del mes (§3.4, literal): día laborable L-V no festivo cuyos DOS vecinos son cada uno
  * festivo o fin de semana. Cubre el viernes tras un jueves festivo y el lunes ante un martes
  * festivo.
