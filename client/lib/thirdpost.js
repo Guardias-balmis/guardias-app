@@ -29,6 +29,10 @@ export async function thirdPostViolations({ api, mes, anio, residentes, asignaci
   const rVol = await api.estadoVoluntariado3P();
   if (!rVol.ok) return { ok: false, error: rVol.error };
   const voluntarios = rVol.voluntarios || [];
+  // `periodos` (activos e históricos, V-40) es lo que permite a INV-8a juzgar "¿era voluntario
+  // ESE día?" en vez de "¿lo es AHORA?" — igual que `buildThirdPostCtx` en el servidor desde
+  // V-28. Sin él (una API vieja en un test que no lo devuelve) cae al criterio de HOY.
+  const periodos = rVol.periodos || null;
 
   const monthStart = toISO(anio, mes, 1);
   const desde = thirdPostHistoryStart(voluntarios, residentes, mes, anio);
@@ -57,6 +61,7 @@ export async function thirdPostViolations({ api, mes, anio, residentes, asignaci
       asignaciones: asignacionesDelMes,
       voluntarios3P: voluntarios, // con `desde`: el ciclo de 8b arranca en el alta de cada uno (V-18b)
       historial3P,
+      periodosVoluntario3P: periodos, // solo para 8a (V-40); 8b/8c siguen sobre el compromiso vigente
     }),
   };
 }
