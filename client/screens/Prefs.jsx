@@ -332,7 +332,7 @@ function PrefsScreen() {
 
   if (!myResidente) {
     return (
-      <div style={{ padding: 16, maxWidth: 480, margin: "0 auto" }}>
+      <div style={{ padding: 16, maxWidth: 720, margin: "0 auto" }}>
         <Aviso>Cargando tu residente… si esto no desaparece, recarga la página.</Aviso>
       </div>
     );
@@ -374,7 +374,7 @@ function PrefsScreen() {
   };
 
   return (
-    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 480, margin: "0 auto" }}>
+    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 720, margin: "0 auto" }}>
       <SectionTitle>⚙️ Preferencias del mes</SectionTitle>
 
       <Card>

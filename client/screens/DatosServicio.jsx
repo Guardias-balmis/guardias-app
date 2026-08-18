@@ -401,7 +401,7 @@ function DatosServicioScreen() {
   const puedoEscribir = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
 
   return (
-    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 480, margin: "0 auto" }}>
+    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 720, margin: "0 auto" }}>
       <SectionTitle>🗓️ Datos del servicio</SectionTitle>
 
       {!puedoEscribir && (

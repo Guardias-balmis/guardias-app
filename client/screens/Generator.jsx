@@ -636,7 +636,7 @@ function GeneratorScreen() {
   };
 
   return (
-    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 480, margin: "0 auto" }}>
+    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 720, margin: "0 auto" }}>
       <SectionTitle>🤖 Generador de cuadrante</SectionTitle>
 
       <Info>

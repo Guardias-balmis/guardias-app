@@ -13,7 +13,7 @@ function SettingsScreen() {
   const { auth, myResidente, nivel, isResponsable, logout, setTab } = app;
 
   return (
-    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 480, margin: "0 auto" }}>
+    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 720, margin: "0 auto" }}>
       <Card title="Mi cuenta">
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ fontSize: 17, fontWeight: 700, color: COLOR.blueDark }}>{auth.residente.nombre}</div>
