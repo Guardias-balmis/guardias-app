@@ -4,7 +4,7 @@
 // (nunca `new Date(anio, mes, ...)` a mano, para no reintroducir el desfase de mes).
 import { COLOR, S, RADIUS, ANOS, ANO_COLORS, ANO_TEXT, CODE_COLORS, CODE_LABELS, CODES_CYCLE, ESTADO_CUADRANTE, pillBtn } from "./client/lib/design-tokens.js";
 import { levelOn, isActiveOn, periodsOfResident } from "./v2/domain/residents.js";
-import { datesOfMonth, weekday, isWeekend, addDays, compareISO, autoGuardCode } from "./v2/domain/calendar.js";
+import { datesOfMonth, weekday, isWeekend, addDays, compareISO, autoGuardCode, isHoliday } from "./v2/domain/calendar.js";
 import { tally } from "./v2/domain/tally.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/domain/validate.js";
 import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit, equityWarnings } from "./v2/domain/cuadrante.js";
@@ -81,7 +81,7 @@ function motivoNoAsignable(periodos, primerDia) {
  */
 function FilaRejilla({
   nombre, etiqueta, bg, color, titulo, total, dias, porFecha, pulsable, onCelda,
-  origenPorFecha, origenEditFecha, onPressStart, onPressEnd, onSeleccionaOrigen,
+  origenPorFecha, origenEditFecha, onPressStart, onPressEnd, onSeleccionaOrigen, festivos = [],
 }) {
   return (
     <tr>
@@ -103,7 +103,11 @@ function FilaRejilla({
             onTouchCancel={prensable ? onPressEnd : undefined}
             style={{
               ...S.td, textAlign: "center", cursor: pulsable(codigo) ? "pointer" : "default", userSelect: "none",
-              background: CODE_COLORS[codigo] || "transparent", minWidth: 34,
+              // Una celda vacía en columna festiva se pinta ámbar tenue para que el festivo se
+              // vea en toda la columna, no solo en la cabecera; con código puesto manda el color
+              // del propio código (V-41 ya suele haber puesto GF ahí de todas formas).
+              background: CODE_COLORS[codigo] || (isHoliday(fecha, festivos) ? COLOR.amberLight : "transparent"),
+              minWidth: 34,
               fontWeight: codigo ? 700 : 400, fontSize: codigo ? 14 : 12, color: codigo ? COLOR.cellText : COLOR.grayMid, position: "relative",
             }}>
             {editando ? (
@@ -613,8 +617,14 @@ function CalendarScreen() {
                 <th style={{ ...S.th, background: COLOR.gray, color: COLOR.blueDark }}>G</th>
                 {dias.map((fecha) => {
                   const wknd = isWeekend(fecha);
+                  // Festivo destaca sobre fin de semana (decisión del autor, 2026-08-18): un
+                  // sábado festivo es más raro de ver a simple vista que uno normal, y las dos
+                  // marcas juntas confundirían más que ayudarían.
+                  const festivo = isHoliday(fecha, festivos);
+                  const bg = festivo ? COLOR.amberLight : wknd ? COLOR.greenLight : COLOR.gray;
+                  const fg = festivo ? COLOR.amber : wknd ? COLOR.green : COLOR.cellText;
                   return (
-                    <th key={fecha} style={{ ...S.th, background: wknd ? COLOR.greenLight : COLOR.gray, color: wknd ? COLOR.green : COLOR.cellText }}>
+                    <th key={fecha} style={{ ...S.th, background: bg, color: fg }}>
                       <div style={{ fontSize: 15 }}>{Number(fecha.slice(8, 10))}</div>
                       <div style={{ fontSize: 11, fontWeight: 400 }}>{weekday(fecha)}</div>
                     </th>
@@ -628,7 +638,7 @@ function CalendarScreen() {
                   key={r.id}
                   nombre={r.nombre} etiqueta={nivel} bg={ANO_COLORS[nivel]} color={ANO_TEXT[nivel]}
                   total={tally(asignacionesDe(r.id), monthWindow).total}
-                  dias={dias} porFecha={asignaciones[r.id] || {}}
+                  dias={dias} porFecha={asignaciones[r.id] || {}} festivos={festivos}
                   pulsable={() => !bloqueadoPorPublicado}
                   onCelda={(fecha) => cicla(r.id, fecha)}
                   origenPorFecha={origenes[r.id] || {}}
@@ -646,7 +656,7 @@ function CalendarScreen() {
                   nombre={r.nombre} etiqueta={motivo.etiqueta} bg={COLOR.orange} color="#fff"
                   titulo={`${r.nombre}: ${motivo.texto}. No es asignable en este mes; sus celdas solo se pueden borrar.`}
                   total={tally(asignacionesDe(r.id), monthWindow).total}
-                  dias={dias} porFecha={asignaciones[r.id] || {}}
+                  dias={dias} porFecha={asignaciones[r.id] || {}} festivos={festivos}
                   pulsable={(codigo) => !bloqueadoPorPublicado && codigo !== ""}
                   onCelda={(fecha, codigo) => quita(r.id, fecha, codigo)}
                 />
@@ -732,6 +742,12 @@ function CalendarScreen() {
               <span style={{ fontSize: 12, color: COLOR.grayDark }}>{code} · {CODE_LABELS[code]}</span>
             </div>
           ))}
+          {/* No es un código de guardia, es la columna del día: se enseña aparte para no
+              confundirla con las celdas de arriba. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 16, height: 16, borderRadius: 4, background: COLOR.amberLight, border: `1px solid ${COLOR.amber}`, display: "inline-block" }} />
+            <span style={{ fontSize: 12, color: COLOR.grayDark }}>Columna de un día festivo</span>
+          </div>
         </div>
       </Card>
     </div>
