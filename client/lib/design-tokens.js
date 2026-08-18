@@ -67,8 +67,11 @@ export const S = {
   dayToggleBtn: { padding: "7px 10px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", transition: "all .15s" },
   counterBtn: { width: 36, height: 36, borderRadius: 10, border: `1.5px solid ${COLOR.blue}`, background: COLOR.bluePale, color: COLOR.blue, fontSize: 20, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" },
   navBtn: { background: COLOR.bluePale, border: "none", borderRadius: 8, padding: "8px 14px", color: COLOR.blue, fontSize: 16, fontWeight: 700, cursor: "pointer" },
-  th: { padding: "4px 3px", border: `1px solid ${COLOR.scrollThumb}`, textAlign: "center", whiteSpace: "nowrap", position: "sticky", top: 0 },
-  td: { padding: "3px 2px", border: `1px solid ${COLOR.cellBorder}` },
+  // Rejilla del cuadrante, agrandada 2026-08-18 a pedido del autor ("más grande y vistosa" que
+  // la densidad original): solo Calendar.jsx usa S.td/S.th, así que agrandarlas aquí no toca
+  // ninguna otra pantalla.
+  th: { padding: "9px 7px", border: `1px solid ${COLOR.scrollThumb}`, textAlign: "center", whiteSpace: "nowrap", position: "sticky", top: 0 },
+  td: { padding: "10px 7px", border: `1px solid ${COLOR.cellBorder}` },
   iconBtn: { background: "rgba(255,255,255,0.15)", border: "none", borderRadius: 8, padding: "6px 10px", color: "#fff", fontSize: 18, cursor: "pointer" },
 };
 

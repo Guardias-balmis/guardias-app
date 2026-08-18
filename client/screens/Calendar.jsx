@@ -2,9 +2,9 @@
 // PrefsScreen: no se crea un selector de mes propio aquí). Guarda por residenteId,
 // nunca por nombre (bug del v1); datesOfMonth/weekday para todo el cálculo de fechas
 // (nunca `new Date(anio, mes, ...)` a mano, para no reintroducir el desfase de mes).
-import { COLOR, S, ANOS, ANO_COLORS, ANO_TEXT, CODE_COLORS, CODE_LABELS, CODES_CYCLE, ESTADO_CUADRANTE, pillBtn } from "./client/lib/design-tokens.js";
+import { COLOR, S, RADIUS, ANOS, ANO_COLORS, ANO_TEXT, CODE_COLORS, CODE_LABELS, CODES_CYCLE, ESTADO_CUADRANTE, pillBtn } from "./client/lib/design-tokens.js";
 import { levelOn, isActiveOn, periodsOfResident } from "./v2/domain/residents.js";
-import { datesOfMonth, weekday, isWeekend, addDays, compareISO } from "./v2/domain/calendar.js";
+import { datesOfMonth, weekday, isWeekend, addDays, compareISO, autoGuardCode } from "./v2/domain/calendar.js";
 import { tally } from "./v2/domain/tally.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/domain/validate.js";
 import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit, equityWarnings } from "./v2/domain/cuadrante.js";
@@ -103,8 +103,8 @@ function FilaRejilla({
             onTouchCancel={prensable ? onPressEnd : undefined}
             style={{
               ...S.td, textAlign: "center", cursor: pulsable(codigo) ? "pointer" : "default", userSelect: "none",
-              background: CODE_COLORS[codigo] || "transparent",
-              fontWeight: codigo ? 700 : 400, color: COLOR.cellText, position: "relative",
+              background: CODE_COLORS[codigo] || "transparent", minWidth: 34,
+              fontWeight: codigo ? 700 : 400, fontSize: codigo ? 14 : 12, color: codigo ? COLOR.cellText : COLOR.grayMid, position: "relative",
             }}>
             {editando ? (
               <select autoFocus value={origen} onClick={(e) => e.stopPropagation()}
@@ -138,6 +138,11 @@ function CalendarScreen() {
   const [origenes, setOrigenes] = useState({});         // {[residenteId]: {[fecha]: "CEDIDA"|"COMPRADA"}} (INV-4)
   const [bordes, setBordes] = useState([]);             // asignaciones de los días de FUERA del mes
   const [bordesError, setBordesError] = useState(false);
+  // Festivos del mes (con margen, V-41): SOLO para proponer G/GF/GP al primer click de una celda
+  // vacía. `validar()` sigue pidiendo los suyos frescos aparte para INV-12/puentes — este fetch
+  // es una comodidad de UI, no la fuente de verdad que se manda a validar, y no debe sustituirla.
+  const [festivos, setFestivos] = useState([]);
+  const [festivosError, setFestivosError] = useState(false);
   const [avisoDescanso, setAvisoDescanso] = useState(null); // {residenteId, fecha, vecina}
   const [pendientes, setPendientes] = useState({});     // {[residenteId+"|"+fecha]: {fecha,residenteId,codigo,origen}}
   // Celda con el selector de origen abierto (mantener presionado), como `"residenteId|fecha"`.
@@ -191,10 +196,11 @@ function CalendarScreen() {
       const diasDelMes = datesOfMonth(anio, mes);
       const antesDelMes = addDays(diasDelMes[0], -1);
       const trasElMes = addDays(diasDelMes[diasDelMes.length - 1], 1);
-      const [r, rEstado, rBordes] = await Promise.all([
+      const [r, rEstado, rBordes, rFestivos] = await Promise.all([
         app.api.listAsignaciones(anio, mes),
         app.api.estadoCuadrante(anio, mes),
         app.api.listAsignacionesRango(antesDelMes, trasElMes),
+        app.api.listFestivosRango(antesDelMes, trasElMes),
       ]);
       if (cancelled) return;
       if (r.ok) {
@@ -218,10 +224,16 @@ function CalendarScreen() {
       // silencio a «no hay conflicto» sería afirmar algo que no se ha podido comprobar.
       setBordes(rBordes.ok ? rBordes.asignaciones.filter((a) => a.fecha === antesDelMes || a.fecha === trasElMes) : []);
       setBordesError(!rBordes.ok);
+      // Un fallo aquí solo apaga la propuesta automática de G/GF/GP (V-41): autoGuardCode cae a G
+      // sin lista, y el aviso de abajo dice que ese primer click no comprobó festivo/prefestivo.
+      setFestivos(rFestivos.ok ? rFestivos.festivos : []);
+      setFestivosError(!rFestivos.ok);
       setEstadoError(!rEstado.ok);
       if (rEstado.ok) { setEstado(rEstado.estado); setSinResponsable(rEstado.sinResponsable === true); } // en error se conserva el último estado conocido; estadoError ya bloquea la edición
       else showToast("Error comprobando el estado del cuadrante: " + rEstado.error, "err");
       setPendientes({});
+      undoStackRef.current = [];
+      setPuedeDeshacer(false);
       setViolaciones(null);
       setEquidadPorConfirmar(null);
       setCierresError(null);
@@ -252,11 +264,31 @@ function CalendarScreen() {
     return Object.entries(porFecha).map(([fecha, codigo]) => ({ fecha, codigo }));
   };
 
+  // Pila de deshacer (decisión V-42): guarda el valor ANTERIOR de cada celda que `aplica` va a
+  // pisar, no el nuevo. Vive en un ref y no en estado porque se lee y se escribe en la misma
+  // pulsación (push en `aplica`, pop en `deshacer`) y no tiene que disparar un render por sí
+  // sola — `puedeDeshacer` es lo único que la UI necesita saber de ella. Sigue funcionando
+  // sobre una celda ya guardada: `aplica` no distingue guardado de pendiente, así que deshacer
+  // después de Guardar solo deja un cambio pendiente nuevo con el valor de antes, a confirmar
+  // con el mismo botón Guardar de siempre — nunca revierte nada en el servidor por su cuenta.
+  const undoStackRef = useRef([]);
+  const [puedeDeshacer, setPuedeDeshacer] = useState(false);
+
   // Escribir una celda invalida siempre el resultado de validación que se esté enseñando: es de
   // antes del cambio, y dejarlo puesto haría creer que el mes sigue validado contra lo que hay.
   // `origen` por defecto "" (no cedida/comprada): cambiar el CÓDIGO de una celda es una guardia
   // nueva, y una guardia nueva no hereda la marca de la que hubiera antes.
-  const aplica = (residenteId, fecha, codigo, origen = "") => {
+  const aplica = (residenteId, fecha, codigo, origen = "", { registrarDeshacer = true } = {}) => {
+    if (registrarDeshacer) {
+      const codigoAnterior = (asignaciones[residenteId] || {})[fecha] || "";
+      const origenAnterior = (origenes[residenteId] || {})[fecha] || "";
+      // Sin cambio real (ciclo completo hasta el mismo código, o un re-click que no mueve nada)
+      // no hay nada que deshacer: apilarlo igual dejaría un "deshacer" que no deshace nada visible.
+      if (codigoAnterior !== codigo || origenAnterior !== origen) {
+        undoStackRef.current.push({ residenteId, fecha, codigoAnterior, origenAnterior });
+        setPuedeDeshacer(true);
+      }
+    }
     // El aviso se calcula sobre el estado ANTERIOR de la celda más el código que se escribe: es
     // exactamente lo que quedará. Solo mira a este residente, así que ciclar una celda no tiene
     // que barrer la rejilla entera.
@@ -275,6 +307,17 @@ function CalendarScreen() {
     setTercerPuestoError(null);
   };
 
+  // Deshace la última celda tocada, guardada o no (ver comentario de `undoStackRef`). No cicla
+  // ni registra un nuevo "deshacer" de sí mismo — sin `registrarDeshacer: false` cada Deshacer
+  // apilaría su propio reverso y el botón nunca se vaciaría.
+  const deshacer = () => {
+    if (busy || bloqueadoPorPublicado) return;
+    const ultimo = undoStackRef.current.pop();
+    if (!ultimo) return;
+    setPuedeDeshacer(undoStackRef.current.length > 0);
+    aplica(ultimo.residenteId, ultimo.fecha, ultimo.codigoAnterior, ultimo.origenAnterior, { registrarDeshacer: false });
+  };
+
   const cicla = (residenteId, fecha) => {
     // Una pulsación larga que llegó a abrir el selector de origen ya hizo su trabajo: el click
     // que el navegador dispara al soltar no debe ciclar el código además.
@@ -290,7 +333,10 @@ function CalendarScreen() {
     // en guardarAsignaciones, esto solo evita que la celda parezca editable en la UI.
     if (busy || bloqueadoPorPublicado) return;
     const actual = (asignaciones[residenteId] || {})[fecha] || "";
-    aplica(residenteId, fecha, CODES_CYCLE[(CODES_CYCLE.indexOf(actual) + 1) % CODES_CYCLE.length]);
+    // Celda vacía → G/GF/GP según el calendario de festivos (decisión V-41), no siempre G: el
+    // resto del ciclo sigue igual, así que forzar GF/GP a mano desde ahí sigue disponible.
+    const siguiente = actual === "" ? autoGuardCode(fecha, festivos) : CODES_CYCLE[(CODES_CYCLE.indexOf(actual) + 1) % CODES_CYCLE.length];
+    aplica(residenteId, fecha, siguiente);
   };
 
   // Celda de la fila de un no asignable (V-23): SOLO borra, nunca asigna. Es el único gesto con
@@ -501,6 +547,14 @@ function CalendarScreen() {
         </Aviso>
       )}
 
+      {festivosError && (
+        <Aviso>
+          No se pudo cargar el calendario de festivos: el primer click sobre una celda vacía
+          asignará G sin comprobar si el día es festivo o víspera de festivo. Validar sí lo
+          comprobará (INV-12).
+        </Aviso>
+      )}
+
       {avisoDescanso && (
         <Aviso color={COLOR.red} bg={COLOR.redLight}>
           ⛔ <b>{nombreDe(avisoDescanso.residenteId)}</b> quedaría con guardia el {diaCorto(avisoDescanso.vecina)} y
@@ -514,10 +568,15 @@ function CalendarScreen() {
         </Aviso>
       )}
 
-      <Card>
+      <Card title="📅 Cuadrante mensual" accent={COLOR.turquoise}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
           <button style={pillBtn(COLOR.blue)} onClick={guardar} disabled={busy || bloqueadoPorPublicado}>
             {guardando ? "Guardando…" : `💾 Guardar${cambios.length ? ` (${cambios.length})` : ""}`}
+          </button>
+          {/* Deshace la última celda tocada, guardada o no (decisión V-42) — no solo la del aviso
+              de descanso, que ya tenía su propio botón desde V-36 para ESE caso concreto. */}
+          <button style={pillBtn(COLOR.grayDark)} onClick={deshacer} disabled={busy || bloqueadoPorPublicado || !puedeDeshacer} title="Deshace la última celda que tocaste">
+            ↩️ Deshacer
           </button>
           <button style={pillBtn(COLOR.greenMid)} onClick={() => validar()} disabled={busy}>{validando ? "Validando…" : "✅ Validar"}</button>
           {puedeMoverCiclo && canPublish(estado) && (
@@ -542,8 +601,11 @@ function CalendarScreen() {
           </div>
         )}
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ borderCollapse: "collapse", minWidth: 220 + dias.length * 32, fontSize: 12 }}>
+        {/* Contenedor con esquinas redondeadas (a pedido del autor, "más grande y vistosa"): el
+            `overflow: hidden` es lo que recorta las esquinas de la propia `<table>`, que no
+            puede llevar `border-radius` directamente sobre `border-collapse: collapse`. */}
+        <div style={{ overflowX: "auto", borderRadius: RADIUS.sm, border: `1.5px solid ${COLOR.grayMid}` }}>
+          <table style={{ borderCollapse: "collapse", minWidth: 260 + dias.length * 44, fontSize: 14 }}>
             <thead>
               <tr>
                 <th style={{ ...S.th, background: COLOR.gray, color: COLOR.blueDark }}>Nivel</th>
@@ -553,8 +615,8 @@ function CalendarScreen() {
                   const wknd = isWeekend(fecha);
                   return (
                     <th key={fecha} style={{ ...S.th, background: wknd ? COLOR.greenLight : COLOR.gray, color: wknd ? COLOR.green : COLOR.cellText }}>
-                      <div>{Number(fecha.slice(8, 10))}</div>
-                      <div style={{ fontSize: 10, fontWeight: 400 }}>{weekday(fecha)}</div>
+                      <div style={{ fontSize: 15 }}>{Number(fecha.slice(8, 10))}</div>
+                      <div style={{ fontSize: 11, fontWeight: 400 }}>{weekday(fecha)}</div>
                     </th>
                   );
                 })}
