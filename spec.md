@@ -408,7 +408,7 @@ Estados: `propuesto` (sin decidir) · `aceptado` (decidido, sin implementar) · 
 | P-12 | **División de vacaciones entre Navidad (23–26 dic) y Año Nuevo (29 dic–6 ene)**: por residente individual, si tiene ausencia (VACACIONES/ROTACION) en las dos ventanas a la vez, avisa — converge con P-13, cuarto riesgo de `blockPreview.js` | `propuesta-division-navidad-anio-nuevo.md` (conocimiento de práctica real del autor, no está en `normativa.pdf`) | Sin invariante propio — reutiliza el mecanismo de P-13 | **Ausente.** La normativa no menciona reparto de vacaciones alrededor de Navidad/Año Nuevo en ninguna de sus 4 páginas — extensión sin respaldo normativo, práctica real del servicio | `implementado` (`DIVISION_NAVIDAD_ANIO_NUEVO` en `v2/domain/blockPreview.js`; 7 tests nuevos, 629/629 en verde) |
 | P-13 | **Simulación preventiva de cobertura** al registrar un Bloqueo (vacaciones/rotación): riesgo de imposibilidad (espejo INV-1, bloquea solo dentro de 3 meses), riesgo de sobrecarga (espejo INV-2, aviso) y riesgo de concentración por nivel (nuevo, más de 2 del mismo R1–R4 a la vez, aviso) | `propuesta-simulacion-preventiva-cobertura.md` (conocimiento de práctica real del autor, no está en `normativa.pdf`) | INV-1, INV-2 (umbrales espejados) — el eje de concentración por nivel no tiene invariante previo | **Ausente.** p.4 solo dice, en general, que la organización de vacaciones "debe realizarse en consonancia con el resto de grupo de guardias", sin fijar ningún umbral — extensión sin respaldo normativo, práctica real del servicio | `implementado` (`v2/domain/blockPreview.js`, cableado en `crearBloqueo`; 10 tests nuevos, 622/622 en verde) |
 
-### 8.1 Las doce ya cerradas
+### 8.1 Las trece ya cerradas
 
 **P-12, aceptada el 2026-08-08 por decisión directa del autor, implementada el
 mismo día** (`DIVISION_NAVIDAD_ANIO_NUEVO` en `v2/domain/blockPreview.js`; 7
@@ -421,8 +421,7 @@ por grupo, la composición diaria de INV-1 no cambia—; **severidad**
 (`AUSENCIA_SIMULTANEA`: VACACIONES + ROTACION, BAJA fuera por
 impredecible) y converge con P-13 en vez de ser un mecanismo aparte: se
 añade como cuarto riesgo de `previewBloqueoRisk`, mismo momento y misma
-pantalla que los otros tres. Queda `aceptado`, no `implementado`: el
-cuarto eje todavía no existe en `v2/domain/blockPreview.js`.
+pantalla que los otros tres.
 
 **P-13, aceptada el 2026-08-07 por decisión directa del autor, implementada el
 mismo día** (`v2/domain/blockPreview.js`, cableada en `crearBloqueo` de
