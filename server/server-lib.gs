@@ -845,6 +845,11 @@ function handleRequest(rawBody, deps) {
           return {
             ok: true,
             voluntarios,
+            // Periodos activos E HISTÓRICOS (decisión V-40): lo que `marcarValidado` ya usa desde
+            // V-28 vía `allThirdPostPeriods` para juzgar INV-8a "¿era voluntario ESE día?". Sin
+            // esto el cliente solo veía `voluntarios` (los de HOY) y `Calendar.jsx` podía mostrar
+            // un veredicto distinto al que el servidor da al validar el mismo mes.
+            periodos: allThirdPostPeriods(deps),
             permanenciaMeses: deps.domain.THIRD_POST_PERMANENCIA_MESES,
             mio: mio && {
               desde: mio.desde,

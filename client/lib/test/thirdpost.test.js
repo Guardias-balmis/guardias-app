@@ -14,13 +14,18 @@ const ANA = R("r3-ana", "2024-05-25", "2028-05-24");
 const BRUNO = R("r2-bruno", "2025-05-25", "2029-05-24");
 const EVA = R("r1-eva", "2026-05-25", "2030-05-24");
 
-function fakeApi({ voluntarios = [], asignaciones = [], failVol = false, failAsig = false } = {}) {
+function fakeApi({ voluntarios = [], periodos = null, asignaciones = [], failVol = false, failAsig = false } = {}) {
   const calls = [];
   return {
     calls,
     estadoVoluntariado3P: async () => {
       calls.push({ tipo: "voluntarios" });
-      return failVol ? { ok: false, error: "sin red" } : { ok: true, voluntarios, permanenciaMeses: 4, mio: null };
+      // Por defecto, cada voluntario ACTIVO es también su único periodo (sin `hasta`): así los
+      // tests que no le prestan atención a esto siguen viendo el mismo veredicto de antes.
+      const periodosEfectivos = periodos !== null ? periodos : voluntarios.map((v) => ({ residenteId: v.residenteId, desde: v.desde }));
+      return failVol
+        ? { ok: false, error: "sin red" }
+        : { ok: true, voluntarios, periodos: periodosEfectivos, permanenciaMeses: 4, mio: null };
     },
     listAsignacionesRango: async (desde, hasta) => {
       calls.push({ tipo: "asignaciones", desde, hasta });
@@ -109,6 +114,31 @@ test("un mes ANTERIOR al alta más antigua no pide histórico (y no manda un ran
   assert.equal(r.ok, true);
   assert.deepEqual(api.calls.map((c) => c.tipo), ["voluntarios"], "ni una petición con rango invertido");
   assert.equal(r.violaciones.length, 1); // INV-8a sigue comprobándose
+  assert.match(r.violaciones[0].detalle, /no consta en la lista de voluntarios/);
+});
+
+test("INV-8a por fecha (V-40): un 3P de julio de quien se retiró en diciembre NO avisa, aunque hoy no conste activo", async () => {
+  const api = fakeApi({
+    voluntarios: [], // ya no consta activo
+    periodos: [{ residenteId: "r2-bruno", desde: "2026-05-01", hasta: "2026-12-01" }],
+  });
+  const r = await thirdPostViolations({
+    api, mes: 7, anio: 2026, residentes: [BRUNO],
+    asignacionesDelMes: [p3("r2-bruno", "2026-07-03")],
+  });
+  assert.deepEqual(r.violaciones, []);
+});
+
+test("INV-8a por fecha (V-40): un 3P de junio de quien recién se apuntó en septiembre SÍ avisa, aunque hoy conste activo", async () => {
+  const api = fakeApi({
+    voluntarios: [{ residenteId: "r2-bruno", desde: "2026-09-01" }],
+    periodos: [{ residenteId: "r2-bruno", desde: "2026-09-01" }],
+  });
+  const r = await thirdPostViolations({
+    api, mes: 6, anio: 2026, residentes: [BRUNO],
+    asignacionesDelMes: [p3("r2-bruno", "2026-06-05")],
+  });
+  assert.equal(r.violaciones.length, 1);
   assert.match(r.violaciones[0].detalle, /no consta en la lista de voluntarios/);
 });
 
