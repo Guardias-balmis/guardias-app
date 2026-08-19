@@ -17,7 +17,7 @@
 // Escribir exige el permiso del ciclo (V-16), igual que cargar festivos: son datos de todo el
 // servicio, no propios. Leer está abierto, y a quien no puede escribir se le DICE en vez de
 // esconderle la pantalla. El servidor lo vuelve a comprobar en cada acción.
-import { COLOR, S } from "./client/lib/design-tokens.js";
+import { COLOR, S, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js";
 import { puedeMoverCiclo } from "./client/lib/permisos.js";
 import { periodsOfResident, levelOn, validateTrainingPeriods } from "./v2/domain/residents.js";
 import { todayISO } from "./client/lib/dates.js";
@@ -27,7 +27,6 @@ const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
 
 const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const fechaEs = (iso) => (iso ? `${Number(iso.slice(8, 10))} ${MESES[Number(iso.slice(5, 7)) - 1]} ${iso.slice(0, 4)}` : "—");
-const NIVEL_COLOR = { R1: COLOR.bluePale, R2: COLOR.bluePale, R3: COLOR.blueDark, R4: COLOR.blueDark };
 
 const campo = { ...S.input, width: "100%", marginTop: 4, boxSizing: "border-box" };
 const etiqueta = { ...S.label };
@@ -95,7 +94,7 @@ function Ficha({ api, residente, puedoEscribir, showToast, onCambio }) {
     <Card>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <span style={{
-          background: NIVEL_COLOR[nivelHoy] || COLOR.gray, color: NIVEL_COLOR[nivelHoy] === COLOR.blueDark ? "#fff" : COLOR.blueDark,
+          background: ANO_COLORS[nivelHoy] || COLOR.gray, color: ANO_TEXT[nivelHoy] || COLOR.grayDark,
           fontSize: 12, fontWeight: 700, padding: "3px 8px", borderRadius: 6, minWidth: 34, textAlign: "center",
         }}>{nivelHoy === "PENDIENTE" ? "—" : nivelHoy === "FINALIZADO" ? "fin" : nivelHoy}</span>
         <div style={{ flex: 1 }}>
