@@ -251,6 +251,37 @@ test("anularImaginaria devuelve la cola a su estado anterior, sin borrar la fila
   assert.equal(deps.ss.read("imaginaria").length, 3); // cabecera + alta + anulación
 });
 
+test("colaImaginaria devuelve las coberturas ya registradas de esa incidencia, con su id", () => {
+  // Sin el id, la pantalla no puede nombrar la fila que quiere anular: la cola derivada solo
+  // lleva la FECHA de la última cobertura de cada uno. Es lo que dejaba `anularImaginaria` sin
+  // un solo invocador en el cliente.
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  const id = call({ action: "registrarImaginaria", session, grupo: "PEQUENO", fechaIncidencia: "2026-12-21", residenteId: "bruno" }, deps).id;
+  const r = call({ action: "colaImaginaria", session, grupo: "PEQUENO", fecha: "2026-12-21" }, deps);
+  assert.deepEqual(r.coberturas.map((c) => ({ id: c.id, residenteId: c.residenteId })), [{ id, residenteId: "bruno" }]);
+});
+
+test("las coberturas devueltas son las de ESA incidencia: ni otro día, ni otro grupo, ni las anuladas", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  call({ action: "registrarImaginaria", session, grupo: "PEQUENO", fechaIncidencia: "2026-12-21", residenteId: "bruno" }, deps);
+  call({ action: "registrarImaginaria", session, grupo: "PEQUENO", fechaIncidencia: "2027-01-15", residenteId: "carla" }, deps);
+  call({ action: "registrarImaginaria", session, grupo: "MAYOR", fechaIncidencia: "2026-12-21", residenteId: "ana" }, deps);
+  const anulada = call({ action: "registrarImaginaria", session, grupo: "PEQUENO", fechaIncidencia: "2026-12-21", residenteId: "carla" }, deps).id;
+  call({ action: "anularImaginaria", session, id: anulada }, deps);
+
+  const r = call({ action: "colaImaginaria", session, grupo: "PEQUENO", fecha: "2026-12-21" }, deps);
+  assert.deepEqual(r.coberturas.map((c) => c.residenteId), ["bruno"]);
+});
+
+test("una incidencia sin cobertura registrada devuelve la lista vacía, no undefined", () => {
+  // La pantalla itera sobre `coberturas` sin comprobar nada: un `undefined` aquí la tumbaría.
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  assert.deepEqual(call({ action: "colaImaginaria", session, grupo: "PEQUENO", fecha: "2026-12-21" }, deps).coberturas, []);
+});
+
 test("leer la cola está abierto a cualquier sesión: cualquiera puede necesitar saber a quién llamar", () => {
   const deps = makeDeps();
   const pequena = loggedIn(deps, "eva");

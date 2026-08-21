@@ -23,13 +23,22 @@ function nivelDe(residente) {
  * dominio del historial de coberturas — aquí no hay ninguna regla, solo se enseña.
  *
  * Leerla está abierto a cualquiera (cualquiera puede recibir la llamada); registrar quién cubrió
- * usa el permiso del ciclo, y el botón solo se ofrece a quien lo tiene. El servidor lo vuelve a
- * comprobar de todos modos.
+ * —y anularlo— usa el permiso del ciclo, y los botones solo se ofrecen a quien lo tiene. El
+ * servidor lo vuelve a comprobar de todos modos.
+ *
+ * Anular importa tanto como registrar: el registro se hace DESPUÉS, deprisa y por teléfono, así
+ * que apuntar al residente equivocado es el error normal, no el raro. Sin este botón la única
+ * forma de corregirlo era entrar al Sheet a mano, que es justo lo que la app existe para evitar.
+ * La fila no se borra —la tabla es append-only, se reinserta con activo=false— igual que un
+ * Bloqueo cancelado.
  */
 function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
   const [grupo, setGrupo] = useState("PEQUENO");
   const [fecha, setFecha] = useState(todayISO());
   const [cola, setCola] = useState(null);
+  // Las coberturas YA registradas de esa incidencia (grupo + día), con su id: lo que hace
+  // anulable una fila concreta. La cola no las lleva — solo la fecha de la última de cada uno.
+  const [coberturas, setCoberturas] = useState([]);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -37,9 +46,13 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
     setBusy(true);
     const r = await api.colaImaginaria(grupo, fecha);
     setBusy(false);
-    if (r.ok) { setCola(r.cola); setError(null); } else { setCola(null); setError(r.error); }
+    // `r.coberturas || []` y no `r.coberturas` a secas: hasta que el backend nuevo esté
+    // desplegado (server-lib.gs se pega a mano), un /exec viejo responde sin ese campo — y la
+    // lista de abajo se quedaría en `undefined`, tumbando la tarjeta entera de Inicio.
+    if (r.ok) { setCola(r.cola); setCoberturas(r.coberturas || []); setError(null); }
+    else { setCola(null); setCoberturas([]); setError(r.error); }
   };
-  useEffect(() => { setCola(null); setError(null); }, [grupo, fecha]);
+  useEffect(() => { setCola(null); setCoberturas([]); setError(null); }, [grupo, fecha]);
 
   const nombre = (id) => (residentes.find((r) => r.id === id) || {}).nombre || id;
   const registrar = async (residenteId) => {
@@ -47,6 +60,15 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
     const r = await api.registrarImaginaria(grupo, fecha, residenteId);
     setBusy(false);
     if (r.ok) { showToast(`${nombre(residenteId)} cubrió la imaginaria ✓`); cargar(); }
+    else showToast(r.error, "err");
+  };
+  const anular = async (cobertura) => {
+    setBusy(true);
+    const r = await api.anularImaginaria(cobertura.id);
+    setBusy(false);
+    // `cargar()` en los dos casos NO: solo tras un cambio real. Tras un fallo, releer daría la
+    // misma lista y parecería que la anulación se aplicó a medias.
+    if (r.ok) { showToast(`Cobertura de ${nombre(cobertura.residenteId)} anulada`); cargar(); }
     else showToast(r.error, "err");
   };
 
@@ -76,6 +98,29 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
       </Btn>
 
       {error && <div style={{ fontSize: 13, color: COLOR.red, marginTop: 10 }}>{error}</div>}
+      {coberturas.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ ...S.label, marginBottom: 4 }}>Ya registrado ese día</div>
+          {coberturas.map((c) => (
+            <div key={c.id} style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+              background: COLOR.greenLight, borderLeft: `4px solid ${COLOR.greenMid}`,
+              borderRadius: 8, padding: "8px 10px", marginBottom: 6,
+            }}>
+              <div style={{ fontSize: 13, color: COLOR.bodyText }}>
+                <b>{nombre(c.residenteId)}</b> cubrió la imaginaria
+                {/* grayDarker y no grayDark: sobre greenLight, el gris de siempre se queda en 4,05:1
+                    y este texto es de 11 px — por debajo del AA que el catálogo ya dejó fijado. */}
+                {c.registradaEn && <div style={{ fontSize: 11, marginTop: 2, color: COLOR.grayDarker }}>Registrado el {c.registradaEn}</div>}
+              </div>
+              {puedoRegistrar && (
+                <button onClick={() => anular(c)} disabled={busy}
+                  style={{ ...S.smallBtn, background: "#fff", color: COLOR.red, flexShrink: 0 }}>Anular</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       {cola && cola.length === 0 && (
         <div style={{ fontSize: 13, color: COLOR.grayDark, marginTop: 10, fontStyle: "italic" }}>
           No hay nadie en la lista de ese grupo para esa fecha.
