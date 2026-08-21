@@ -267,6 +267,13 @@ function GeneratorScreen() {
   // (INV-10), que hasta ahora corría siempre con la lista vacía.
   const [voluntarios3P, setVoluntarios3P] = useState([]);
   const [eventos, setEventos] = useState([]);
+  // Excepciones (INV-9, V-29): NO entran en el prompt —justifican un 2xR2 ya escrito, no le dicen
+  // nada al modelo sobre cómo repartir—, solo en la validación de `comprobar()`. Sin ellas, un
+  // 2xR2 con justificación documentada avisaba aquí igual que uno sin justificar, y el aviso
+  // desaparecía después al validar en Calendar.jsx, que sí las pide. Un fallo de carga se degrada
+  // en SILENCIO, al contrario que las de arriba, y es deliberado: sin excepciones el chequeo
+  // avisa de MÁS, nunca de menos, así que no da por bueno nada que no haya comprobado.
+  const [excepciones, setExcepciones] = useState([]);
   const [preferencias, setPreferencias] = useState([]);
   // Lo que el mes YA tiene. No entra en la validación (eso duplicaría lo pegado), pero sin ello
   // no se puede aplicar bien: `guardarAsignaciones` es append-only y mandar solo las filas nuevas
@@ -281,7 +288,7 @@ function GeneratorScreen() {
       setLoading(true);
 
       const monthEnd = toISO(anio, mes, daysInMonth(anio, mes));
-      const [rBloqueos, rEstado, rFestivos, rExistentes, r3P, rEventos, rPrefs] = await Promise.all([
+      const [rBloqueos, rEstado, rFestivos, rExistentes, r3P, rEventos, rPrefs, rExcepciones] = await Promise.all([
         api.listBloqueos(anio, mes),
         api.estadoCuadrante(anio, mes),
         // Con margen: el vecino del día 1 y el del último día deciden si son puente (§3.4).
@@ -290,6 +297,7 @@ function GeneratorScreen() {
         api.estadoVoluntariado3P(),
         api.listEventos(),
         api.listPreferencias(anio, mes),
+        api.listExcepciones(),
       ]);
       if (cancelled) return;
       // Un fallo de estadoCuadrante o del cuadrante actual pasa por el MISMO contextError que un
@@ -312,6 +320,7 @@ function GeneratorScreen() {
         setExistentes([]);
         setVoluntarios3P([]);
         setEventos([]);
+        setExcepciones([]);
         setPreferencias([]);
         return;
       }
@@ -334,6 +343,7 @@ function GeneratorScreen() {
       setVoluntarios3P(r3P.ok ? r3P.voluntarios : []);
       setEventos(rEventos.ok ? rEventos.eventos : []);
       setPreferencias(rPrefs.ok ? rPrefs.preferencias : []);
+      setExcepciones(rExcepciones.ok ? rExcepciones.excepciones : []);
 
       // Rango del histórico: cubre (a) desde el inicio del año de residencia en curso más
       // antiguo entre los residentes activos (para accumulatedTally, contrato C-1) y (b)
@@ -368,6 +378,7 @@ function GeneratorScreen() {
         setFestivos([]);
         setVoluntarios3P([]);
         setEventos([]);
+        setExcepciones([]);
         setPreferencias([]);
         return;
       }
@@ -478,7 +489,7 @@ function GeneratorScreen() {
       mes, anio, residentes,
       historicas: historicas.filter((a) => a.fecha < monthStart),
       asignacionesDelMes: [],
-      bloqueos, festivos, eventos,
+      bloqueos, festivos, eventos, excepciones,
     });
     try {
       const { asignaciones, diagnostico: d } = generateMonth(ctx, { semilla: s, tercerPuesto, voluntarios3P, historial3P });
@@ -561,6 +572,10 @@ function GeneratorScreen() {
       // Sin esto INV-10 corría siempre con la lista vacía: el validador del Generador no podía
       // emitir un solo aviso de evento por mucho que la tabla estuviera rellena.
       eventos,
+      // Y sin esto INV-9 avisaba de un 2xR2 que ya estaba justificado: es el mismo ctx que arman
+      // Calendar.jsx y el router (`buildCuadranteCtx`), y las tres pantallas tienen que ver lo
+      // mismo, o el veredicto depende de desde cuál se mire.
+      excepciones,
     });
     let violacionesMes;
     try {
