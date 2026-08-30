@@ -24,7 +24,6 @@ const JSX_FILES = [
   "client/screens/Home.jsx",
   "client/screens/Calendar.jsx",
   "client/screens/Prefs.jsx",
-  "client/screens/Generator.jsx",
   "client/screens/Settings.jsx",
   "client/screens/Responsable.jsx",
   "client/screens/DatosServicio.jsx",

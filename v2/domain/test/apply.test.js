@@ -1,10 +1,10 @@
-// Tests de client/lib/apply-month.js — el lote que deja el mes EXACTAMENTE como la propuesta
+// Tests de v2/domain/apply.js — el lote que deja el mes EXACTAMENTE como la propuesta
 // del generador. Lo que se verifica sobre todo es la regresión que motivó el módulo: aplicar
 // AÑADÍA sobre lo que ya había, así que un día podía acabar con tres personas después de que la
 // pantalla dijera «sin violaciones».
 import test from "node:test";
 import assert from "node:assert/strict";
-import { monthReplacementPlan } from "../apply-month.js";
+import { monthReplacementPlan } from "../apply.js";
 
 // Todos los ids que usan los tests, salvo donde se prueba justo lo contrario.
 const RESIDENTES = ["r1", "r2", "r3", "r4", "r4x", "mayorViejo", "mayorNuevo", "pequeno", "viejo", "nuevo"].map((id) => ({ id }));

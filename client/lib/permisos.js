@@ -20,3 +20,22 @@
 export function puedeMoverCiclo({ isResponsable, grupo, sinResponsable }) {
   return Boolean(isResponsable) || (Boolean(sinResponsable) && grupo === "MAYOR");
 }
+
+/**
+ * Si se le ofrece a esta sesión el botón de «Generar cuadrante con IA» de Inicio (decisión V-43).
+ *
+ * Es el permiso del ciclo MÁS el estado del mes: generar reescribe el cuadrante entero, y un mes
+ * PUBLICADO no admite ediciones (el servidor ya lo rechaza — esto solo evita ofrecer un botón que
+ * va a fallar). `estado` puede llegar `null` mientras se está cargando o si la consulta falló: en
+ * los dos casos NO se ofrece, porque no saber si el mes está publicado no es lo mismo que saber
+ * que no lo está.
+ *
+ * Y como siempre: esto decide qué se ENSEÑA. El permiso de verdad lo vuelve a comprobar
+ * `requireCicloPermiso` en el servidor, que es donde no se puede falsear.
+ *
+ * @param {object} p  los tres de `puedeMoverCiclo` más `estado` ("BORRADOR"|"VALIDADO"|"PUBLICADO")
+ */
+export function puedeGenerarCuadrante({ isResponsable, grupo, sinResponsable, estado }) {
+  return puedeMoverCiclo({ isResponsable, grupo, sinResponsable })
+    && (estado === "BORRADOR" || estado === "VALIDADO");
+}

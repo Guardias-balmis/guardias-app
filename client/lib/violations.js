@@ -4,7 +4,7 @@
 // Pero en producción los ids son UUID del store, así que un residente leía literalmente
 // "[INV-2] 7f3a1b9c-…: 7 guardias computables > máximo 6". Traducir id→nombre es, por tanto,
 // trabajo de la capa de UI, y vive aquí (módulo .js real, testeable con node:test) para que
-// Calendar.jsx y Generator.jsx no lo dupliquen — un .jsx no puede importar otro.
+// Calendar.jsx y Home.jsx no lo dupliquen — un .jsx no puede importar otro.
 //
 // Por qué se sustituye dentro del texto en vez de prefijar el nombre de `v.residenteId`: hay
 // violaciones que hablan de VARIOS residentes en la misma frase y el campo `residenteId` solo

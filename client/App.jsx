@@ -71,7 +71,6 @@ function App() {
             tab === "home" ? React.createElement(window.Screens.Home) :
             tab === "prefs" ? React.createElement(window.Screens.Prefs) :
             tab === "calendar" ? React.createElement(window.Screens.Calendar) :
-            tab === "generator" ? React.createElement(window.Screens.Generator) :
             tab === "settings" ? React.createElement(window.Screens.Settings) :
             tab === "responsable" ? React.createElement(window.Screens.Responsable) :
             tab === "datos-servicio" ? React.createElement(window.Screens.DatosServicio) :
@@ -114,7 +113,6 @@ function BottomNav() {
     { id: "home", icon: "🏠", label: "Inicio" },
     { id: "prefs", icon: "⚙️", label: "Preferencias" },
     { id: "calendar", icon: "📅", label: "Cuadrante" },
-    { id: "generator", icon: "🤖", label: "Generador" },
   ];
   return (
     <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${COLOR.grayMid}`, display: "flex", zIndex: 100, boxShadow: "0 -2px 12px rgba(0,0,0,0.08)" }}>

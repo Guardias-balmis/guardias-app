@@ -67,6 +67,14 @@ export const TABLES = {
   // por tipo de transición (generadoPor/validadoPor/...) — el historial completo de quién hizo
   // qué ya queda en las filas append-only anteriores si algún día hace falta auditarlo.
   cuadrantes: { name: "cuadrantes", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("estado"), col("actorId"), col("fecha", "date")] },
+  // Bitácora de las generaciones con IA (decisión V-43). NO guarda el cuadrante —eso son filas de
+  // `asignaciones`— sino QUÉ pasó cada vez que alguien pulsó el botón: el modelo que respondió,
+  // cuántas vueltas del ciclo hicieron falta y con qué quedó. Es lo único que convierte «lo propuso
+  // una IA» en algo comprobable meses después, cuando `asignaciones` ya no distingue quién escribió
+  // cada fila, y es también la «marca para revisión manual»: un `resultado=REVISION_MANUAL` dice
+  // que ese mes hubo que montarlo a mano porque el modelo no supo. Append-only y sin `activo`: aquí
+  // no hay nada que cancelar, solo cosas que pasaron.
+  generaciones: { name: "generaciones", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("fecha", "date"), col("actorId"), col("modelo"), col("intentos", "number"), col("resultado"), col("violaciones", "json")] },
   // Excepcion (spec.md §2, decisión V-29): degrada una violación DURA→AVISO donde la normativa lo
   // permite. Hoy el único consumidor es `validate.js:twoR2Justified` (INV-9, tipo "2xR2"): un
   // 2×R2 dentro de [desde,hasta] deja de avisar si hay una excepción documentada que lo cubra.

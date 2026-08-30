@@ -145,6 +145,13 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
     ejecutarSorteoResponsable: (anio) => authed("ejecutarSorteoResponsable", { anio }),
     listResponsables: () => authed("listResponsables"),
     estadoCuadrante: (anio, mes) => authed("estadoCuadrante", { anio, mes }),
+    /**
+     * Generación del mes con IA (decisión V-43). NO está en REINTENTABLES a propósito, aunque el
+     * fallo de transporte del `/exec` que motivó V-26 le afecte igual: repetirla escribe el mes
+     * OTRA VEZ —con otro cuadrante, porque un modelo no es determinista— y gasta otra tanda de
+     * llamadas de cuota. Ante la duda, fuera: es la regla que ya fija el comentario de esa lista.
+     */
+    generarCuadranteIA: (anio, mes) => authed("generarCuadranteIA", { anio, mes }),
     marcarValidado: (anio, mes) => authed("marcarValidado", { anio, mes }),
     publicarCuadrante: (anio, mes) => authed("publicarCuadrante", { anio, mes }),
     despublicarCuadrante: (anio, mes) => authed("despublicarCuadrante", { anio, mes }),

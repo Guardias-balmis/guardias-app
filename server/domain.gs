@@ -241,6 +241,105 @@ function compareISO(a, b) {
   return { parseISO, toISO, weekday, isWeekend, addDays, addYears, addMonths, daysInMonth, datesOfMonth, academicYearOf, trimesterOf, trimesterWindow, isHoliday, autoGuardCode, bridgesOfMonth, bridgesBetween, compareISO };
 })();
 
+// ── apply.js ──
+var Apply = (function () {
+// Qué hay que escribir para que el mes quede EXACTAMENTE como la propuesta que el generador
+// acaba de validar. Es el lote de `cambios` para `guardarAsignaciones`.
+//
+// Existe porque `guardarAsignaciones` es append-only con clave `fecha|residenteId`: mandar solo
+// las filas nuevas AÑADE, nunca sustituye. Una guardia previa de OTRO residente el mismo día
+// sobrevivía al "aplicar", y el día acababa con tres personas — justo después de que la pantalla
+// dijera «✅ Sin violaciones», porque había validado la propuesta contra un mes que creía vacío.
+// Bastaba generar dos veces y que el modelo moviera a alguien de día, o generar sobre un mes ya
+// empezado a mano. Borrar una asignación es escribir su misma clave con `codigo` vacío, que
+// `readLatest(..., {emptyField:"codigo"})` interpreta como baja: nunca se borra una fila.
+//
+// Vive en el DOMINIO (y no en `client/lib`, donde nació) desde la decisión V-43: la generación se
+// hace ahora en el servidor, así que el mismo plan de reemplazo lo necesitan los dos lados. Es puro
+// y sin I/O como el resto del dominio: calcula QUÉ escribir, no escribe nada — igual que projection.js.
+
+  const { datesOfMonth } = Calendar;
+
+// Los códigos que el generador propone (el FORMATO DE RESPUESTA del prompt) y, por tanto, los
+// únicos que le pertenecen y puede borrar. V/R/B son marcadores de la rejilla que nadie le ha
+// pedido y que ningún invariante lee (`tally.js` solo computa G/GF/GP): borrarlos sería destruir
+// datos sobre los que el generador no tiene ninguna opinión. Y la ausencia de verdad, la que sí
+// leen INV-2/5/6/7, es una fila de `bloqueos` — no una «B» en la rejilla (V-19).
+const PROPONIBLES = new Set(["G", "GF", "GP"]);
+
+/**
+ * Los códigos que ESTA propuesta puede borrar. El 3P entra solo si la propuesta trae 3P
+ * (decisión V-38). Antes estaba fijo en la lista, y como `schedule.js` no repartía 3P, regenerar
+ * un mes se llevaba por delante los 3P colocados a mano —los únicos que había— y el aviso los
+ * contaba como «guardias». Es la misma regla que ya justificaba dejar fuera a V/R/B, aplicada
+ * también aquí: se borra lo que se propone, y solo eso.
+ */
+function borrablesDe(propuesta) {
+  const s = new Set(PROPONIBLES);
+  if (propuesta.some((a) => a.codigo === "3P")) s.add("3P");
+  return s;
+}
+
+const clave = (a) => `${a.fecha}|${a.residenteId}`; // la misma ASIG_KEY que usa el servidor
+
+/**
+ * @param {object} p
+ *   - mes/anio: el mes que se está generando
+ *   - residentes: los del equipo, solo para reconocer ids
+ *   - existentes: lo que YA tiene el mes (`api.listAsignaciones`), tal cual llega
+ *   - propuesta: las asignaciones del JSON pegado, ya parseadas
+ * @returns {{cambios:object[], borradas:object[], marcadores:object[], fueraDelMes:object[],
+ *            desconocidos:object[]}}
+ *   - cambios: la propuesta entera MÁS una fila de borrado por cada guardia previa que la
+ *     propuesta no reemplaza por clave. Las filas de la propuesta van sin `origen`, así que
+ *     reemplazar una cedida/comprada la devuelve al cómputo de INV-3/INV-4 — que es exactamente
+ *     lo que juzgó el validador, que tampoco vio ningún `origen`.
+ *   - borradas: esas guardias previas, para poder decir en pantalla cuántas se pierden ANTES
+ *     de pulsar (aplicar sobre un mes lleno es destructivo aunque el histórico se conserve).
+ *   - marcadores: las filas V/R/B que se conservan intactas.
+ *   - fueraDelMes: filas de la propuesta cuya fecha no es un día real de este mes. No se filtran
+ *     ni se corrigen aquí: quien llame decide, porque una fecha alucinada es motivo para NO
+ *     aplicar. Ningún invariante de `validateMonth` la mira (`byDay`/`dayset` solo tienen días
+ *     del mes) y sin embargo `guardarAsignaciones` la escribiría — en otro mes, y cambiándole
+ *     el estado de paso.
+ *   - desconocidos: filas cuyo `residenteId` no es de nadie. INV-1 las ve (V-21) pero solo como
+ *     `aviso`, así que se aplicaban: filas que nadie puede ver ni corregir desde la rejilla, en
+ *     una tabla que no se borra nunca. Con el reemplazo de arriba es además destructivo — el
+ *     cuadrante bueno se borra y lo que lo sustituye es invisible. Mismo criterio que
+ *     `fueraDelMes`: es un defecto de la RESPUESTA, no una regla de negocio incumplida, y
+ *     rechazarlo no deja al servicio sin cuadrante (la rejilla sigue estando ahí).
+ */
+function monthReplacementPlan({ mes, anio, residentes = [], existentes = [], propuesta = [] }) {
+  const delMes = new Set(datesOfMonth(anio, mes));
+  const conocidos = new Set(residentes.map((r) => r.id));
+  const fueraDelMes = propuesta.filter((a) => !delMes.has(a.fecha));
+  const desconocidos = propuesta.filter((a) => !conocidos.has(a.residenteId));
+  const propuestaKeys = new Set(propuesta.map(clave));
+
+  const borrables = borrablesDe(propuesta);
+  const borradas = [];
+  const marcadores = [];
+  for (const a of existentes) {
+    if (!borrables.has(a.codigo)) { marcadores.push(a); continue; }
+    if (propuestaKeys.has(clave(a))) continue; // la propuesta ya la pisa por clave: nada que borrar
+    borradas.push(a);
+  }
+
+  return {
+    cambios: [
+      ...propuesta.map((a) => ({ fecha: a.fecha, residenteId: a.residenteId, codigo: a.codigo })),
+      ...borradas.map((a) => ({ fecha: a.fecha, residenteId: a.residenteId, codigo: "" })),
+    ],
+    borradas,
+    marcadores,
+    fueraDelMes,
+    desconocidos,
+  };
+}
+
+  return { monthReplacementPlan };
+})();
+
 // ── residents.js ──
 var Residents = (function () {
 // Periodos formativos, nivel y grupo (spec.md §3.1–3.3, decisiones S-2 y S-3).
@@ -3191,4 +3290,4 @@ function diasCubiertosPor(bloqueos, dias) {
 })();
 
 // ── API pública ──
-var Domain = Object.assign({}, Calendar, Residents, Tally, Absences, BlockPreview, Imaginaria, Accumulate, Thirdpost, Equity, Validate, Responsible, Cuadrante, Projection, Schedule);
+var Domain = Object.assign({}, Calendar, Apply, Residents, Tally, Absences, BlockPreview, Imaginaria, Accumulate, Thirdpost, Equity, Validate, Responsible, Cuadrante, Projection, Schedule);
