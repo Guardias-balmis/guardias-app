@@ -254,7 +254,7 @@ var Apply = (function () {
 // empezado a mano. Borrar una asignación es escribir su misma clave con `codigo` vacío, que
 // `readLatest(..., {emptyField:"codigo"})` interpreta como baja: nunca se borra una fila.
 //
-// Vive en el DOMINIO (y no en `client/lib`, donde nació) desde la decisión V-43: la generación se
+// Vive en el DOMINIO (y no en `client/lib`, donde nació) desde la decisión V-45: la generación se
 // hace ahora en el servidor, así que el mismo plan de reemplazo lo necesitan los dos lados. Es puro
 // y sin I/O como el resto del dominio: calcula QUÉ escribir, no escribe nada — igual que projection.js.
 

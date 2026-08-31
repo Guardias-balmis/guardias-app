@@ -115,7 +115,7 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
 }
 
 /**
- * Generador de cuadrante con IA (decisión V-43). Vive en Inicio y NO en una pantalla propia: es
+ * Generador de cuadrante con IA (decisión V-45). Vive en Inicio y NO en una pantalla propia: es
  * una acción, no una sección — se pulsa tres o cuatro veces al año, cuando toca montar el mes.
  *
  * Aquí no hay ni una regla de negocio. El servidor le pide el cuadrante al modelo, lo juzga con el
@@ -258,17 +258,24 @@ function HomeScreen() {
   // Desplegable de "Equipo" (a pedido del autor, 2026-08-19): un nivel a la vez, no los cuatro a
   // la vez — clic de nuevo sobre el mismo nivel lo cierra.
   const [nivelAbierto, setNivelAbierto] = useState(null);
+  // Del año de HOY, no del mes seleccionado (`mes`/`anio` navegan la rejilla, no el mandato): no
+  // depende de esos dos, para no repetir esta consulta a cada click de ◀/▶.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const hoy = new Date();
+      const r = await app.api.estadoResponsable(hoy.getUTCFullYear());
+      if (cancelled) return;
+      if (r.ok) setProximoMandato(r.siguiente || null);
+    })();
+    return () => { cancelled = true; };
+  }, [myResidente?.id]);
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setEstadoMes(null);
-      const hoy = new Date();
-      const [r, rEstado] = await Promise.all([
-        app.api.estadoResponsable(hoy.getUTCFullYear()),
-        app.api.estadoCuadrante(anio, mes),
-      ]);
+      const rEstado = await app.api.estadoCuadrante(anio, mes);
       if (cancelled) return;
-      if (r.ok) setProximoMandato(r.siguiente || null);
       // Un fallo aquí solo esconde los botones que dependen del permiso: no se asume ninguno.
       setSinResponsable(rEstado.ok ? rEstado.sinResponsable === true : false);
       setEstadoMes(rEstado.ok ? rEstado.estado : null);

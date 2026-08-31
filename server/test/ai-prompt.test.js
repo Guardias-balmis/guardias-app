@@ -1,5 +1,5 @@
 // Tests de server/src/ai-prompt.js — el prompt que se le manda al modelo y, sobre todo, el PARSEO
-// de lo que devuelve (decisión V-43).
+// de lo que devuelve (decisión V-45).
 //
 // El parseo lleva la mayoría de los tests a propósito: el prompt es texto y su peor fallo es que
 // el modelo lo entienda regular; el parseo es la frontera por donde entra una respuesta que nadie

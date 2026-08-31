@@ -38,15 +38,16 @@
 4. **Script Properties** (Proyecto → Configuración): `OAUTH_CLIENT_ID` = el del paso 3;
    `SPREADSHEET_ID` = el del paso 1. (`SESSION_SECRET` se autogenera en el primer uso.)
 
-   **Generador con IA (decisión V-43), opcional:** `GEMINI_API_KEY` = una clave de la Gemini API
+   **Generador con IA (decisión V-45), opcional:** `GEMINI_API_KEY` = una clave de la Gemini API
    (aistudio.google.com → «Get API key»), y `GEMINI_MODEL` si se quiere uno distinto del defecto
    `gemma-4-31b-it`. La clave vive SOLO aquí: nunca se escribe en el código ni llega al navegador,
    y viaja a Google en una cabecera, no en la URL (una clave en la URL acaba en los registros de
    ejecución del proyecto y de ahí ya no se borra).
 
-   Sin `GEMINI_API_KEY` la aplicación funciona entera igual; lo único que no aparece es el botón
-   «Generar cuadrante de guardias» de Inicio, y quien lo intente ve el nombre exacto de la
-   propiedad que falta. **Si algún día Google retira ese modelo**, la respuesta será un HTTP 404
+   Sin `GEMINI_API_KEY` la aplicación funciona entera igual; el botón «Generar cuadrante de
+   guardias» de Inicio sigue apareciendo (su visibilidad depende solo del permiso del ciclo y del
+   estado del mes, no de si la IA está configurada), pero quien lo pulse ve al momento el nombre
+   exacto de la propiedad que falta, sin gastar ningún intento. **Si algún día Google retira ese modelo**, la respuesta será un HTTP 404
    con el mensaje de Google: se arregla poniendo un id vigente en `GEMINI_MODEL`, sin tocar código
    ni volver a desplegar — que es justo para lo que existe esa propiedad.
 

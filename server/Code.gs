@@ -8,7 +8,7 @@
  * `server-lib.gs` (global Server), que Apps Script carga en el mismo ámbito global.
  *
  * Configuración en Script Properties (Proyecto → Configuración): OAUTH_CLIENT_ID, SPREADSHEET_ID
- * y, para el generador con IA (decisión V-43), GEMINI_API_KEY — y opcionalmente GEMINI_MODEL, que
+ * y, para el generador con IA (decisión V-45), GEMINI_API_KEY — y opcionalmente GEMINI_MODEL, que
  * por defecto es "gemma-4-31b-it". Sin GEMINI_API_KEY todo lo demás sigue funcionando igual: la
  * única acción que deja de estar disponible es `generarCuadranteIA`, y lo dice nombrando la
  * propiedad que falta en vez de fallar con un error de Google.
@@ -53,7 +53,7 @@ function deps_() {
     issueNonce: issueNonce_,
     consumeNonce: consumeNonce_,
     fetchTokeninfo: fetchTokeninfo_,
-    // Puerto de generación (V-43). El núcleo del generador (prompt, parseo y ciclo de reintentos)
+    // Puerto de generación (V-45). El núcleo del generador (prompt, parseo y ciclo de reintentos)
     // es puro y vive en el bundle; esto es solo el cable a Google.
     llm: llm_(),
   };
@@ -117,7 +117,7 @@ function fetchTokeninfo_(idToken) {
 }
 
 /**
- * Adaptador del puerto de generación con IA (decisión V-43): el ÚNICO sitio del proyecto que sabe
+ * Adaptador del puerto de generación con IA (decisión V-45): el ÚNICO sitio del proyecto que sabe
  * que detrás hay una Gemini API y un modelo Gemma.
  *
  * Tres decisiones que no son de estilo:
@@ -134,12 +134,18 @@ function fetchTokeninfo_(idToken) {
  *    «inténtalo otra vez».
  */
 function llm_() {
+  // La ausencia de la clave se comprueba AQUÍ, no dentro de `generar`: `deps.llm` tiene que salir
+  // falsy para que el guard de `router.js:handleGenerarIA` (el mismo que usa `dev-server.mjs` con
+  // `llm: undefined`) corte en un solo golpe, con el mensaje limpio que promete el comentario de
+  // cabecera de este fichero — si `generar` existiera pero fallara al invocarse, el ciclo de
+  // reintentos de `generateSchedule` lo trataría como un intento gastado y gastaría los 3 antes de
+  // decir lo mismo, dejando además una fila `ERROR_MODELO, intentos:3` engañosa en `generaciones`.
+  var apiKey = PROPS.getProperty("GEMINI_API_KEY");
+  if (!apiKey) return null;
   var modelo = PROPS.getProperty("GEMINI_MODEL") || "gemma-4-31b-it";
   return {
     modelo: modelo,
     generar: function (prompt) {
-      var apiKey = PROPS.getProperty("GEMINI_API_KEY");
-      if (!apiKey) return { ok: false, error: "falta la propiedad GEMINI_API_KEY en la configuración del script" };
       var url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
       // Un solo mensaje de usuario, sin `systemInstruction`: los modelos Gemma servidos por la
       // Gemini API no admiten instrucción de sistema, y mandarla es un 400 — el prompt ya lleva

@@ -67,7 +67,7 @@ export const TABLES = {
   // por tipo de transición (generadoPor/validadoPor/...) — el historial completo de quién hizo
   // qué ya queda en las filas append-only anteriores si algún día hace falta auditarlo.
   cuadrantes: { name: "cuadrantes", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("estado"), col("actorId"), col("fecha", "date")] },
-  // Bitácora de las generaciones con IA (decisión V-43). NO guarda el cuadrante —eso son filas de
+  // Bitácora de las generaciones con IA (decisión V-45). NO guarda el cuadrante —eso son filas de
   // `asignaciones`— sino QUÉ pasó cada vez que alguien pulsó el botón: el modelo que respondió,
   // cuántas vueltas del ciclo hicieron falta y con qué quedó. Es lo único que convierte «lo propuso
   // una IA» en algo comprobable meses después, cuando `asignaciones` ya no distingue quién escribió

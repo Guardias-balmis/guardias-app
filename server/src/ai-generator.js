@@ -1,4 +1,4 @@
-// Ciclo de generación del cuadrante con un modelo de lenguaje (decisión V-43). PURO: recibe el
+// Ciclo de generación del cuadrante con un modelo de lenguaje (decisión V-45). PURO: recibe el
 // `llm` y el `validar` inyectados, así que aquí no hay red, ni Sheets, ni dominio — es el núcleo
 // hexagonal del generador, y el adaptador impuro (UrlFetchApp contra la Gemini API) vive donde
 // viven todos los adaptadores, en `Code.gs`.

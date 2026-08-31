@@ -1,4 +1,4 @@
-// Tests de la acción `generarCuadranteIA` (decisión V-43): permiso del ciclo, estado del mes,
+// Tests de la acción `generarCuadranteIA` (decisión V-45): permiso del ciclo, estado del mes,
 // validación de la propuesta ANTES de escribir, ciclo de reintentos y bitácora.
 //
 // Lo que estos tests defienden, por orden de gravedad si se rompiera:

@@ -1,4 +1,4 @@
-// Tests de server/src/ai-generator.js — el ciclo propuesta → validación → reintento (V-43).
+// Tests de server/src/ai-generator.js — el ciclo propuesta → validación → reintento (V-45).
 //
 // Es el corazón del encargo y por eso se prueba con un `llm` y un `validar` falsos: lo que se
 // comprueba aquí no es que un modelo acierte (eso no se puede probar), sino que el ciclo se

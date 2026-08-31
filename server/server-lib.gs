@@ -76,7 +76,7 @@ const TABLES = {
   // por tipo de transición (generadoPor/validadoPor/...) — el historial completo de quién hizo
   // qué ya queda en las filas append-only anteriores si algún día hace falta auditarlo.
   cuadrantes: { name: "cuadrantes", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("estado"), col("actorId"), col("fecha", "date")] },
-  // Bitácora de las generaciones con IA (decisión V-43). NO guarda el cuadrante —eso son filas de
+  // Bitácora de las generaciones con IA (decisión V-45). NO guarda el cuadrante —eso son filas de
   // `asignaciones`— sino QUÉ pasó cada vez que alguien pulsó el botón: el modelo que respondió,
   // cuántas vueltas del ciclo hicieron falta y con qué quedó. Es lo único que convierte «lo propuso
   // una IA» en algo comprobable meses después, cuando `asignaciones` ya no distingue quién escribió
@@ -388,7 +388,7 @@ function fail(reason) {
 
 // ── ai-prompt.js ──
 var AiPrompt = (function () {
-// Prompt de generación del cuadrante y parseo de la respuesta del modelo (decisión V-43). PURO:
+// Prompt de generación del cuadrante y parseo de la respuesta del modelo (decisión V-45). PURO:
 // solo texto y JSON — ni red, ni Sheets, ni dominio. Todo lo derivado (nivel de cada residente,
 // contaje acumulado, puentes del mes) llega ya calculado desde el router, que es quien tiene
 // `deps.domain`: así este módulo se puede probar entero sin montar un contexto de dominio, y el
@@ -707,7 +707,7 @@ function parseGenerationResponse(texto) {
 
 // ── ai-generator.js ──
 var AiGenerator = (function () {
-// Ciclo de generación del cuadrante con un modelo de lenguaje (decisión V-43). PURO: recibe el
+// Ciclo de generación del cuadrante con un modelo de lenguaje (decisión V-45). PURO: recibe el
 // `llm` y el `validar` inyectados, así que aquí no hay red, ni Sheets, ni dominio — es el núcleo
 // hexagonal del generador, y el adaptador impuro (UrlFetchApp contra la Gemini API) vive donde
 // viven todos los adaptadores, en `Code.gs`.
@@ -1497,7 +1497,7 @@ function handleRequest(rawBody, deps) {
       // revalidado AQUÍ con los datos del store (nunca se confía en un `violaciones` que
       // mandara el cliente) — mismo principio que el rol derivado ("nunca un flag que el
       // cliente pueda falsear").
-      // Generación del cuadrante con IA (decisión V-43). El modelo PROPONE y el validador de
+      // Generación del cuadrante con IA (decisión V-45). El modelo PROPONE y el validador de
       // siempre DISPONE: nada se escribe hasta que no queda ni una violación `error`, y si tras
       // los 3 intentos sigue habiéndolas no se escribe nada en absoluto (solo la bitácora).
       case "generarCuadranteIA":
@@ -1968,7 +1968,7 @@ function requireCicloPermiso(deps, session, accion) {
  * — mismo ensamblado que ambos, vía `deps.domain.buildMonthContext`.
  */
 /**
- * Los datos ya DERIVADOS que necesita el prompt (V-43). Vive aquí y no en `ai-prompt.js` porque
+ * Los datos ya DERIVADOS que necesita el prompt (V-45). Vive aquí y no en `ai-prompt.js` porque
  * derivar es cosa del dominio (`deps.domain`) y aquel módulo es texto puro: así el prompt se
  * puede probar sin montar medio dominio, y este ensamblado se prueba con el resto del router.
  *
@@ -2010,7 +2010,7 @@ function promptData(deps, mes, anio, snap) {
 }
 
 /**
- * `generarCuadranteIA` (decisión V-43). El orden importa y es el del encargo: permiso → estado →
+ * `generarCuadranteIA` (decisión V-45). El orden importa y es el del encargo: permiso → estado →
  * contexto → propuesta del modelo → VALIDACIÓN → escritura. La escritura es el último paso y solo
  * ocurre si el validador calla; si no calla en 3 intentos, no se escribe ni una fila y queda la
  * bitácora diciendo que ese mes hay que montarlo a mano.
@@ -2112,7 +2112,7 @@ function escribirBitacora(deps, session, req, modelo, intentos, resultado, viola
 
 /**
  * @param {object[]} [propuesta] Asignaciones del mes a juzgar EN LUGAR de las guardadas. Lo usa
- *   `generarCuadranteIA` (V-43) para validar lo que propone el modelo antes de escribir nada:
+ *   `generarCuadranteIA` (V-45) para validar lo que propone el modelo antes de escribir nada:
  *   sin esto habría que guardar primero y validar después, que es exactamente lo contrario de
  *   «la IA propone, el validador dispone». Sin el parámetro, se juzga lo que hay en el Sheet.
  */

@@ -668,7 +668,7 @@ export function handleRequest(rawBody, deps) {
       // revalidado AQUÍ con los datos del store (nunca se confía en un `violaciones` que
       // mandara el cliente) — mismo principio que el rol derivado ("nunca un flag que el
       // cliente pueda falsear").
-      // Generación del cuadrante con IA (decisión V-43). El modelo PROPONE y el validador de
+      // Generación del cuadrante con IA (decisión V-45). El modelo PROPONE y el validador de
       // siempre DISPONE: nada se escribe hasta que no queda ni una violación `error`, y si tras
       // los 3 intentos sigue habiéndolas no se escribe nada en absoluto (solo la bitácora).
       case "generarCuadranteIA":
@@ -1139,7 +1139,7 @@ function requireCicloPermiso(deps, session, accion) {
  * — mismo ensamblado que ambos, vía `deps.domain.buildMonthContext`.
  */
 /**
- * Los datos ya DERIVADOS que necesita el prompt (V-43). Vive aquí y no en `ai-prompt.js` porque
+ * Los datos ya DERIVADOS que necesita el prompt (V-45). Vive aquí y no en `ai-prompt.js` porque
  * derivar es cosa del dominio (`deps.domain`) y aquel módulo es texto puro: así el prompt se
  * puede probar sin montar medio dominio, y este ensamblado se prueba con el resto del router.
  *
@@ -1181,7 +1181,7 @@ function promptData(deps, mes, anio, snap) {
 }
 
 /**
- * `generarCuadranteIA` (decisión V-43). El orden importa y es el del encargo: permiso → estado →
+ * `generarCuadranteIA` (decisión V-45). El orden importa y es el del encargo: permiso → estado →
  * contexto → propuesta del modelo → VALIDACIÓN → escritura. La escritura es el último paso y solo
  * ocurre si el validador calla; si no calla en 3 intentos, no se escribe ni una fila y queda la
  * bitácora diciendo que ese mes hay que montarlo a mano.
@@ -1283,7 +1283,7 @@ function escribirBitacora(deps, session, req, modelo, intentos, resultado, viola
 
 /**
  * @param {object[]} [propuesta] Asignaciones del mes a juzgar EN LUGAR de las guardadas. Lo usa
- *   `generarCuadranteIA` (V-43) para validar lo que propone el modelo antes de escribir nada:
+ *   `generarCuadranteIA` (V-45) para validar lo que propone el modelo antes de escribir nada:
  *   sin esto habría que guardar primero y validar después, que es exactamente lo contrario de
  *   «la IA propone, el validador dispone». Sin el parámetro, se juzga lo que hay en el Sheet.
  */

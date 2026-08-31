@@ -76,7 +76,7 @@ export async function thirdPostViolations({ api, mes, anio, residentes, asignaci
  * veces en la secuencia y saldría como repetición.
  *
  * Se exportaba para `Generator.jsx`, que montaba el mismo historial desde el histórico que ya
- * tenía cargado. Esa pantalla desapareció con la decisión V-43 (la generación se hace ahora en el
+ * tenía cargado. Esa pantalla desapareció con la decisión V-45 (la generación se hace ahora en el
  * servidor), así que hoy el único invocador es la función de arriba y el `export` se queda como
  * punto de entrada probado por si otra pantalla vuelve a necesitar el recorte — la alternativa,
  * copiarlo, es exactamente la clase de duplicado que se desincroniza sin que falle ningún test.

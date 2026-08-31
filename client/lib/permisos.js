@@ -22,7 +22,7 @@ export function puedeMoverCiclo({ isResponsable, grupo, sinResponsable }) {
 }
 
 /**
- * Si se le ofrece a esta sesión el botón de «Generar cuadrante con IA» de Inicio (decisión V-43).
+ * Si se le ofrece a esta sesión el botón de «Generar cuadrante con IA» de Inicio (decisión V-45).
  *
  * Es el permiso del ciclo MÁS el estado del mes: generar reescribe el cuadrante entero, y un mes
  * PUBLICADO no admite ediciones (el servidor ya lo rechaza — esto solo evita ofrecer un botón que

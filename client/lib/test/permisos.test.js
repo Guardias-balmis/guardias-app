@@ -1,6 +1,6 @@
 // Tests de client/lib/permisos.js — quién ve qué en la interfaz.
 //
-// Existen sobre todo por `puedeGenerarCuadrante` (decisión V-43): el encargo pide que el botón de
+// Existen sobre todo por `puedeGenerarCuadrante` (decisión V-45): el encargo pide que el botón de
 // generar el cuadrante con IA solo lo vea el responsable de guardias, y esa regla es exactamente
 // el tipo de cosa que se rompe sin que nadie lo note — un botón de más no da error, solo se lo
 // enseña a quien no debe. Como un `.jsx` no es testeable en Node (Babel en el navegador), la
@@ -31,7 +31,7 @@ test("puedeMoverCiclo: con mandato vigente, un Mayor que no es el titular no mue
   assert.equal(puedeMoverCiclo(MAYOR), false);
 });
 
-// ── el botón de generar con IA (V-43) ─────────────────────────────────────────────────────────
+// ── el botón de generar con IA (V-45) ─────────────────────────────────────────────────────────
 
 test("el Responsable ve el botón en un mes editable", () => {
   assert.equal(puedeGenerarCuadrante({ ...RESPONSABLE, estado: "BORRADOR" }), true);

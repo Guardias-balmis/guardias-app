@@ -1,4 +1,4 @@
-// Prompt de generación del cuadrante y parseo de la respuesta del modelo (decisión V-43). PURO:
+// Prompt de generación del cuadrante y parseo de la respuesta del modelo (decisión V-45). PURO:
 // solo texto y JSON — ni red, ni Sheets, ni dominio. Todo lo derivado (nivel de cada residente,
 // contaje acumulado, puentes del mes) llega ya calculado desde el router, que es quien tiene
 // `deps.domain`: así este módulo se puede probar entero sin montar un contexto de dominio, y el
