@@ -338,12 +338,16 @@ export function handleRequest(rawBody, deps) {
           return { ok: true, festivos: festivosInRange(deps, rango.desde, rango.hasta) };
         });
 
-      // Carga en LOTE (una escritura, un lock): un año de festivos se pega de golpe. Mismo permiso
-      // que el ciclo del cuadrante (V-16), porque es dato compartido de todo el servicio.
+      // Carga en LOTE (una escritura, un lock): un año de festivos se pega de golpe. Decisión del
+      // autor (2026-09-01): a diferencia del resto de lo que gatea el permiso del ciclo (V-16),
+      // festivos y eventos son hechos externos objetivos (BOE/DOGV/ayuntamiento; fechas de
+      // eventos ya fijadas por el servicio) sin ninguna decisión de negocio de por medio -- exigir
+      // ser Mayor no protege nada real, un R3 se equivoca transcribiendo igual que un R1, y es
+      // append-only/corregible. Abierto a cualquier sesión autenticada. `sortearEvento` (más abajo)
+      // se abre también: designa personas, pero el sorteo en sí es reproducible y auditable
+      // (semilla + candidatos guardados), así que quien lo ejecuta no puede manipular el resultado.
       case "crearFestivos":
-        return authed(req, deps, (session) => {
-          const denegado = requireCicloPermiso(deps, session, "cargar festivos");
-          if (denegado) return denegado;
+        return authed(req, deps, () => {
           if (!Array.isArray(req.festivos) || req.festivos.length === 0) return { ok: false, error: "festivos vacío" };
           let filas;
           try {
@@ -360,9 +364,7 @@ export function handleRequest(rawBody, deps) {
 
       // Anular una fecha mal cargada: reinserción con activo=false, jamás borrado (append-only).
       case "anularFestivo":
-        return authed(req, deps, (session) => {
-          const denegado = requireCicloPermiso(deps, session, "anular un festivo");
-          if (denegado) return denegado;
+        return authed(req, deps, () => {
           const actual = allFestivos(deps).find((f) => f.id === req.id);
           if (!actual) return { ok: false, error: "festivo no encontrado" };
           deps.store.appendRecord("festivos", { ...actual, activo: false });
@@ -507,15 +509,15 @@ export function handleRequest(rawBody, deps) {
         });
 
       // EVENTOS DEL SERVICIO (INV-10, decisión V-20). Dato de entrada como los festivos: la
-      // fecha la pone el servicio cada año. Leerlos está abierto (los necesita el validador);
-      // crearlos y anularlos usa el permiso del ciclo (V-16), porque es dato de todo el equipo.
+      // fecha la pone el servicio cada año. Abierto a cualquier sesión desde 2026-09-01 (mismo
+      // criterio que festivos, ver el comentario de `crearFestivos`): crear/anular es transcribir
+      // una fecha ya fijada, y el sorteo (`sortearEvento`) es reproducible y auditable por sí
+      // mismo, así que abrir quién puede ejecutarlo no abre quién puede manipular el resultado.
       case "listEventos":
         return authed(req, deps, () => ({ ok: true, eventos: activeEventos(deps) }));
 
       case "crearEvento":
-        return authed(req, deps, (session) => {
-          const denegado = requireCicloPermiso(deps, session, "registrar un evento del servicio");
-          if (denegado) return denegado;
+        return authed(req, deps, () => {
           if (!EVENTO_TIPOS.has(req.tipo)) return { ok: false, error: "tipo de evento inválido (NAVIDAD o DESPEDIDA)" };
           try { deps.domain.parseISO(req.fecha); } catch (e) { return { ok: false, error: "fecha inválida: " + e.message }; }
           const voluntarios = Array.isArray(req.voluntarios) ? req.voluntarios : [];
@@ -524,9 +526,7 @@ export function handleRequest(rawBody, deps) {
         });
 
       case "anularEvento":
-        return authed(req, deps, (session) => {
-          const denegado = requireCicloPermiso(deps, session, "anular un evento del servicio");
-          if (denegado) return denegado;
+        return authed(req, deps, () => {
           const actual = deps.store.readLatest("eventos", (r) => r.id).find((e) => e.id === req.id);
           if (!actual) return { ok: false, error: "evento no encontrado" };
           deps.store.appendRecord("eventos", { ...actual, activo: false });
@@ -569,9 +569,7 @@ export function handleRequest(rawBody, deps) {
       // puro sobre (candidatos, semilla), y la fila queda en `sorteos` para recomputarlo. Un
       // booleano «hubo sorteo» no prueba nada; esto sí.
       case "sortearEvento":
-        return authed(req, deps, (session) => {
-          const denegado = requireCicloPermiso(deps, session, "sortear un evento del servicio");
-          if (denegado) return denegado;
+        return authed(req, deps, () => {
           const evento = activeEventos(deps).find((e) => e.id === req.id);
           if (!evento) return { ok: false, error: "evento no encontrado" };
           if (evento.sorteoId) return { ok: false, error: "ese evento ya está sorteado" };

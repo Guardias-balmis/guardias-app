@@ -398,18 +398,17 @@ function DatosServicioScreen() {
     })();
     return () => { cancelled = true; };
   }, []);
-  const puedoEscribir = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
+  // Festivos y eventos dejaron de estar gateados por el permiso del ciclo (decisión del autor,
+  // 2026-09-01): son hechos externos objetivos (BOE/DOGV/ayuntamiento; fechas ya fijadas por el
+  // servicio), sin ninguna decisión de negocio de por medio, así que cualquier sesión autenticada
+  // puede cargarlos y corregirlos — ver el comentario de `crearFestivos` en router.js. Excepciones
+  // (INV-9) SÍ sigue exigiendo el permiso del ciclo: justificar un 2×R2 es una decisión real, no
+  // transcribir un dato.
+  const puedeExcepciones = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
 
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 720, margin: "0 auto" }}>
       <SectionTitle>🗓️ Datos del servicio</SectionTitle>
-
-      {!puedoEscribir && (
-        <Info>
-          Puedes consultarlos, pero para cargarlos o corregirlos hace falta ser el Responsable del
-          contaje o —si el mandato está sin decidir— un R3 o R4.
-        </Info>
-      )}
 
       <Card>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -419,9 +418,16 @@ function DatosServicioScreen() {
         </div>
       </Card>
 
-      <Festivos api={api} anio={anio} showToast={showToast} puedoEscribir={puedoEscribir} />
-      <Eventos api={api} residentes={residentes} showToast={showToast} puedoEscribir={puedoEscribir} />
-      <Excepciones api={api} showToast={showToast} puedoEscribir={puedoEscribir} />
+      <Festivos api={api} anio={anio} showToast={showToast} puedoEscribir={true} />
+      <Eventos api={api} residentes={residentes} showToast={showToast} puedoEscribir={true} />
+
+      {!puedeExcepciones && (
+        <Info>
+          Puedes consultar las excepciones, pero para registrar o anular una hace falta ser el
+          Responsable del contaje o —si el mandato está sin decidir— un R3 o R4.
+        </Info>
+      )}
+      <Excepciones api={api} showToast={showToast} puedoEscribir={puedeExcepciones} />
 
       <Btn onClick={() => setTab("settings")} color={COLOR.gray} textColor={COLOR.blueDark}>← Volver</Btn>
     </div>
