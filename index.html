@@ -22,6 +22,35 @@
   ::-webkit-scrollbar{width:4px;height:4px}
   ::-webkit-scrollbar-track{background:transparent}
   ::-webkit-scrollbar-thumb{background:#C0CCD8;border-radius:4px}
+
+  /* Volumen + feedback táctil (2026-09-01, a pedido del autor: "más interactiva, estilo Google").
+     Vive acá y no en client/lib/design-tokens.js porque :hover/:active/@keyframes no existen en
+     un style={{}} de React — los componentes de client/ui/components.jsx (Btn, Card, QuickCard,
+     Toast) SOLO ponen la clase; el color/tamaño de cada uno sigue en línea, sin tocar. Al vivir
+     en los componentes compartidos, esto alcanza a TODAS las pantallas de una sola vez, no pantalla
+     por pantalla. `prefers-reduced-motion` apaga la animación de entrada, nunca el feedback de
+     toque en sí (que es instantáneo, no una animación que moleste).
+     `@media (hover: hover)` excluye el resalte al pasar el mouse en pantallas táctiles, que no
+     tienen "pasar el mouse" — ahí solo cuenta el `:active` al tocar. */
+  .gapp-tap{transition:transform .15s cubic-bezier(.2,0,0,1),filter .15s cubic-bezier(.2,0,0,1),opacity .15s}
+  .gapp-tap:active:not(:disabled){transform:scale(0.97)}
+  @media (hover:hover){ .gapp-tap:hover:not(:disabled){filter:brightness(1.04)} }
+
+  .gapp-card{transition:box-shadow .22s cubic-bezier(.2,0,0,1),transform .22s cubic-bezier(.2,0,0,1)}
+  @media (hover:hover){
+    .gapp-card:hover{box-shadow:0 2px 4px rgba(31,78,121,.10),0 10px 28px rgba(31,78,121,.16);transform:translateY(-1px)}
+  }
+  .gapp-card:active{transform:translateY(0) scale(.99)}
+
+  @keyframes gapp-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes gapp-pop{from{opacity:0;transform:translate(-50%,8px) scale(.96)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
+  .gapp-rise{animation:gapp-rise .28s cubic-bezier(.2,0,0,1) both}
+  .gapp-pop{animation:gapp-pop .22s cubic-bezier(.2,0,0,1) both}
+
+  @media (prefers-reduced-motion:reduce){
+    .gapp-rise,.gapp-pop{animation:none}
+    .gapp-tap,.gapp-card{transition:none}
+  }
 </style>
 </head>
 <body>

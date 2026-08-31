@@ -22,13 +22,32 @@ export const COLOR = {
 
 export const RADIUS = { md: "12px", sm: "8px" };
 export const SHADOW = {
-  card: "0 2px 12px rgba(31,78,121,0.10)",
+  // De una sola capa a dos (2026-09-01, a pedido del autor: "más volumen, estilo Google") — el
+  // lenguaje de elevación de Material combina una sombra ceñida (contacto) con una difusa
+  // (ambiente) en vez de una única sombra grande; mismo tono/intensidad de antes, no un cambio
+  // de color. `card` sigue siendo el reposo; `raised` es la elevación al pasar el mouse o tocar,
+  // usada por `.gapp-card`/`.gapp-tap` en index.html, nunca puesta a mano en una pantalla.
+  card: "0 1px 2px rgba(31,78,121,0.08), 0 2px 10px rgba(31,78,121,0.08)",
+  raised: "0 2px 4px rgba(31,78,121,0.10), 0 10px 28px rgba(31,78,121,0.16)",
   elevated: "0 8px 32px rgba(31,78,121,0.16)",
   header: "0 2px 8px rgba(0,0,0,0.2)",
   bottomNav: "0 -2px 12px rgba(0,0,0,0.08)",
   googleBtn: "0 2px 8px rgba(0,0,0,0.06)",
   subTabActive: "0 1px 4px rgba(0,0,0,0.1)",
   toggleKnob: "0 1px 4px rgba(0,0,0,0.2)",
+};
+
+// Escala de movimiento (2026-09-01): duraciones + la curva "emphasized" de Material 3
+// (cubic-bezier(.2,0,0,1)), no la genérica ease-in-out — es la que da esa sensación de "asienta
+// rápido y frena con cuidado" característica de las apps de Google. Los valores en sí (no solo
+// la duración) viven aquí para que `index.html` (que no puede importar este módulo — es CSS
+// plano, no JS) y cualquier `style={{transition:...}}` futuro usen la MISMA curva citándola,
+// en vez de que cada sitio escriba su propio cubic-bezier a mano y se desincronicen.
+export const MOTION = {
+  fast: "150ms cubic-bezier(.2,0,0,1)",
+  base: "220ms cubic-bezier(.2,0,0,1)",
+  slow: "320ms cubic-bezier(.2,0,0,1)",
+  easing: "cubic-bezier(.2,0,0,1)",
 };
 
 // Un color pastel distinto por año de residencia (2026-08-19, a pedido del autor: "que no sea

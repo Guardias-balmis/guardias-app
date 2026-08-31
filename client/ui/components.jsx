@@ -10,7 +10,7 @@ import { COLOR, RADIUS, SHADOW } from "./client/lib/design-tokens.js";
 // que no interfiere con ningún contraste ya auditado dentro de `children`.
 function Card({ title, children, accent = COLOR.blueDark }) {
   return (
-    <div style={{ background: "#fff", borderRadius: RADIUS.md, padding: 16, boxShadow: SHADOW.card }}>
+    <div className="gapp-rise" style={{ background: "#fff", borderRadius: RADIUS.md, padding: 16, boxShadow: SHADOW.card }}>
       {title && (
         <div style={{ fontSize: 13, fontWeight: 700, color: accent, marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.4, paddingBottom: 8, borderBottom: `2px solid ${accent}` }}>
           {title}
@@ -27,7 +27,7 @@ function SectionTitle({ children }) {
 
 function Btn({ onClick, children, disabled, color = COLOR.blue, textColor = "#fff", ...rest }) {
   return (
-    <button onClick={onClick} disabled={disabled} {...rest} style={{
+    <button onClick={onClick} disabled={disabled} {...rest} className="gapp-tap" style={{
       background: disabled ? COLOR.grayMid : color,
       color: disabled ? COLOR.grayDark : textColor,
       border: "none", borderRadius: 10, padding: "13px 20px",
@@ -39,7 +39,7 @@ function Btn({ onClick, children, disabled, color = COLOR.blue, textColor = "#ff
 
 function Toast({ msg, type }) {
   return (
-    <div style={{
+    <div className="gapp-pop" style={{
       position: "fixed", bottom: 90, left: "50%", transform: "translateX(-50%)",
       background: type === "err" ? COLOR.red : COLOR.blueDark,
       color: "#fff", padding: "11px 20px", borderRadius: 10, fontSize: 14, fontWeight: 600,
@@ -50,7 +50,7 @@ function Toast({ msg, type }) {
 
 function QuickCard({ icon, label, onClick, color }) {
   return (
-    <button onClick={onClick} style={{
+    <button onClick={onClick} className="gapp-tap gapp-card gapp-rise" style={{
       background: "#fff", border: "none", borderRadius: RADIUS.md, padding: 14,
       display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8,
       boxShadow: SHADOW.card, cursor: "pointer", textAlign: "left", width: "100%",
