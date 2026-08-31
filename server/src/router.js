@@ -9,6 +9,8 @@
 
 import { issueSession, verifySession } from "./session.js";
 import { verifyTokeninfo } from "./verify-token.js";
+import { buildGenerationPrompt } from "./ai-prompt.js";
+import { generateSchedule } from "./ai-generator.js";
 
 const ASIG_KEY = (r) => `${r.fecha}|${r.residenteId}`;
 const PREF_KEY = (r) => `${r.residenteId}|${r.anio}|${r.mes}`;
@@ -676,6 +678,12 @@ export function handleRequest(rawBody, deps) {
       // revalidado AQUÍ con los datos del store (nunca se confía en un `violaciones` que
       // mandara el cliente) — mismo principio que el rol derivado ("nunca un flag que el
       // cliente pueda falsear").
+      // Generación del cuadrante con IA (decisión V-45). El modelo PROPONE y el validador de
+      // siempre DISPONE: nada se escribe hasta que no queda ni una violación `error`, y si tras
+      // los 3 intentos sigue habiéndolas no se escribe nada en absoluto (solo la bitácora).
+      case "generarCuadranteIA":
+        return authed(req, deps, (session) => handleGenerarIA(req, deps, session));
+
       case "marcarValidado":
         return authed(req, deps, (session) => {
           const denegado = requireCicloPermiso(deps, session, "validar el cuadrante");
@@ -997,7 +1005,7 @@ function monthSnapshot(deps) {
  * ciclo L-D de INV-8b arranca el día en que cada residente se apuntó, que puede ser de hace
  * año y medio, y adivinarlo aquí es el error que ya costó la regresión del contrato C-2.
  */
-function buildThirdPostCtx(deps, mes, anio, snap) {
+function buildThirdPostCtx(deps, mes, anio, snap, propuesta = null) {
   const prefix = monthPrefix(anio, mes);
   const monthStart = `${prefix}-01`;
   const voluntarios = activeThirdPostVolunteers(deps);
@@ -1016,7 +1024,7 @@ function buildThirdPostCtx(deps, mes, anio, snap) {
 
   return {
     mes, anio, residentes: snap.residentes,
-    asignaciones: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
+    asignaciones: propuesta || snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
     voluntarios3P: voluntarios, // con `desde`: el ciclo de 8b arranca en el alta de cada uno (V-18b)
     historial3P,
     // INV-8a juzga "¿era voluntario ESE día?" con la historia completa (V-28), no con la lista de
@@ -1140,11 +1148,160 @@ function requireCicloPermiso(deps, session, accion) {
  * histórico de rotación cross-mes (contrato C-2, spec.md §5), igual que Calendar.jsx/Generator.jsx
  * — mismo ensamblado que ambos, vía `deps.domain.buildMonthContext`.
  */
-function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps)) {
+/**
+ * Los datos ya DERIVADOS que necesita el prompt (V-45). Vive aquí y no en `ai-prompt.js` porque
+ * derivar es cosa del dominio (`deps.domain`) y aquel módulo es texto puro: así el prompt se
+ * puede probar sin montar medio dominio, y este ensamblado se prueba con el resto del router.
+ *
+ * El nivel se resuelve a día 1 del mes, el MISMO ancla que usa `accumulatedTally` por dentro
+ * (vía `periodOn`): con otra fecha, un residente cuyo aniversario cae a mitad de mes aparecería
+ * bajo su nivel nuevo con el contaje del año saliente, y el prompt le pediría al modelo equidad
+ * sobre una cifra que no es la suya.
+ */
+function promptData(deps, mes, anio, snap) {
+  const prefix = monthPrefix(anio, mes);
+  const monthStart = `${prefix}-01`;
+
+  const porNivel = { R4: [], R3: [], R2: [], R1: [] };
+  for (const r of snap.residentes) {
+    const nivel = deps.domain.levelOn(deps.domain.periodsOfResident(r), monthStart);
+    if (porNivel[nivel]) porNivel[nivel].push({ id: r.id, nombre: r.nombre });
+  }
+
+  // `snap.asignaciones` es la tabla ENTERA: no hace falta acotar el rango como hacía el cliente
+  // (que iba por red), y así el lookahead de doblete del contrato C-1 lo resuelve `tally` sola
+  // con los días que ya tiene delante, sin que nadie tenga que acordarse de pedir dos días más.
+  const acumuladosMap = deps.domain.accumulatedTally(snap.residentes, snap.asignaciones, deps.domain.addDays(monthStart, -1));
+  const acumulados = {};
+  acumuladosMap.forEach((v, k) => { acumulados[k] = v; });
+
+  const curso = deps.domain.academicYearOf(monthStart);
+  return {
+    mes, anio, porNivel, acumulados,
+    bloqueos: bloqueosInRange(deps, snap.bloqueos, monthStart, `${prefix}-31`),
+    festivos: (snap.festivos || []).filter((f) => f.fecha.startsWith(prefix)),
+    // Los puentes se DERIVAN de los festivos (§3.4), nunca se piden ni se escriben a mano.
+    puentes: deps.domain.bridgesOfMonth(anio, mes, snap.festivos || []),
+    voluntarios3P: activeThirdPostVolunteers(deps),
+    // Del CURSO, no del mes: la Navidad de diciembre empareja con la despedida del mayo
+    // siguiente, que es el mismo criterio que aplica `buildMonthContext` (INV-10).
+    eventos: (snap.eventos || []).filter((e) => deps.domain.academicYearOf(e.fecha) === curso),
+    preferencias: deps.store.readLatest("preferencias", PREF_KEY).filter((p) => p.anio === anio && p.mes === mes),
+  };
+}
+
+/**
+ * `generarCuadranteIA` (decisión V-45). El orden importa y es el del encargo: permiso → estado →
+ * contexto → propuesta del modelo → VALIDACIÓN → escritura. La escritura es el último paso y solo
+ * ocurre si el validador calla; si no calla en 3 intentos, no se escribe ni una fila y queda la
+ * bitácora diciendo que ese mes hay que montarlo a mano.
+ */
+function handleGenerarIA(req, deps, session) {
+  const denegado = requireCicloPermiso(deps, session, "generar el cuadrante con IA");
+  if (denegado) return denegado;
+
+  const estadoActual = validCuadranteMesAnio(req, deps);
+  if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
+  if (!deps.domain.canEdit(estadoActual)) {
+    return { ok: false, error: `el cuadrante de ${req.mes}/${req.anio} está PUBLICADO y no admite ediciones: despublícalo antes de regenerarlo` };
+  }
+  if (!deps.llm || typeof deps.llm.generar !== "function") {
+    return { ok: false, error: "la generación con IA no está configurada en este despliegue: falta la propiedad GEMINI_API_KEY en la configuración del script" };
+  }
+
+  const snap = monthSnapshot(deps);
+  // Una ausencia con fecha ilegible se aparta ANTES de gastar un solo intento (V-22): sobre ella
+  // INV-5 no puede dar un veredicto, así que ninguna propuesta podría declararse válida y los tres
+  // intentos se irían en algo que solo se arregla a mano, en la tabla `bloqueos`.
+  if (snap.bloqueosCorruptos.length > 0) {
+    return {
+      ok: false,
+      error: "hay ausencias con la fecha ilegible: mientras sigan así no se puede comprobar INV-5, arréglalas antes de generar",
+      violaciones: bloqueoCorruptoViolations(snap.bloqueosCorruptos),
+    };
+  }
+
+  const prefix = monthPrefix(req.anio, req.mes);
+  const existentes = snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
+  const prompt = buildGenerationPrompt(promptData(deps, req.mes, req.anio, snap));
+  const planDe = (propuesta) => deps.domain.monthReplacementPlan({
+    mes: req.mes, anio: req.anio, residentes: snap.residentes, existentes, propuesta,
+  });
+
+  // El juez: exactamente el mismo que usa `marcarValidado`, ni más estricto ni más laxo. Un
+  // generador más exigente que el validador pediría un mes que ninguna persona podría montar a
+  // mano tampoco, y la app se quedaría sin cuadrante por exceso de celo.
+  const validar = (propuesta) => {
+    const plan = planDe(propuesta);
+    // El guardarraíl de V-31, expresado como violaciones para que viaje al reintento: una fecha de
+    // otro mes o un id inventado no incumplen ningún invariante (`validateMonth` ni los mira, sus
+    // índices solo tienen días del mes y `desconocidos` es aviso) y sin embargo se ESCRIBIRÍAN —
+    // en otro mes, o como filas que nadie puede ver ni corregir desde la rejilla.
+    const rechazos = [
+      ...plan.fueraDelMes.map((a) => ({
+        invariante: "FORMATO", severidad: "error",
+        detalle: `la fecha ${a.fecha} no es un día de ${req.mes}/${req.anio}: el cuadrante tiene que cubrir ese mes y solo ese mes`,
+      })),
+      ...plan.desconocidos.map((a) => ({
+        invariante: "FORMATO", severidad: "error", residenteId: a.residenteId,
+        detalle: `el residenteId "${a.residenteId}" no es de ningún residente: usa exactamente los ids de la lista de arriba`,
+      })),
+    ];
+    if (rechazos.length > 0) return rechazos; // no vale la pena juzgar un mes que ni siquiera es este
+    return [
+      ...deps.domain.validateMonth(buildCuadranteCtx(deps, req.mes, req.anio, snap, propuesta)),
+      ...deps.domain.validateThirdPost(buildThirdPostCtx(deps, req.mes, req.anio, snap, propuesta)),
+    ];
+  };
+
+  const modelo = (deps.llm && deps.llm.modelo) || "(sin declarar)";
+  const r = generateSchedule({ prompt, llm: deps.llm.generar, validar });
+
+  if (!r.ok) {
+    escribirBitacora(deps, session, req, modelo, r.intentos, r.resultado, r.violaciones);
+    return {
+      ok: false, error: r.error, resultado: r.resultado,
+      revisionManual: r.resultado === "REVISION_MANUAL",
+      intentos: r.intentos, violaciones: r.violaciones,
+    };
+  }
+
+  // Mismo camino de escritura que el «Aplicar» de siempre (V-31): un solo lote append-only con la
+  // propuesta MÁS una fila de borrado por cada guardia previa que no se pisa por clave. No hay una
+  // segunda vía de escritura, así que la IA no puede saltarse ningún control que ya existía.
+  const plan = planDe(r.asignaciones);
+  deps.store.appendRecords("asignaciones", plan.cambios);
+  const siguiente = deps.domain.stateAfterEdit(estadoActual);
+  if (siguiente !== estadoActual) writeCuadranteEstado(deps, session, req.mes, req.anio, siguiente);
+  escribirBitacora(deps, session, req, modelo, r.intentos, "APLICADO", r.violaciones);
+
+  return {
+    ok: true, estado: siguiente, modelo, intentos: r.intentos,
+    guardados: plan.cambios.length, borradas: plan.borradas.length,
+    // Los avisos que quedan viajan de vuelta: no bloquean (V-14), pero quien acaba de guardar un
+    // mes tiene derecho a ver que cojea en equidad antes de darlo por bueno.
+    violaciones: r.violaciones,
+  };
+}
+
+function escribirBitacora(deps, session, req, modelo, intentos, resultado, violaciones) {
+  deps.store.appendRecord("generaciones", {
+    mes: req.mes, anio: req.anio, fecha: deps.today, actorId: session.sub,
+    modelo, intentos, resultado, violaciones: violaciones || [],
+  });
+}
+
+/**
+ * @param {object[]} [propuesta] Asignaciones del mes a juzgar EN LUGAR de las guardadas. Lo usa
+ *   `generarCuadranteIA` (V-45) para validar lo que propone el modelo antes de escribir nada:
+ *   sin esto habría que guardar primero y validar después, que es exactamente lo contrario de
+ *   «la IA propone, el validador dispone». Sin el parámetro, se juzga lo que hay en el Sheet.
+ */
+function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps), propuesta = null) {
   const prefix = monthPrefix(anio, mes);
   const monthStart = `${prefix}-01`;
   const bloqueos = bloqueosInRange(deps, snap.bloqueos, monthStart, `${prefix}-31`);
-  const asignacionesDelMes = snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
+  const asignacionesDelMes = propuesta || snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
   const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
   const historicas = desdeRotacion ? snap.asignaciones.filter((a) => a.fecha >= desdeRotacion && a.fecha < monthStart) : [];
   // Con margen hacia atrás: el vecino del día 1 cae en el mes anterior y decide si es puente

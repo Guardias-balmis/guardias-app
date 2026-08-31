@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import nodeCrypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 
 import { handleRequest } from "./src/router.js";
 import { makeStore } from "./src/sheets-store.js";
@@ -22,6 +23,7 @@ import { headerOf, TABLES, recordToRow } from "./src/sheets-schema.js";
 // mano, el dev-server se quedaba corto respecto a producción y fallaba solo en local (le
 // faltaban buildMonthSheetRows/buildResumenRows desde la Fase 7.1 y nadie lo notó).
 import * as Calendar from "../v2/domain/calendar.js";
+import * as Apply from "../v2/domain/apply.js";
 import * as Residents from "../v2/domain/residents.js";
 import * as Tally from "../v2/domain/tally.js";
 import * as Absences from "../v2/domain/absences.js";
@@ -39,7 +41,7 @@ import * as Schedule from "../v2/domain/schedule.js";
 // del bundle—, así que un módulo nuevo del dominio funciona en producción y revienta AQUÍ. Ya
 // pasó con buildMonthSheetRows/buildResumenRows (Fase 7.2) y con `absences`. Si añades un
 // módulo a build/build-gas.mjs:DOMAIN_MODULES, añádelo también aquí.
-const DOMAIN = Object.assign({}, Calendar, Residents, Tally, Absences, BlockPreview, Imaginaria, Accumulate, Thirdpost, Equity, Validate, Responsible, CuadranteEstados, Projection, Schedule);
+const DOMAIN = Object.assign({}, Calendar, Apply, Residents, Tally, Absences, BlockPreview, Imaginaria, Accumulate, Thirdpost, Equity, Validate, Responsible, CuadranteEstados, Projection, Schedule);
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = Number(process.argv[2] || 8787);
@@ -108,6 +110,58 @@ function deps() {
       const m = /^dev:([^:]+):(.*)$/.exec(idToken || "");
       if (!m) throw new Error("dev-server: credencial no reconocida (usa el botón de login de prueba)");
       return { aud: DEV_CLIENT_ID, iss: "https://accounts.google.com", email: m[1], email_verified: "true", sub: "dev-" + m[1], exp: String(now + 3600), nonce: m[2] };
+    },
+    // Puerto de generación con IA (V-43). Solo se declara si hay clave en el entorno: sin ella, el
+    // router responde exactamente lo mismo que en producción sin `GEMINI_API_KEY` («falta la
+    // propiedad…»), que es el comportamiento que interesa poder ver en local.
+    llm: process.env.GEMINI_API_KEY ? llmDev() : undefined,
+  };
+}
+
+/**
+ * `llm` del dev-server. El router es SÍNCRONO (en Apps Script `UrlFetchApp` lo es), así que aquí
+ * la llamada se hace en un proceso hijo que sí puede usar `await fetch` y devuelve por stdout.
+ * La clave viaja por stdin, nunca en la línea de comandos: `ps` la enseñaría a cualquiera que
+ * esté en la misma máquina.
+ */
+function llmDev() {
+  const modelo = process.env.GEMINI_MODEL || "gemma-4-31b-it";
+  const hijo = `
+    let raw = ""; process.stdin.on("data", (d) => (raw += d));
+    process.stdin.on("end", async () => {
+      const { url, key, payload } = JSON.parse(raw);
+      try {
+        const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify(payload) });
+        const cuerpo = await res.text();
+        process.stdout.write(JSON.stringify({ status: res.status, cuerpo }));
+      } catch (e) { process.stdout.write(JSON.stringify({ status: 0, cuerpo: String(e.message || e) })); }
+    });`;
+  return {
+    modelo,
+    generar: (prompt) => {
+      const entrada = JSON.stringify({
+        // `GEMINI_BASE_URL` permite apuntar a un servidor falso en local y probar el ciclo entero
+        // (reintentos incluidos) sin clave real ni gastar cuota. Solo existe en el dev-server:
+        // `Code.gs` va siempre a Google.
+        url: `${process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com"}/v1beta/models/${encodeURIComponent(modelo)}:generateContent`,
+        key: process.env.GEMINI_API_KEY,
+        payload: { contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0.4, maxOutputTokens: 8192 } },
+      });
+      let salida;
+      try {
+        salida = JSON.parse(execFileSync(process.execPath, ["-e", hijo], { input: entrada, maxBuffer: 32 * 1024 * 1024 }).toString());
+      } catch (e) {
+        return { ok: false, error: "dev-server: no se pudo lanzar la llamada al modelo: " + (e.message || e) };
+      }
+      if (salida.status !== 200) return { ok: false, error: `el modelo respondió HTTP ${salida.status}: ${String(salida.cuerpo).slice(0, 300)}` };
+      try {
+        const json = JSON.parse(salida.cuerpo);
+        const partes = json.candidates?.[0]?.content?.parts || [];
+        const texto = partes.map((x) => x.text || "").join("");
+        return texto ? { ok: true, texto } : { ok: false, error: "el modelo respondió sin texto" };
+      } catch (e) {
+        return { ok: false, error: "no se pudo leer la respuesta del modelo: " + e.message };
+      }
     },
   };
 }

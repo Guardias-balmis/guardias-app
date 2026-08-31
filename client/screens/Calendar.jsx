@@ -176,7 +176,7 @@ function CalendarScreen() {
   const [cambiandoEstado, setCambiandoEstado] = useState(false);
   // Si estadoCuadrante falla (red, sesión) NO se asume BORRADOR: un mes realmente PUBLICADO
   // parecería editable por error. Mientras estadoError esté activo se bloquea la edición igual
-  // que si estuviera PUBLICADO, y se muestra un aviso con reintento (mismo patrón que Generator.jsx).
+  // que si estuviera PUBLICADO, y se muestra un aviso con reintento (mismo patrón que el resto).
   const [estadoError, setEstadoError] = useState(false);
   // Sin Responsable designado para el periodo, el ciclo lo puede mover cualquier Mayor
   // (decisión V-16, mismo criterio que el servidor en requireCicloPermiso): la app no se queda

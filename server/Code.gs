@@ -7,7 +7,11 @@
  * router) es pura y vive en los artefactos generados `domain.gs` (global Domain) y
  * `server-lib.gs` (global Server), que Apps Script carga en el mismo ámbito global.
  *
- * Configuración en Script Properties (Proyecto → Configuración): OAUTH_CLIENT_ID, SPREADSHEET_ID.
+ * Configuración en Script Properties (Proyecto → Configuración): OAUTH_CLIENT_ID, SPREADSHEET_ID
+ * y, para el generador con IA (decisión V-45), GEMINI_API_KEY — y opcionalmente GEMINI_MODEL, que
+ * por defecto es "gemma-4-31b-it". Sin GEMINI_API_KEY todo lo demás sigue funcionando igual: la
+ * única acción que deja de estar disponible es `generarCuadranteIA`, y lo dice nombrando la
+ * propiedad que falta en vez de fallar con un error de Google.
  * Despliegue: "Ejecutar como: yo" + "Acceso: cualquiera" (ANYONE_ANONYMOUS). Ver README-deploy.md.
  */
 
@@ -49,6 +53,9 @@ function deps_() {
     issueNonce: issueNonce_,
     consumeNonce: consumeNonce_,
     fetchTokeninfo: fetchTokeninfo_,
+    // Puerto de generación (V-45). El núcleo del generador (prompt, parseo y ciclo de reintentos)
+    // es puro y vive en el bundle; esto es solo el cable a Google.
+    llm: llm_(),
   };
 }
 
@@ -107,6 +114,72 @@ function fetchTokeninfo_(idToken) {
     Utilities.sleep(200 * (i + 1));
   }
   throw new Error("tokeninfo no disponible");
+}
+
+/**
+ * Adaptador del puerto de generación con IA (decisión V-45): el ÚNICO sitio del proyecto que sabe
+ * que detrás hay una Gemini API y un modelo Gemma.
+ *
+ * Tres decisiones que no son de estilo:
+ *  - La clave sale de Script Properties y viaja en la cabecera `x-goog-api-key`, NO en la query
+ *    string: una clave en la URL acaba en los registros de ejecución de Apps Script, que puede
+ *    leer cualquiera con acceso al proyecto, y ahí ya no se puede borrar.
+ *  - El id del modelo es CONFIGURABLE (`GEMINI_MODEL`). Fijarlo en el código sería una bomba de
+ *    relojería para una app cuyo requisito rector es durar diez años sin administrador: el listado
+ *    de modelos servidos cambia varias veces al año, y el día que retiren este, cambiar una
+ *    propiedad es algo que puede hacer el residente de turno; repegar un .gs, no.
+ *  - `muteHttpExceptions` + devolver `{ok:false, error}` en vez de lanzar: el ciclo de reintentos
+ *    trata un fallo de transporte como un intento gastado y sigue. Si esto lanzara, un 503 de
+ *    Google dejaría al responsable con una pantalla de error de Apps Script en vez de con un
+ *    «inténtalo otra vez».
+ */
+function llm_() {
+  // La ausencia de la clave se comprueba AQUÍ, no dentro de `generar`: `deps.llm` tiene que salir
+  // falsy para que el guard de `router.js:handleGenerarIA` (el mismo que usa `dev-server.mjs` con
+  // `llm: undefined`) corte en un solo golpe, con el mensaje limpio que promete el comentario de
+  // cabecera de este fichero — si `generar` existiera pero fallara al invocarse, el ciclo de
+  // reintentos de `generateSchedule` lo trataría como un intento gastado y gastaría los 3 antes de
+  // decir lo mismo, dejando además una fila `ERROR_MODELO, intentos:3` engañosa en `generaciones`.
+  var apiKey = PROPS.getProperty("GEMINI_API_KEY");
+  if (!apiKey) return null;
+  var modelo = PROPS.getProperty("GEMINI_MODEL") || "gemma-4-31b-it";
+  return {
+    modelo: modelo,
+    generar: function (prompt) {
+      var url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
+      // Un solo mensaje de usuario, sin `systemInstruction`: los modelos Gemma servidos por la
+      // Gemini API no admiten instrucción de sistema, y mandarla es un 400 — el prompt ya lleva
+      // dentro todo el encargo, así que no hace falta.
+      var payload = {
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.4, maxOutputTokens: 8192 },
+      };
+      var res = UrlFetchApp.fetch(url, {
+        method: "post",
+        contentType: "application/json",
+        headers: { "x-goog-api-key": apiKey },
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true,
+      });
+      var codigo = res.getResponseCode();
+      var cuerpo = res.getContentText();
+      if (codigo !== 200) {
+        // El mensaje de Google se recorta pero NO se sustituye: «modelo no encontrado» y «cuota
+        // agotada» piden cosas distintas de quien lo lee, y un error genérico las confunde.
+        return { ok: false, error: "el modelo respondió HTTP " + codigo + ": " + cuerpo.slice(0, 300) };
+      }
+      var texto;
+      try {
+        var json = JSON.parse(cuerpo);
+        var partes = json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts;
+        texto = (partes || []).map(function (p) { return p.text || ""; }).join("");
+      } catch (e) {
+        return { ok: false, error: "no se pudo leer la respuesta del modelo: " + e.message };
+      }
+      if (!texto) return { ok: false, error: "el modelo respondió sin texto (¿respuesta cortada o filtrada?)" };
+      return { ok: true, texto: texto };
+    },
+  };
 }
 
 // Adaptador de SpreadsheetApp que cumple el contrato `ss` de Server.makeStore.
