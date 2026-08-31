@@ -31,12 +31,13 @@ export const SHADOW = {
   toggleKnob: "0 1px 4px rgba(0,0,0,0.2)",
 };
 
-// Escala por año de residencia — más oscuro = más veterano (spec §3.3 grupo/nivel).
-export const ANO_COLORS = { R4: "#1F4E79", R3: "#2E75B6", R2: "#5BA3D0", R1: "#9DC3E6" };
-// R2 usa bodyText, no #fff: blueLight (#5BA3D0) queda en una franja intermedia donde ni el
-// blanco (2.8:1) ni el blueDark que usa R1 sobre un fondo más claro (aquí solo 3.1:1) llegan al
-// mínimo AA de 4.5:1 — corrección de contraste, 2026-08-01, ver docs/catalogo-diseno.html.
-export const ANO_TEXT = { R4: "#fff", R3: "#fff", R2: COLOR.bodyText, R1: "#1F4E79" };
+// Un color pastel distinto por año de residencia (2026-08-19, a pedido del autor: "que no sea
+// tan monocromo"), no una escala de un solo tono — reutiliza los pares oscuro/pastel de los
+// acentos de §Preferencias (2026-08-07), ya auditados AA en docs/catalogo-diseno.html, así que
+// no hace falta comprobar contraste de nuevo: el fondo es SIEMPRE el tono `Light` de ese par y
+// el texto SIEMPRE el oscuro, nunca al revés (mismo criterio que esos acentos).
+export const ANO_COLORS = { R4: COLOR.bluePale, R3: COLOR.turquoiseLight, R2: COLOR.purpleLight, R1: COLOR.amberLight };
+export const ANO_TEXT = { R4: COLOR.blueDark, R3: COLOR.turquoise, R2: COLOR.purple, R1: COLOR.amber };
 export const ANOS = ["R4", "R3", "R2", "R1"];
 
 // Códigos de guardia (spec §1: GP faltaba en el v1 — bug conocido, corregido aquí).

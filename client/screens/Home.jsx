@@ -255,6 +255,9 @@ function HomeScreen() {
   // botón sobre un mes PUBLICADO. `null` mientras carga o si la consulta falló — y `null` no
   // ofrece el botón, porque no saber si está publicado no es lo mismo que saber que no lo está.
   const [estadoMes, setEstadoMes] = useState(null);
+  // Desplegable de "Equipo" (a pedido del autor, 2026-08-19): un nivel a la vez, no los cuatro a
+  // la vez — clic de nuevo sobre el mismo nivel lo cierra.
+  const [nivelAbierto, setNivelAbierto] = useState(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -339,14 +342,34 @@ function HomeScreen() {
       </Card>
 
       <Card title="👥 Equipo">
-        {ANOS.map((n) => (
-          <div key={n} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <span style={{ background: ANO_COLORS[n], color: ANO_TEXT[n], padding: "2px 8px", borderRadius: 6, fontWeight: 700, fontSize: 12, minWidth: 32, textAlign: "center" }}>{n}</span>
-            <span style={{ fontSize: 13, color: COLOR.blueDark }}>
-              {porNivel[n].map((r) => r.nombre.split(" ")[0]).join(", ") || "—"}
-            </span>
-          </div>
-        ))}
+        {ANOS.map((n) => {
+          const abierto = nivelAbierto === n;
+          return (
+            <div key={n} style={{ borderBottom: n !== "R1" ? `1px solid ${COLOR.grayMid}` : "none" }}>
+              <div
+                onClick={() => setNivelAbierto(abierto ? null : n)}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", cursor: "pointer", userSelect: "none" }}
+              >
+                <span style={{ background: ANO_COLORS[n], color: ANO_TEXT[n], padding: "2px 8px", borderRadius: 6, fontWeight: 700, fontSize: 12, minWidth: 32, textAlign: "center" }}>{n}</span>
+                <span style={{ fontSize: 13, color: COLOR.blueDark, flex: 1 }}>
+                  {porNivel[n].length} {porNivel[n].length === 1 ? "residente" : "residentes"}
+                </span>
+                <span style={{ color: COLOR.grayDark, fontSize: 12, transform: abierto ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▼</span>
+              </div>
+              {abierto && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, paddingBottom: 10 }}>
+                  {porNivel[n].length === 0 ? (
+                    <span style={{ fontSize: 13, color: COLOR.grayDark }}>— nadie en este nivel ahora mismo</span>
+                  ) : porNivel[n].map((r) => (
+                    <span key={r.id} style={{ background: COLOR.bluePale, color: COLOR.blue, padding: "4px 10px", borderRadius: 999, fontSize: 13, fontWeight: 600 }}>
+                      {r.nombre}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </Card>
 
       <GeneradorIA api={app.api} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
