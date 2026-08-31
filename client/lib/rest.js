@@ -16,7 +16,7 @@
 // comete, lo que si no se sabría al final.
 //
 // Vive en client/lib porque un .jsx no puede importar otro .jsx, mismo motivo que closes.js,
-// thirdpost.js y apply-month.js.
+// thirdpost.js y closes.js.
 
 import { addDays } from "../../v2/domain/calendar.js";
 import { OCUPA_PUESTO } from "../../v2/domain/validate.js";

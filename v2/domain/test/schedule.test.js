@@ -183,7 +183,7 @@ test("no propone nada para quien ya terminó la residencia ni para quien no ha e
 test("el histórico que cae DENTRO del mes se descarta: la propuesta reemplaza el mes, no se suma", () => {
   // El invocador pide el histórico con lookahead de doblete (contrato C-1), así que llegan filas
   // del propio mes. Si contaran, el generador perseguiría un acumulado inflado — y además esas
-  // filas las va a borrar `apply-month.js` al aplicar (V-31).
+  // filas las va a borrar `v2/domain/apply.js` al aplicar (V-31).
   const historicas = [
     { fecha: "2026-10-01", residenteId: "r3_1", codigo: "G" },
     { fecha: "2026-10-02", residenteId: "r3_1", codigo: "G" },

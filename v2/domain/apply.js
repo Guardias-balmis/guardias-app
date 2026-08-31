@@ -9,10 +9,11 @@
 // empezado a mano. Borrar una asignación es escribir su misma clave con `codigo` vacío, que
 // `readLatest(..., {emptyField:"codigo"})` interpreta como baja: nunca se borra una fila.
 //
-// Vive en client/lib (módulo .js real, testeable con node:test) y no dentro de la pantalla porque
-// un .jsx no puede importar otro .jsx — mismo motivo que closes.js y thirdpost.js.
+// Vive en el DOMINIO (y no en `client/lib`, donde nació) desde la decisión V-45: la generación se
+// hace ahora en el servidor, así que el mismo plan de reemplazo lo necesitan los dos lados. Es puro
+// y sin I/O como el resto del dominio: calcula QUÉ escribir, no escribe nada — igual que projection.js.
 
-import { datesOfMonth } from "../../v2/domain/calendar.js";
+import { datesOfMonth } from "./calendar.js";
 
 // Los códigos que el generador propone (el FORMATO DE RESPUESTA del prompt) y, por tanto, los
 // únicos que le pertenecen y puede borrar. V/R/B son marcadores de la rejilla que nadie le ha

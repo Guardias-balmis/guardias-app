@@ -76,6 +76,14 @@ const TABLES = {
   // por tipo de transición (generadoPor/validadoPor/...) — el historial completo de quién hizo
   // qué ya queda en las filas append-only anteriores si algún día hace falta auditarlo.
   cuadrantes: { name: "cuadrantes", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("estado"), col("actorId"), col("fecha", "date")] },
+  // Bitácora de las generaciones con IA (decisión V-45). NO guarda el cuadrante —eso son filas de
+  // `asignaciones`— sino QUÉ pasó cada vez que alguien pulsó el botón: el modelo que respondió,
+  // cuántas vueltas del ciclo hicieron falta y con qué quedó. Es lo único que convierte «lo propuso
+  // una IA» en algo comprobable meses después, cuando `asignaciones` ya no distingue quién escribió
+  // cada fila, y es también la «marca para revisión manual»: un `resultado=REVISION_MANUAL` dice
+  // que ese mes hubo que montarlo a mano porque el modelo no supo. Append-only y sin `activo`: aquí
+  // no hay nada que cancelar, solo cosas que pasaron.
+  generaciones: { name: "generaciones", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("fecha", "date"), col("actorId"), col("modelo"), col("intentos", "number"), col("resultado"), col("violaciones", "json")] },
   // Excepcion (spec.md §2, decisión V-29): degrada una violación DURA→AVISO donde la normativa lo
   // permite. Hoy el único consumidor es `validate.js:twoR2Justified` (INV-9, tipo "2xR2"): un
   // 2×R2 dentro de [desde,hasta] deja de avisar si hay una excepción documentada que lo cubra.
@@ -378,6 +386,445 @@ function fail(reason) {
   return { verifyTokeninfo };
 })();
 
+// ── ai-prompt.js ──
+var AiPrompt = (function () {
+// Prompt de generación del cuadrante y parseo de la respuesta del modelo (decisión V-45). PURO:
+// solo texto y JSON — ni red, ni Sheets, ni dominio. Todo lo derivado (nivel de cada residente,
+// contaje acumulado, puentes del mes) llega ya calculado desde el router, que es quien tiene
+// `deps.domain`: así este módulo se puede probar entero sin montar un contexto de dominio, y el
+// bundler de Apps Script no necesita que `server/src` importe de `v2/domain` (no sabe hacerlo).
+//
+// EL PROMPT NO ES NUEVO. Es el que vivía en `client/screens/Generator.jsx` desde la Fase 6.1,
+// portado tal cual: sus doce normas, sus secciones de datos reales (bloqueos, festivos, puentes,
+// voluntarios del 3P, eventos, preferencias) y su insistencia en no alucinar festivos (S-4) son
+// trabajo ya medido contra modelos reales, no algo que convenga reescribir de cero. Lo único que
+// se le añade es la norma 13: INV-15 (descanso tras guardia) entró en V-35, después de que ese
+// prompt se escribiera, y es una de las cuatro reglas que producen `error` — pedirle al modelo un
+// cuadrante sin decirle la regla que lo va a tumbar es garantizar los tres reintentos.
+//
+// El parseo es la frontera de verdad: lo que devuelve un modelo no lo controla nadie. Por eso
+// `parseGenerationResponse` no lanza jamás, tolera lo que se le ha visto hacer a un modelo
+// (vallas markdown, un párrafo de cortesía alrededor) y rechaza nombrando el motivo — el motivo
+// vuelve al modelo en el reintento, así que un rechazo mudo cuesta un intento de los tres.
+
+// Códigos que el generador PUEDE proponer. V/R/B quedan fuera a propósito: son marcadores de la
+// rejilla que ningún invariante lee, nadie se los ha pedido al modelo, y `apply.js` solo borra lo
+// que se propone — proponerlos sería empezar a pisar datos sobre los que no tiene ninguna opinión.
+const CODIGOS_PROPONIBLES = ["G", "GF", "GP", "3P"];
+const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** La forma exacta del JSON que se le pide. Se escribe UNA vez y viaja al prompt y a los tests. */
+const RESPONSE_SHAPE = '{"asignaciones": [{"fecha":"YYYY-MM-DD","residenteId":"...","codigo":"G|GF|GP|3P"}]}';
+
+const MESES = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+const GRUPO_LABEL = { R4: "Mayor", R3: "Mayor", R2: "Pequeño", R1: "Pequeño" };
+const MOTIVO_LABEL = { BAJA: "BAJA", VACACIONES: "VACACIONES", ROTACION: "ROTACIÓN" };
+const NIVELES = ["R4", "R3", "R2", "R1"];
+
+/**
+ * Nombre del mes en español. A mano y no con `toLocaleDateString`: el soporte de `Intl` en el
+ * runtime V8 de Apps Script no es el del navegador, y el nombre de un mes no merece depender de
+ * eso en una aplicación cuyo requisito rector es durar diez años sin nadie que la arregle.
+ */
+function nombreMes(anio, mes) {
+  return `${MESES[mes] || mes} de ${anio}`;
+}
+
+/** Contaje acumulado de un residente en SU año de residencia en curso, o null si aún no tiene. */
+function resumenAcumulado(acc) {
+  if (!acc) return null;
+  return `total=${acc.total}, findes=${acc.finde}, festivos=${acc.festivos}, prefestivos=${acc.prefestivos}, dobletes=${acc.dobletes}`;
+}
+
+/** Bloqueos activos del mes. BAJA es obligatorio; vacaciones y rotación son evitables (V-8). */
+function seccionBloqueos(bloqueos) {
+  if (!bloqueos || bloqueos.length === 0) return "BLOQUEOS ACTIVOS ESTE MES (por residenteId): ninguno.";
+  const lineas = bloqueos.map((b) => {
+    const etiqueta = (MOTIVO_LABEL[b.motivo] || b.motivo) + (b.motivo === "ROTACION" && b.provincia ? ` (${b.provincia})` : "");
+    return b.motivo === "BAJA"
+      ? `  - id="${b.residenteId}" — ${etiqueta} del ${b.desde} al ${b.hasta}: OBLIGATORIO no asignarle guardia ningún día de ese rango.`
+      : `  - id="${b.residenteId}" — ${etiqueta} del ${b.desde} al ${b.hasta}: evita asignarle guardia si puedes; si no hay alternativa razonable, sí se le puede asignar.`;
+  }).join("\n");
+  return `BLOQUEOS ACTIVOS ESTE MES (por residenteId):\n${lineas}`;
+}
+
+/**
+ * Festivos y puentes del mes. Los festivos son DATO DE ENTRADA (S-4): el cliente v1 le pedía al
+ * modelo "identifícalos tú", y un festivo alucinado se convierte en una GF mal puesta que INV-12
+ * tiene que cazar después. Si no hay ninguno cargado se dice, en vez de dejarle improvisar.
+ */
+function seccionFestivos(festivos, puentes) {
+  if (!festivos || festivos.length === 0) {
+    return "FESTIVOS DEL MES: no hay ninguno cargado en la aplicación. NO inventes festivos: marca\ntodas las guardias como G.";
+  }
+  const lista = festivos
+    .map((f) => `  - ${f.fecha}${f.nombre ? ` — ${f.nombre}` : ""}${f.ambito ? ` (${String(f.ambito).toLowerCase()})` : ""}`)
+    .join("\n");
+  const textoPuentes = puentes && puentes.length
+    ? `\n\nPUENTES (día laborable entre dos no laborables; conviene repartirlos con equidad):\n${puentes.map((d) => `  - ${d}`).join("\n")}`
+    : "";
+  return `FESTIVOS DEL MES (los únicos que existen; la víspera de cada uno es prefestivo → GP):\n${lista}${textoPuentes}`;
+}
+
+/**
+ * Voluntarios del tercer puesto. El 3P es autoservicio puro («será siempre voluntario», V-18): sin
+ * esta sección, la norma del 3P le pedía repartirlo «con equidad entre voluntarios» sin decirle
+ * nunca quiénes son. El `desde` viaja porque arranca el ciclo L-D de INV-8b (contrato C-4).
+ */
+function seccionVoluntarios3P(voluntarios) {
+  if (!voluntarios || voluntarios.length === 0) {
+    return "VOLUNTARIOS DEL 3.º PUESTO: ninguno. NO asignes ningún código 3P este mes.";
+  }
+  const lista = voluntarios.map((v) => `  - id="${v.residenteId}" — voluntario desde ${v.desde}`).join("\n");
+  return `VOLUNTARIOS DEL 3.º PUESTO (los ÚNICOS que pueden llevar código 3P):\n${lista}`;
+}
+
+/** Eventos del servicio del curso (INV-10). Dato de entrada, como los festivos: no se deducen. */
+function seccionEventos(eventos) {
+  if (!eventos || eventos.length === 0) {
+    return "EVENTOS DEL SERVICIO (Navidad, cena de despedida): ninguno cargado. NO inventes fechas de\nevento ni apliques la norma 10.";
+  }
+  const lista = eventos.map((e) => {
+    const quienes = e.voluntarios && e.voluntarios.length
+      ? ` — sorteados: ${e.voluntarios.map((id) => `id="${id}"`).join(", ")}`
+      : " — sin sorteo todavía";
+    return `  - ${String(e.tipo).toUpperCase()} el ${e.fecha}${quienes}`;
+  }).join("\n");
+  return `EVENTOS DEL SERVICIO DE ESTE CURSO:\n${lista}`;
+}
+
+/**
+ * Preferencias personales. Son BLANDAS por definición (V-6/V-8): `fechasEvitar` no la comprueba
+ * ningún invariante y `maxGuardias` no puede saltarse el 4-6 de INV-2. Se marca en el texto para
+ * que el modelo no las confunda con bloqueos — la ausencia de verdad va en su propia sección.
+ */
+function seccionPreferencias(preferencias) {
+  const utiles = (preferencias || []).filter(
+    (p) => (p.fechasEvitar && p.fechasEvitar.length) || p.maxGuardias || p.preferDobles || p.notas
+  );
+  if (utiles.length === 0) return "PREFERENCIAS PERSONALES DEL MES: ninguna registrada.";
+  const lista = utiles.map((p) => {
+    const partes = [];
+    if (p.fechasEvitar && p.fechasEvitar.length) partes.push(`preferiría evitar ${p.fechasEvitar.join(", ")}`);
+    if (p.maxGuardias) partes.push(`querría no pasar de ${p.maxGuardias} guardias`);
+    if (p.preferDobles) partes.push(`doblete preferido: ${String(p.preferDobles).toLowerCase().replace(/_/g, "-")}`);
+    if (p.notas) partes.push(`nota: "${p.notas}"`);
+    return `  - id="${p.residenteId}" — ${partes.join("; ")}`;
+  }).join("\n");
+  return `PREFERENCIAS PERSONALES DEL MES (BLANDAS: son deseos, no obligaciones — respétalas solo si\nno te obligan a incumplir ninguna norma de abajo):\n${lista}`;
+}
+
+/** Bloque de residentes por nivel derivado, con su contaje acumulado. Un nivel vacío no sale. */
+function seccionResidentes(porNivel, acumulados) {
+  const bloques = NIVELES.map((nivel) => {
+    const lista = (porNivel && porNivel[nivel]) || [];
+    if (!lista.length) return null;
+    const filas = lista.map((r) => {
+      const resumen = resumenAcumulado(acumulados && acumulados[r.id]);
+      const llevo = resumen ? `llevo hasta ahora: ${resumen}` : "sin guardias registradas todavía este año de residencia";
+      return `  - id="${r.id}" — ${r.nombre} (${llevo})`;
+    }).join("\n");
+    return `${nivel} (${GRUPO_LABEL[nivel]}):\n${filas}`;
+  }).filter(Boolean);
+  return bloques.join("\n\n") || "(sin residentes activos este mes)";
+}
+
+/**
+ * Prompt de generación. `datos` viene del router, ya derivado:
+ *   { mes, anio, porNivel:{R4:[{id,nombre}],…}, acumulados:{id:{total,finde,…}}, bloqueos,
+ *     festivos, puentes:[iso], voluntarios3P, eventos, preferencias }
+ */
+function buildGenerationPrompt(datos) {
+  const { mes, anio } = datos;
+  const titulo = nombreMes(anio, mes);
+  return `Eres el generador del cuadrante de guardias de Radiodiagnóstico (Hospital Dr. Balmis).
+
+RESIDENTES ACTIVOS EN ${titulo.toUpperCase()} — usa el "id" EXACTO como residenteId, nunca el
+nombre. Junto a cada uno se indica el contaje acumulado de SU año de residencia en curso
+(desde su último aniversario, hasta fin del mes anterior): úsalo para repartir con equidad
+(±1) entre compañeros del mismo nivel, compensando a quien ya lleve más o menos guardias:
+
+${seccionResidentes(datos.porNivel, datos.acumulados)}
+
+${seccionBloqueos(datos.bloqueos)}
+
+${seccionFestivos(datos.festivos, datos.puentes)}
+
+${seccionVoluntarios3P(datos.voluntarios3P)}
+
+${seccionEventos(datos.eventos)}
+
+${seccionPreferencias(datos.preferencias)}
+
+NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
+1. Cada día lleva exactamente 1 guardia (G/GF/GP) de un residente Mayor (R3/R4) y 1 de un
+   residente Pequeño (R1/R2). Excepción: 2 residentes R2 el mismo día solo se admite desde
+   el 1 de diciembre y de forma justificada.
+2. Cada residente hace entre 4 y 6 guardias computables (G+GF+GP) al mes; un Pequeño puede
+   bajar excepcionalmente a 3 si la oferta de días no da para más.
+3. Reparte con equidad (±1) dentro de cada año de residencia: total de guardias, findes,
+   festivos, prefestivos y dobletes — usa el contaje acumulado de arriba como punto de
+   partida, no repartas el mes como si todos empezaran de cero.
+4. El 3.º puesto (código 3P) y las guardias cedidas/compradas no cuentan para el mínimo ni
+   el máximo de guardias del punto 2.
+5. Respeta la sección BLOQUEOS ACTIVOS de arriba: BAJA es obligatorio no asignar; VACACIONES
+   y ROTACIÓN evita asignar si puedes, pero puedes hacerlo si no hay alternativa razonable.
+6. Como máximo 2 residentes de la misma promoción (año de incorporación) pueden estar
+   ausentes a la vez en rotación externa.
+7. Si un residente rota en Alicante o provincia colindante (ver BLOQUEOS ACTIVOS), cúbrele
+   guardia de viernes y de sábado durante esa rotación.
+8. El 3.º puesto (3P) SOLO puede recaer en los VOLUNTARIOS listados arriba, nunca en otro
+   residente. Recorre lunes→domingo antes de repetir día, con equidad entre ellos.
+9. 2 residentes R2 el mismo día solo se admite desde el 1 de diciembre y justificado, o en
+   un día de evento del servicio (Navidad, despedida).
+10. Los eventos del servicio listados arriba se cubren con 2 R2 por sorteo documentado; si ya
+    figuran los sorteados, respétalos. Usa EXCLUSIVAMENTE esas fechas: no deduzcas por tu
+    cuenta cuándo cae la Navidad o la despedida del servicio.
+11. Junio, julio y agosto: ningún R1 hace guardia — ese puesto de Pequeño lo cubren los R2,
+    repartido con equidad entre ellos.
+12. Usa el código GP para el prefestivo (la VÍSPERA de un festivo), GF para el propio festivo y
+    G para el resto. Usa EXCLUSIVAMENTE las fechas festivas de la lista de arriba: no deduzcas
+    festivos por tu cuenta ni por el calendario que creas recordar.
+13. DESCANSO OBLIGATORIO: ningún residente puede hacer guardia dos días consecutivos, ni
+    siquiera si una de las dos es un 3.º puesto. Cuenta también el borde con el mes anterior:
+    si alguien tuvo guardia el último día del mes pasado, no puede tenerla el día 1.
+
+FORMATO DE RESPUESTA (obligatorio, sin excepciones):
+Responde ÚNICAMENTE con un JSON con esta forma exacta, sin texto ni bloques markdown
+alrededor:
+${RESPONSE_SHAPE}
+
+Genera el cuadrante completo de ${titulo} (mes=${mes}, año=${anio}) respetando estas normas.`;
+}
+
+/**
+ * Prompt de reintento. Le vuelve a dar el encargo entero (`prompt`), su propia propuesta anterior
+ * y el motivo del rechazo, que es o bien un problema de FORMATO (`problema`) o bien la lista
+ * concreta de violaciones del validador (`violaciones`).
+ *
+ * Se separan los `error` de los `aviso` a propósito: un modelo al que se le presentan quince
+ * incumplimientos indistintos gasta el intento reescribiendo el mes entero para arreglar un aviso
+ * de equidad que no bloquea nada, y vuelve con un `error` nuevo. Lo que impide guardar se dice
+ * como obligatorio; lo demás, como mejora.
+ */
+function buildRetryPrompt({ prompt, propuesta, violaciones, problema }) {
+  const partes = [prompt, "", "─────────────────────────────────────────", ""];
+  partes.push("Tu respuesta anterior NO se ha podido aceptar. Corrígela y vuelve a responder con el");
+  partes.push("JSON completo del mes entero (no un parche, no solo los días que cambian).");
+  partes.push("");
+
+  if (problema) {
+    partes.push(`PROBLEMA DE FORMATO: ${problema}`);
+    partes.push("");
+    partes.push(`Responde ÚNICAMENTE con el JSON de esta forma, sin nada alrededor:\n${RESPONSE_SHAPE}`);
+    return partes.join("\n");
+  }
+
+  if (propuesta && propuesta.length) {
+    partes.push("TU PROPUESTA ANTERIOR (la que hay que corregir):");
+    partes.push(JSON.stringify({ asignaciones: propuesta }));
+    partes.push("");
+  }
+
+  const errores = (violaciones || []).filter((v) => v.severidad === "error");
+  const avisos = (violaciones || []).filter((v) => v.severidad !== "error");
+
+  if (errores.length) {
+    partes.push("OBLIGATORIO CORREGIR (el cuadrante no se puede guardar mientras siga incumpliendo esto):");
+    for (const v of errores) partes.push(`  - [${v.invariante}] ${v.detalle}`);
+    partes.push("");
+  }
+  if (avisos.length) {
+    partes.push("MEJORA si puedes, sin romper nada de lo anterior (esto no impide guardar):");
+    for (const v of avisos) partes.push(`  - [${v.invariante}] ${v.detalle}`);
+    partes.push("");
+  }
+  partes.push(`Responde ÚNICAMENTE con el JSON de esta forma, sin nada alrededor:\n${RESPONSE_SHAPE}`);
+  return partes.join("\n");
+}
+
+/**
+ * Extrae el objeto JSON de una respuesta de modelo. Tolera la valla markdown y el párrafo de
+ * cortesía porque los dos se han visto de verdad; no tolera nada más — adivinar más allá de eso
+ * sería empezar a inventarle sentido a una respuesta que no lo tiene.
+ */
+function extraerJSON(texto) {
+  const sinVallas = String(texto).replace(/```(?:json)?/gi, "");
+  const abre = sinVallas.indexOf("{");
+  const cierra = sinVallas.lastIndexOf("}");
+  if (abre === -1 || cierra <= abre) return null;
+  try {
+    return JSON.parse(sinVallas.slice(abre, cierra + 1));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parsea y comprueba la FORMA de la respuesta (no las reglas de negocio: de eso se encarga el
+ * validador, que es el único juez). Nunca lanza: devuelve `{ok:false, error}` con un motivo
+ * legible, porque ese motivo se le devuelve al modelo en el reintento.
+ *
+ * @returns {{ok:true, asignaciones:{fecha:string,residenteId:string,codigo:string}[]}
+ *          |{ok:false, error:string}}
+ */
+function parseGenerationResponse(texto) {
+  if (typeof texto !== "string" || texto.trim() === "") {
+    return { ok: false, error: "la respuesta del modelo llegó vacía" };
+  }
+  const obj = extraerJSON(texto);
+  if (!obj || typeof obj !== "object") {
+    return { ok: false, error: "la respuesta no contiene ningún JSON que se pueda leer" };
+  }
+  if (!Array.isArray(obj.asignaciones)) {
+    return { ok: false, error: 'el JSON no trae una lista "asignaciones"' };
+  }
+  if (obj.asignaciones.length === 0) {
+    return { ok: false, error: "la lista `asignaciones` viene vacía: un mes sin ninguna guardia no es una propuesta" };
+  }
+
+  const asignaciones = [];
+  for (const a of obj.asignaciones) {
+    if (!a || typeof a !== "object") return { ok: false, error: "hay un elemento de `asignaciones` que no es un objeto" };
+    if (typeof a.fecha !== "string" || !ISO_RE.test(a.fecha)) {
+      return { ok: false, error: `fecha inválida: ${JSON.stringify(a.fecha)} (el formato es "YYYY-MM-DD")` };
+    }
+    if (typeof a.residenteId !== "string" || a.residenteId === "") {
+      return { ok: false, error: `falta el residenteId en la asignación del ${a.fecha}` };
+    }
+    if (CODIGOS_PROPONIBLES.indexOf(a.codigo) === -1) {
+      return { ok: false, error: `código inválido: ${JSON.stringify(a.codigo)} (los únicos válidos son ${CODIGOS_PROPONIBLES.join(", ")})` };
+    }
+    // Se copian SOLO los tres campos del schema: `puesto` se deriva del nivel y `origen` marca una
+    // guardia cedida (INV-4), que el modelo no tiene por qué decidir ni sabe si existió.
+    asignaciones.push({ fecha: a.fecha, residenteId: a.residenteId, codigo: a.codigo });
+  }
+  return { ok: true, asignaciones };
+}
+
+  return { RESPONSE_SHAPE, nombreMes, buildGenerationPrompt, buildRetryPrompt, parseGenerationResponse };
+})();
+
+// ── ai-generator.js ──
+var AiGenerator = (function () {
+// Ciclo de generación del cuadrante con un modelo de lenguaje (decisión V-45). PURO: recibe el
+// `llm` y el `validar` inyectados, así que aquí no hay red, ni Sheets, ni dominio — es el núcleo
+// hexagonal del generador, y el adaptador impuro (UrlFetchApp contra la Gemini API) vive donde
+// viven todos los adaptadores, en `Code.gs`.
+//
+// LA REGLA QUE JUSTIFICA EL MÓDULO ENTERO: «la IA propone, el validador dispone» (spec.md §5).
+// Este ciclo no sabe nada de guardias. Solo sabe pedir, parsear, preguntarle al juez y, si el juez
+// dice que no, volver a pedir explicando POR QUÉ no — hasta 3 veces, y ni una más. Lo único que
+// nunca puede pasar es que devuelva `ok:true` con una propuesta que tenga violaciones `error`: eso
+// escribiría un cuadrante ilegal en una tabla append-only que no se borra nunca.
+//
+// Por qué el reintento lleva las violaciones CONCRETAS y no un «vuelve a intentarlo»: sin el
+// motivo, el segundo intento es una tirada de dados idéntica a la primera y los tres se gastan en
+// nada. Con el motivo, el modelo corrige el día que falla. Es la diferencia entre reintentar y
+// simplemente repetir.
+
+  const { parseGenerationResponse, buildRetryPrompt } = AiPrompt;
+
+/** Los 3 intentos del encargo. Configurable en la llamada, pero este es el número acordado. */
+const MAX_INTENTOS = 3;
+
+/**
+ * Llama al adaptador sin fiarse de él. `Code.gs` es la única pieza del backend sin tests (es la
+ * frontera de I/O), así que no se da por hecho que cumpla el contrato `{ok, texto|error}`: si
+ * lanza, se trata como un fallo de transporte más y se gasta el intento, en vez de reventar la
+ * petición entera y dejar al responsable con un error de Apps Script en pantalla.
+ */
+function pedir(llm, prompt) {
+  try {
+    const r = llm(prompt);
+    if (!r || typeof r !== "object") return { ok: false, error: "el adaptador del modelo no devolvió nada" };
+    return r;
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
+/**
+ * Pide un cuadrante al modelo y no lo da por bueno hasta que el validador calla.
+ *
+ * @param {object} p
+ *   - prompt: el encargo completo (`ai-prompt.js:buildGenerationPrompt`)
+ *   - llm: `(prompt) => {ok:true, texto} | {ok:false, error}`. El puerto de generación.
+ *   - validar: `(asignaciones) => violaciones[]`. El juez real (validateMonth + validateThirdPost
+ *     en el router). Solo `severidad === "error"` bloquea, igual que en `canValidate` (V-14).
+ *   - maxIntentos: por defecto MAX_INTENTOS
+ * @returns {{ok:true, asignaciones, violaciones, intentos:number, historial:object[]}
+ *          |{ok:false, resultado:"REVISION_MANUAL"|"ERROR_MODELO", error:string,
+ *             violaciones:object[], intentos:number, historial:object[]}}
+ */
+function generateSchedule({ prompt, llm, validar, maxIntentos = MAX_INTENTOS }) {
+  const historial = [];
+  let siguiente = prompt;
+  let ultimasViolaciones = [];
+  let ultimoErrorModelo = null;
+  let huboPropuesta = false;
+
+  for (let intento = 1; intento <= maxIntentos; intento++) {
+    const respuesta = pedir(llm, siguiente);
+
+    if (!respuesta.ok) {
+      // Fallo de transporte (cuota, 503, red). Se reintenta con el MISMO prompt: el problema no
+      // estaba en lo que se pidió. El error de Google se conserva tal cual — si al final se agotan
+      // los intentos, es lo único que le dice a la persona qué ha pasado de verdad.
+      ultimoErrorModelo = respuesta.error || "el modelo no respondió";
+      historial.push({ intento, motivo: ultimoErrorModelo });
+      continue;
+    }
+
+    const parsed = parseGenerationResponse(respuesta.texto);
+    if (!parsed.ok) {
+      ultimoErrorModelo = parsed.error;
+      historial.push({ intento, motivo: parsed.error });
+      siguiente = buildRetryPrompt({ prompt, problema: parsed.error });
+      continue;
+    }
+
+    huboPropuesta = true;
+    const violaciones = validar(parsed.asignaciones) || [];
+    const bloqueantes = violaciones.filter((v) => v.severidad === "error");
+    historial.push({ intento, bloqueantes: bloqueantes.length, avisos: violaciones.length - bloqueantes.length });
+    ultimasViolaciones = violaciones;
+
+    if (bloqueantes.length === 0) {
+      // Se devuelven TAMBIÉN los avisos: no bloquean (V-14), pero quien pulsó el botón tiene
+      // derecho a ver que el mes que se acaba de guardar cojea en equidad.
+      return { ok: true, asignaciones: parsed.asignaciones, violaciones, intentos: intento, historial };
+    }
+
+    siguiente = buildRetryPrompt({ prompt, propuesta: parsed.asignaciones, violaciones });
+  }
+
+  // Agotados los intentos. Se distingue «el modelo no supo cuadrar el mes» de «el modelo nunca
+  // devolvió algo legible» porque piden cosas distintas de quien lo lee: la primera es un mes
+  // difícil que hay que montar a mano; la segunda, un problema de configuración o de servicio.
+  if (!huboPropuesta) {
+    return {
+      ok: false,
+      resultado: "ERROR_MODELO",
+      error: `el modelo no devolvió ninguna propuesta utilizable en ${maxIntentos} intentos: ${ultimoErrorModelo}`,
+      violaciones: [],
+      intentos: maxIntentos,
+      historial,
+    };
+  }
+  return {
+    ok: false,
+    resultado: "REVISION_MANUAL",
+    error: `tras ${maxIntentos} intentos el cuadrante propuesto sigue incumpliendo reglas obligatorias: no se ha guardado nada y el mes queda para revisión manual`,
+    violaciones: ultimasViolaciones,
+    intentos: maxIntentos,
+    historial,
+  };
+}
+
+  return { MAX_INTENTOS, generateSchedule };
+})();
+
 // ── router.js ──
 var Router = (function () {
 // Router del Web App (ADR-002 D-2/D-4, paso 2.4). PURO: recibe el cuerpo crudo (el JSON que
@@ -391,6 +838,8 @@ var Router = (function () {
 
   const { issueSession, verifySession } = Session;
   const { verifyTokeninfo } = VerifyToken;
+  const { buildGenerationPrompt } = AiPrompt;
+  const { generateSchedule } = AiGenerator;
 
 const ASIG_KEY = (r) => `${r.fecha}|${r.residenteId}`;
 const PREF_KEY = (r) => `${r.residenteId}|${r.anio}|${r.mes}`;
@@ -1048,6 +1497,12 @@ function handleRequest(rawBody, deps) {
       // revalidado AQUÍ con los datos del store (nunca se confía en un `violaciones` que
       // mandara el cliente) — mismo principio que el rol derivado ("nunca un flag que el
       // cliente pueda falsear").
+      // Generación del cuadrante con IA (decisión V-45). El modelo PROPONE y el validador de
+      // siempre DISPONE: nada se escribe hasta que no queda ni una violación `error`, y si tras
+      // los 3 intentos sigue habiéndolas no se escribe nada en absoluto (solo la bitácora).
+      case "generarCuadranteIA":
+        return authed(req, deps, (session) => handleGenerarIA(req, deps, session));
+
       case "marcarValidado":
         return authed(req, deps, (session) => {
           const denegado = requireCicloPermiso(deps, session, "validar el cuadrante");
@@ -1369,7 +1824,7 @@ function monthSnapshot(deps) {
  * ciclo L-D de INV-8b arranca el día en que cada residente se apuntó, que puede ser de hace
  * año y medio, y adivinarlo aquí es el error que ya costó la regresión del contrato C-2.
  */
-function buildThirdPostCtx(deps, mes, anio, snap) {
+function buildThirdPostCtx(deps, mes, anio, snap, propuesta = null) {
   const prefix = monthPrefix(anio, mes);
   const monthStart = `${prefix}-01`;
   const voluntarios = activeThirdPostVolunteers(deps);
@@ -1388,7 +1843,7 @@ function buildThirdPostCtx(deps, mes, anio, snap) {
 
   return {
     mes, anio, residentes: snap.residentes,
-    asignaciones: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
+    asignaciones: propuesta || snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
     voluntarios3P: voluntarios, // con `desde`: el ciclo de 8b arranca en el alta de cada uno (V-18b)
     historial3P,
     // INV-8a juzga "¿era voluntario ESE día?" con la historia completa (V-28), no con la lista de
@@ -1512,11 +1967,160 @@ function requireCicloPermiso(deps, session, accion) {
  * histórico de rotación cross-mes (contrato C-2, spec.md §5), igual que Calendar.jsx/Generator.jsx
  * — mismo ensamblado que ambos, vía `deps.domain.buildMonthContext`.
  */
-function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps)) {
+/**
+ * Los datos ya DERIVADOS que necesita el prompt (V-45). Vive aquí y no en `ai-prompt.js` porque
+ * derivar es cosa del dominio (`deps.domain`) y aquel módulo es texto puro: así el prompt se
+ * puede probar sin montar medio dominio, y este ensamblado se prueba con el resto del router.
+ *
+ * El nivel se resuelve a día 1 del mes, el MISMO ancla que usa `accumulatedTally` por dentro
+ * (vía `periodOn`): con otra fecha, un residente cuyo aniversario cae a mitad de mes aparecería
+ * bajo su nivel nuevo con el contaje del año saliente, y el prompt le pediría al modelo equidad
+ * sobre una cifra que no es la suya.
+ */
+function promptData(deps, mes, anio, snap) {
+  const prefix = monthPrefix(anio, mes);
+  const monthStart = `${prefix}-01`;
+
+  const porNivel = { R4: [], R3: [], R2: [], R1: [] };
+  for (const r of snap.residentes) {
+    const nivel = deps.domain.levelOn(deps.domain.periodsOfResident(r), monthStart);
+    if (porNivel[nivel]) porNivel[nivel].push({ id: r.id, nombre: r.nombre });
+  }
+
+  // `snap.asignaciones` es la tabla ENTERA: no hace falta acotar el rango como hacía el cliente
+  // (que iba por red), y así el lookahead de doblete del contrato C-1 lo resuelve `tally` sola
+  // con los días que ya tiene delante, sin que nadie tenga que acordarse de pedir dos días más.
+  const acumuladosMap = deps.domain.accumulatedTally(snap.residentes, snap.asignaciones, deps.domain.addDays(monthStart, -1));
+  const acumulados = {};
+  acumuladosMap.forEach((v, k) => { acumulados[k] = v; });
+
+  const curso = deps.domain.academicYearOf(monthStart);
+  return {
+    mes, anio, porNivel, acumulados,
+    bloqueos: bloqueosInRange(deps, snap.bloqueos, monthStart, `${prefix}-31`),
+    festivos: (snap.festivos || []).filter((f) => f.fecha.startsWith(prefix)),
+    // Los puentes se DERIVAN de los festivos (§3.4), nunca se piden ni se escriben a mano.
+    puentes: deps.domain.bridgesOfMonth(anio, mes, snap.festivos || []),
+    voluntarios3P: activeThirdPostVolunteers(deps),
+    // Del CURSO, no del mes: la Navidad de diciembre empareja con la despedida del mayo
+    // siguiente, que es el mismo criterio que aplica `buildMonthContext` (INV-10).
+    eventos: (snap.eventos || []).filter((e) => deps.domain.academicYearOf(e.fecha) === curso),
+    preferencias: deps.store.readLatest("preferencias", PREF_KEY).filter((p) => p.anio === anio && p.mes === mes),
+  };
+}
+
+/**
+ * `generarCuadranteIA` (decisión V-45). El orden importa y es el del encargo: permiso → estado →
+ * contexto → propuesta del modelo → VALIDACIÓN → escritura. La escritura es el último paso y solo
+ * ocurre si el validador calla; si no calla en 3 intentos, no se escribe ni una fila y queda la
+ * bitácora diciendo que ese mes hay que montarlo a mano.
+ */
+function handleGenerarIA(req, deps, session) {
+  const denegado = requireCicloPermiso(deps, session, "generar el cuadrante con IA");
+  if (denegado) return denegado;
+
+  const estadoActual = validCuadranteMesAnio(req, deps);
+  if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
+  if (!deps.domain.canEdit(estadoActual)) {
+    return { ok: false, error: `el cuadrante de ${req.mes}/${req.anio} está PUBLICADO y no admite ediciones: despublícalo antes de regenerarlo` };
+  }
+  if (!deps.llm || typeof deps.llm.generar !== "function") {
+    return { ok: false, error: "la generación con IA no está configurada en este despliegue: falta la propiedad GEMINI_API_KEY en la configuración del script" };
+  }
+
+  const snap = monthSnapshot(deps);
+  // Una ausencia con fecha ilegible se aparta ANTES de gastar un solo intento (V-22): sobre ella
+  // INV-5 no puede dar un veredicto, así que ninguna propuesta podría declararse válida y los tres
+  // intentos se irían en algo que solo se arregla a mano, en la tabla `bloqueos`.
+  if (snap.bloqueosCorruptos.length > 0) {
+    return {
+      ok: false,
+      error: "hay ausencias con la fecha ilegible: mientras sigan así no se puede comprobar INV-5, arréglalas antes de generar",
+      violaciones: bloqueoCorruptoViolations(snap.bloqueosCorruptos),
+    };
+  }
+
+  const prefix = monthPrefix(req.anio, req.mes);
+  const existentes = snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
+  const prompt = buildGenerationPrompt(promptData(deps, req.mes, req.anio, snap));
+  const planDe = (propuesta) => deps.domain.monthReplacementPlan({
+    mes: req.mes, anio: req.anio, residentes: snap.residentes, existentes, propuesta,
+  });
+
+  // El juez: exactamente el mismo que usa `marcarValidado`, ni más estricto ni más laxo. Un
+  // generador más exigente que el validador pediría un mes que ninguna persona podría montar a
+  // mano tampoco, y la app se quedaría sin cuadrante por exceso de celo.
+  const validar = (propuesta) => {
+    const plan = planDe(propuesta);
+    // El guardarraíl de V-31, expresado como violaciones para que viaje al reintento: una fecha de
+    // otro mes o un id inventado no incumplen ningún invariante (`validateMonth` ni los mira, sus
+    // índices solo tienen días del mes y `desconocidos` es aviso) y sin embargo se ESCRIBIRÍAN —
+    // en otro mes, o como filas que nadie puede ver ni corregir desde la rejilla.
+    const rechazos = [
+      ...plan.fueraDelMes.map((a) => ({
+        invariante: "FORMATO", severidad: "error",
+        detalle: `la fecha ${a.fecha} no es un día de ${req.mes}/${req.anio}: el cuadrante tiene que cubrir ese mes y solo ese mes`,
+      })),
+      ...plan.desconocidos.map((a) => ({
+        invariante: "FORMATO", severidad: "error", residenteId: a.residenteId,
+        detalle: `el residenteId "${a.residenteId}" no es de ningún residente: usa exactamente los ids de la lista de arriba`,
+      })),
+    ];
+    if (rechazos.length > 0) return rechazos; // no vale la pena juzgar un mes que ni siquiera es este
+    return [
+      ...deps.domain.validateMonth(buildCuadranteCtx(deps, req.mes, req.anio, snap, propuesta)),
+      ...deps.domain.validateThirdPost(buildThirdPostCtx(deps, req.mes, req.anio, snap, propuesta)),
+    ];
+  };
+
+  const modelo = (deps.llm && deps.llm.modelo) || "(sin declarar)";
+  const r = generateSchedule({ prompt, llm: deps.llm.generar, validar });
+
+  if (!r.ok) {
+    escribirBitacora(deps, session, req, modelo, r.intentos, r.resultado, r.violaciones);
+    return {
+      ok: false, error: r.error, resultado: r.resultado,
+      revisionManual: r.resultado === "REVISION_MANUAL",
+      intentos: r.intentos, violaciones: r.violaciones,
+    };
+  }
+
+  // Mismo camino de escritura que el «Aplicar» de siempre (V-31): un solo lote append-only con la
+  // propuesta MÁS una fila de borrado por cada guardia previa que no se pisa por clave. No hay una
+  // segunda vía de escritura, así que la IA no puede saltarse ningún control que ya existía.
+  const plan = planDe(r.asignaciones);
+  deps.store.appendRecords("asignaciones", plan.cambios);
+  const siguiente = deps.domain.stateAfterEdit(estadoActual);
+  if (siguiente !== estadoActual) writeCuadranteEstado(deps, session, req.mes, req.anio, siguiente);
+  escribirBitacora(deps, session, req, modelo, r.intentos, "APLICADO", r.violaciones);
+
+  return {
+    ok: true, estado: siguiente, modelo, intentos: r.intentos,
+    guardados: plan.cambios.length, borradas: plan.borradas.length,
+    // Los avisos que quedan viajan de vuelta: no bloquean (V-14), pero quien acaba de guardar un
+    // mes tiene derecho a ver que cojea en equidad antes de darlo por bueno.
+    violaciones: r.violaciones,
+  };
+}
+
+function escribirBitacora(deps, session, req, modelo, intentos, resultado, violaciones) {
+  deps.store.appendRecord("generaciones", {
+    mes: req.mes, anio: req.anio, fecha: deps.today, actorId: session.sub,
+    modelo, intentos, resultado, violaciones: violaciones || [],
+  });
+}
+
+/**
+ * @param {object[]} [propuesta] Asignaciones del mes a juzgar EN LUGAR de las guardadas. Lo usa
+ *   `generarCuadranteIA` (V-45) para validar lo que propone el modelo antes de escribir nada:
+ *   sin esto habría que guardar primero y validar después, que es exactamente lo contrario de
+ *   «la IA propone, el validador dispone». Sin el parámetro, se juzga lo que hay en el Sheet.
+ */
+function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps), propuesta = null) {
   const prefix = monthPrefix(anio, mes);
   const monthStart = `${prefix}-01`;
   const bloqueos = bloqueosInRange(deps, snap.bloqueos, monthStart, `${prefix}-31`);
-  const asignacionesDelMes = snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
+  const asignacionesDelMes = propuesta || snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
   const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
   const historicas = desdeRotacion ? snap.asignaciones.filter((a) => a.fecha >= desdeRotacion && a.fecha < monthStart) : [];
   // Con margen hacia atrás: el vecino del día 1 cae en el mes anterior y decide si es puente
@@ -1676,4 +2280,4 @@ function resolveRol(store, residenteId, today) {
 })();
 
 // ── API pública ──
-var Server = Object.assign({}, SheetsSchema, SheetsStore, Session, VerifyToken, Router);
+var Server = Object.assign({}, SheetsSchema, SheetsStore, Session, VerifyToken, AiPrompt, AiGenerator, Router);
