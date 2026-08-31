@@ -425,12 +425,28 @@ function CalendarScreen() {
     if (!rFestivos.ok) showToast("No se pudieron cargar los festivos: " + rFestivos.error + " — INV-12 no se ha comprobado", "err");
     const festivos = rFestivos.ok ? rFestivos.festivos : [];
 
-    // Excepciones (INV-9, V-29): sin ellas, un 2×R2 con justificación documentada avisaría aquí
-    // igual que uno sin justificar — el servidor sí las ve en marcarValidado, así que el aviso
-    // desaparecería al validar de verdad. Es aviso, nunca bloquea (V-14), así que un fallo de red
-    // no impide seguir: solo deja este chequeo local sin la excepción.
-    const rExcepciones = await app.api.listExcepciones();
+    // Las dos tablas que el servidor SÍ pasa en marcarValidado (`buildCuadranteCtx`) y esta
+    // pantalla no miraba entera:
+    //  - Excepciones (INV-9, V-29): sin ellas, un 2×R2 con justificación documentada avisaría
+    //    aquí igual que uno sin justificar, y el aviso desaparecería al validar de verdad.
+    //  - Eventos (INV-10, V-20): NO se pedían, así que `buildMonthContext` recibía la lista
+    //    vacía y la regla «quien cubrió Navidad libra en la despedida» era muda justo aquí, en
+    //    la única pantalla desde la que se valida y se publica. El servidor sí la comprobaba,
+    //    pero INV-10 es `aviso` y un aviso no rechaza nada (V-14): el resultado se calculaba y
+    //    no lo veía nadie. El mismo agujero que V-33 cerró en Generator.jsx, con el signo
+    //    cambiado. Van SIN filtrar por mes, igual que en el router: `buildMonthContext` se
+    //    queda con los del año académico, que es lo que empareja la Navidad de diciembre con
+    //    la despedida de mayo.
+    // Ninguna de las dos bloquea, así que un fallo de red no impide validar. La diferencia está
+    // en hacia dónde falla cada una: sin excepciones se avisa de MÁS (no hace falta decir nada),
+    // sin eventos se avisaría de MENOS, y eso sí se dice — lo que no se ha podido comprobar no
+    // se da por bueno en silencio, igual que con los festivos.
+    // Van en la MISMA tanda: son independientes, y encadenarlas sumaría otro viaje de ida y
+    // vuelta a Apps Script a un botón que ya hace unos cuantos.
+    const [rExcepciones, rEventos] = await Promise.all([app.api.listExcepciones(), app.api.listEventos()]);
     const excepciones = rExcepciones.ok ? rExcepciones.excepciones : [];
+    if (!rEventos.ok) showToast("No se pudieron cargar los eventos: " + rEventos.error + " — INV-10 no se ha comprobado", "err");
+    const eventos = rEventos.ok ? rEventos.eventos : [];
 
     const asignacionesDelMes = residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo })));
 
@@ -442,7 +458,7 @@ function CalendarScreen() {
     // traer el día anterior, y contarlo dos veces falsearía el `propias` de INV-7.
     const porClave = new Map(historicas.map((a) => [`${a.residenteId}|${a.fecha}`, a]));
     for (const b of bordes) if (!porClave.has(`${b.residenteId}|${b.fecha}`)) porClave.set(`${b.residenteId}|${b.fecha}`, b);
-    const ctx = buildMonthContext({ mes, anio, residentes, historicas: [...porClave.values()], asignacionesDelMes, bloqueos, festivos, excepciones });
+    const ctx = buildMonthContext({ mes, anio, residentes, historicas: [...porClave.values()], asignacionesDelMes, bloqueos, festivos, eventos, excepciones });
 
     // Cierres de equidad de INV-3 (P-8, decisión V-13): el trimestral en ago/nov/feb/may y el
     // anual en el mes del aniversario de alguien. Es la MISMA comprobación que hará el

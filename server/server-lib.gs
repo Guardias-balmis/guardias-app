@@ -1438,14 +1438,24 @@ function handleRequest(rawBody, deps) {
           const todas = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
           const desde = deps.domain.addDays(req.fecha, -1);
           const hasta = deps.domain.addDays(req.fecha, 1);
+          const coberturas = activeImaginaria(deps);
           return {
             ok: true,
             cola: deps.domain.imaginariaQueue({
               residentes: allResidentes(deps),
-              coberturas: activeImaginaria(deps),
+              coberturas,
               asignaciones: todas.filter((a) => a.fecha >= desde && a.fecha <= hasta),
               grupo: req.grupo, fechaIncidencia: req.fecha,
             }),
+            // Las coberturas YA registradas de ESA incidencia, con su `id`. La cola derivada no
+            // lleva ninguno —solo la FECHA de la última cobertura de cada uno, que es lo que la
+            // ordena—, así que sin esto el cliente no tenía forma de nombrar la fila que quiere
+            // anular: `anularImaginaria` existía en el router y en api.js sin un solo invocador,
+            // y una cobertura apuntada al residente equivocado a las ocho de la mañana solo se
+            // podía corregir entrando al Sheet a mano.
+            coberturas: coberturas
+              .filter((c) => c.grupo === req.grupo && c.fechaIncidencia === req.fecha)
+              .map((c) => ({ id: c.id, residenteId: c.residenteId, registradaEn: c.registradaEn })),
           };
         });
 
