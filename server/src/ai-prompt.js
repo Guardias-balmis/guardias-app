@@ -182,7 +182,8 @@ NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
 6. Como máximo 2 residentes de la misma promoción (año de incorporación) pueden estar
    ausentes a la vez en rotación externa.
 7. Si un residente rota en Alicante o provincia colindante (ver BLOQUEOS ACTIVOS), cúbrele
-   guardia de viernes y de sábado durante esa rotación.
+   guardia de viernes o de sábado durante esa rotación (basta con una de las dos, no hacen
+   falta ambas — decisión P-6).
 8. El 3.º puesto (3P) SOLO puede recaer en los VOLUNTARIOS listados arriba, nunca en otro
    residente. Recorre lunes→domingo antes de repetir día, con equidad entre ellos.
 9. 2 residentes R2 el mismo día solo se admite desde el 1 de diciembre y justificado, o en
