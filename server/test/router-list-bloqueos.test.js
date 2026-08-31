@@ -162,15 +162,17 @@ test("listFestivosRango valida el rango de verdad (ISO, no orden lexicográfico)
   assert.equal(call({ action: "listFestivosRango", session, desde: "2026-12-01" }, deps).ok, false);
 });
 
-test("cargar o anular festivos exige ser Mayor: es dato compartido de todo el servicio", () => {
+test("cargar y anular festivos no exige ser Mayor (decisión del autor, 2026-09-01): son dato externo objetivo, abierto a cualquier sesión", () => {
   const deps = makeDeps();
   deps.store.appendRecord("residentes", { id: "uuid-peque", nombre: "Pepa", email: "peque@gmail.com", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" });
-  deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "peque@gmail.com", email_verified: "true", sub: "g-2", exp: String(2_000_000), nonce: call({ action: "getNonce" }, deps).nonce });
   const nonce = call({ action: "getNonce" }, deps).nonce;
   deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "peque@gmail.com", email_verified: "true", sub: "g-2", exp: String(2_000_000), nonce });
   const session = call({ action: "login", idToken: "jwt", nonce }, deps).session;
   const r = call({ action: "crearFestivos", session, festivos: [{ fecha: "2026-12-25" }] }, deps);
-  assert.equal(r.ok, false);
-  assert.match(r.error, /solo un R3 o R4/);
-  assert.equal(deps.store.readRecords("festivos").length, 0);
+  assert.equal(r.ok, true);
+  assert.equal(deps.store.readRecords("festivos").length, 1);
+
+  const id = r.ids[0];
+  const ranular = call({ action: "anularFestivo", session, id }, deps);
+  assert.equal(ranular.ok, true);
 });

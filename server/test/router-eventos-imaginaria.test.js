@@ -105,15 +105,15 @@ test("crearEvento / listEventos hacen round-trip; nace activo y sin designados",
   assert.deepEqual(r.eventos[0].designados, []);
 });
 
-test("crearEvento exige el permiso del ciclo y valida tipo y fecha", () => {
+test("crearEvento no exige el permiso del ciclo (decisión del autor, 2026-09-01), pero sí valida tipo y fecha", () => {
   const deps = makeDeps();
-  const pequena = loggedIn(deps, "eva"); // R1: no es Mayor
-  assert.match(call({ action: "crearEvento", session: pequena, tipo: "NAVIDAD", fecha: "2026-12-18" }, deps).error, /solo un R3 o R4/);
+  const pequena = loggedIn(deps, "eva"); // R1: antes rechazado por no ser Mayor, ahora se acepta igual
+  assert.equal(call({ action: "crearEvento", session: pequena, tipo: "NAVIDAD", fecha: "2026-12-18" }, deps).ok, true);
 
   const session = loggedIn(deps, "ana");
-  assert.match(call({ action: "crearEvento", session, tipo: "CENA", fecha: "2026-12-18" }, deps).error, /tipo de evento inválido/);
+  assert.match(call({ action: "crearEvento", session, tipo: "CENA", fecha: "2026-12-25" }, deps).error, /tipo de evento inválido/);
   assert.match(call({ action: "crearEvento", session, tipo: "NAVIDAD", fecha: "18/12/2026" }, deps).error, /fecha inválida/);
-  assert.deepEqual(call({ action: "listEventos", session }, deps).eventos, []);
+  assert.deepEqual(call({ action: "listEventos", session }, deps).eventos.map((e) => e.tipo), ["NAVIDAD"]);
 });
 
 test("sortearEvento saca 2 R2 distintos, deja fila en `sorteos` y es reproducible", () => {
