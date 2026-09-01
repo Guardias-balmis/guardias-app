@@ -42,6 +42,11 @@
   }
   .gapp-card:active{transform:translateY(0) scale(.99)}
 
+  /* Indicador deslizante de la pestaña activa en BottomNav (2026-09-01, App.jsx) — vive
+     acá porque `left` se anima con `transition`, no con un keyframe, y por la misma razón
+     de siempre no puede ir en un style={{}} de React. */
+  .gapp-navind{transition:left .22s cubic-bezier(.2,0,0,1)}
+
   @keyframes gapp-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
   @keyframes gapp-pop{from{opacity:0;transform:translate(-50%,8px) scale(.96)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
   .gapp-rise{animation:gapp-rise .28s cubic-bezier(.2,0,0,1) both}
@@ -49,7 +54,7 @@
 
   @media (prefers-reduced-motion:reduce){
     .gapp-rise,.gapp-pop{animation:none}
-    .gapp-tap,.gapp-card{transition:none}
+    .gapp-tap,.gapp-card,.gapp-navind{transition:none}
   }
 </style>
 </head>
