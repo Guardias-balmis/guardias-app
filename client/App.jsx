@@ -66,7 +66,7 @@ function App() {
     <AppCtx.Provider value={ctx}>
       <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: COLOR.gray }}>
         <Header />
-        <div style={{ flex: 1, padding: "0 0 80px" }}>
+        <div key={!auth ? "login" : tab} className="gapp-rise" style={{ flex: 1, padding: "0 0 80px" }}>
           {!auth ? React.createElement(window.Screens.Login) :
             tab === "home" ? React.createElement(window.Screens.Home) :
             tab === "prefs" ? React.createElement(window.Screens.Prefs) :
@@ -114,15 +114,23 @@ function BottomNav() {
     { id: "prefs", icon: "⚙️", label: "Preferencias" },
     { id: "calendar", icon: "📅", label: "Cuadrante" },
   ];
+  // Índice del tab activo entre los de la barra (puede ser -1 si `tab` es una pantalla
+  // sin ítem propio aquí, ej. "settings" desde el engranaje del Header): el indicador
+  // se oculta en vez de saltar a una posición que no corresponde a ningún botón.
+  const activeIdx = items.findIndex((it) => it.id === tab);
   return (
     <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${COLOR.grayMid}`, display: "flex", zIndex: 100, boxShadow: "0 -2px 12px rgba(0,0,0,0.08)" }}>
+      <div className="gapp-navind" style={{
+        position: "absolute", top: -1, height: 2, width: `${100 / items.length}%`,
+        left: activeIdx >= 0 ? `${(activeIdx * 100) / items.length}%` : "0%",
+        background: COLOR.blue, opacity: activeIdx >= 0 ? 1 : 0,
+      }} />
       {items.map((it) => (
         <button key={it.id} onClick={() => setTab(it.id)} style={{
           flex: 1, padding: "10px 4px 8px", border: "none", background: "transparent",
           display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
           color: tab === it.id ? COLOR.blue : COLOR.grayDark,
           fontSize: 11, fontWeight: tab === it.id ? 700 : 400,
-          borderTop: tab === it.id ? `2px solid ${COLOR.blue}` : "2px solid transparent",
         }}>
           <span style={{ fontSize: 20 }}>{it.icon}</span>
           {it.label}
