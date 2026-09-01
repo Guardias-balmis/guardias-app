@@ -344,6 +344,12 @@ function PrefsScreen() {
     [field]: p[field].includes(fecha) ? p[field].filter((d) => d !== fecha) : [...p[field], fecha],
   }));
 
+  // El mínimo de 4 (normativa.pdf p.1) trae su propia excepción explícita — "salvo excepciones
+  // (por ejemplo febrero o vacaciones)" — así que con cualquier bloqueo este mes (vacaciones,
+  // rotación o baja) no tiene sentido forzar igual el piso de 4 guardias en la preferencia:
+  // esta persona sabe mejor que nadie que va a estar menos disponible.
+  const tieneAusenciaEsteMes = bloqueos.length > 0;
+
   // Fechas ya cubiertas por CUALQUIER bloqueo (vacaciones/rotación/baja): no tiene sentido
   // marcarlas también como "a evitar" — ya son una ausencia conocida y registrada.
   const fechasBloqueadas = new Set();
@@ -389,8 +395,12 @@ function PrefsScreen() {
       </Card>
 
       <Card title="🎯 Guardias que quiero hacer este mes" accent={COLOR.turquoise}>
-        <Counter value={prefs.maxGuardias} min={4} max={6} onChange={set("maxGuardias")} accent={COLOR.turquoise} bg={COLOR.turquoiseLight} />
-        <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 8 }}>(normativa: 4–6)</div>
+        <Counter value={prefs.maxGuardias} min={tieneAusenciaEsteMes ? 0 : 4} max={6} onChange={set("maxGuardias")} accent={COLOR.turquoise} bg={COLOR.turquoiseLight} />
+        <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 8 }}>
+          {tieneAusenciaEsteMes
+            ? "(normativa: 4–6, salvo excepciones — con una ausencia registrada este mes podés pedir menos)"
+            : "(normativa: 4–6)"}
+        </div>
         <div style={{ marginTop: 14 }}>
           <label style={S.label}>Si me toca doblete de fin de semana, prefiero…</label>
           <select value={prefs.preferDobles} onChange={(e) => set("preferDobles")(e.target.value)}
