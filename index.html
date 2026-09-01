@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Guardias · Dr. Balmis</title>
+<!-- El handshake con cdnjs (DNS + TCP + TLS) se adelanta al parseo del <head> en vez de pagarse
+     al llegar al primer <script>. De ahí salen las tres bibliotecas, y Babel Standalone son
+     ~2,3 MB: es la descarga más pesada del arranque con diferencia. Mismo truco que ya se usaba
+     con fonts.googleapis.com, aplicado al origen que de verdad manda en el tiempo de carga. -->
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>

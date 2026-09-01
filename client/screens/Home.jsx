@@ -126,7 +126,7 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
  * Los dos pasos (pulsar → confirmar) no son ceremonia: generar REEMPLAZA el cuadrante del mes, así
  * que un click de más sobre un mes ya montado a mano se lleva por delante el trabajo de una tarde.
  */
-function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, verCuadrante }) {
+function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, comprobando, verCuadrante }) {
   const [confirmando, setConfirmando] = useState(false);
   const [generando, setGenerando] = useState(false);
   const [resultado, setResultado] = useState(null);
@@ -135,6 +135,20 @@ function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, verCu
   // de septiembre es peor que no enseñar nada.
   useEffect(() => { setResultado(null); setConfirmando(false); }, [mes, anio]);
 
+  // Mientras no se sepa el estado del mes, la tarjeta NO se esconde: se enseña inerte diciendo
+  // que está comprobando. Esconderla era indistinguible de «no tienes permiso», y con una
+  // conexión lenta eso son varios segundos en los que el botón sencillamente no está y quien
+  // mira concluye que la aplicación está rota o que no le dejan (pasó de verdad, 2026-08-31).
+  // Sigue sin ofrecerse el botón: no saber si el mes está publicado no es saber que no lo está.
+  if (comprobando) {
+    return (
+      <Card title="🤖 Generar cuadrante de guardias">
+        <div style={{ fontSize: 12, color: COLOR.grayDark, lineHeight: 1.5 }}>
+          Comprobando el estado del mes…
+        </div>
+      </Card>
+    );
+  }
   if (!puedo) return null;
 
   const mover = (delta) => {
@@ -380,7 +394,8 @@ function HomeScreen() {
       </Card>
 
       <GeneradorIA api={app.api} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
-        setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")} />
+        setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")}
+        comprobando={estadoMes === null && puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable })} />
 
       <Imaginaria api={app.api} residentes={residentes} showToast={app.showToast} puedoRegistrar={puedoRegistrarImaginaria} />
 
