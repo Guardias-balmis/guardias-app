@@ -30,12 +30,28 @@ export function puedeMoverCiclo({ isResponsable, grupo, sinResponsable }) {
  * los dos casos NO se ofrece, porque no saber si el mes está publicado no es lo mismo que saber
  * que no lo está.
  *
+ * Solo BORRADOR, ya no VALIDADO (decisión V-46, 2026-09-02): una vez que el equipo se reúne y lo
+ * valida entre todos, regenerarlo por encima descartaría en silencio un mes que ya se dio por
+ * bueno — así que a partir de VALIDADO el botón deja de ofrecerse, igual que ya pasaba con
+ * PUBLICADO.
+ *
  * Y como siempre: esto decide qué se ENSEÑA. El permiso de verdad lo vuelve a comprobar
  * `requireCicloPermiso` en el servidor, que es donde no se puede falsear.
  *
  * @param {object} p  los tres de `puedeMoverCiclo` más `estado` ("BORRADOR"|"VALIDADO"|"PUBLICADO")
  */
 export function puedeGenerarCuadrante({ isResponsable, grupo, sinResponsable, estado }) {
-  return puedeMoverCiclo({ isResponsable, grupo, sinResponsable })
-    && (estado === "BORRADOR" || estado === "VALIDADO");
+  return puedeMoverCiclo({ isResponsable, grupo, sinResponsable }) && estado === "BORRADOR";
+}
+
+// Acceso de desarrollador SOLO para el botón de generar con IA (decisión V-46, 2026-09-02, a
+// pedido explícito del autor de la app): no toca `puedeMoverCiclo` ni `puedeGenerarCuadrante`, así
+// que ninguna otra acción del ciclo (validar/publicar/despublicar/excepciones/sorteo) se ve
+// afectada. El autor es R1/R2 hoy y no puede pasar a ser Mayor sin falsear su nivel real —se
+// deriva de fechas y alimenta INV-11 y compañía—, así que se identifica por EMAIL, no por rol ni
+// nivel. Esto SOLO decide qué se ENSEÑA: el servidor vuelve a comprobar el mismo email por su
+// cuenta en `handleGenerarIA`, que es donde de verdad no se puede falsear.
+const EMAIL_ACCESO_DESARROLLADOR_IA = "agustinlagioiosa@gmail.com";
+export function esAccesoDesarrolladorIA(email) {
+  return email === EMAIL_ACCESO_DESARROLLADOR_IA;
 }

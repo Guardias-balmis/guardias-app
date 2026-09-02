@@ -4,7 +4,7 @@ import { COLOR, ANOS, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js
 import { periodsOfResident, levelOn } from "./v2/domain/residents.js";
 import { todayISO } from "./client/lib/dates.js";
 import { S } from "./client/lib/design-tokens.js";
-import { puedeMoverCiclo, puedeGenerarCuadrante } from "./client/lib/permisos.js";
+import { puedeMoverCiclo, puedeGenerarCuadrante, esAccesoDesarrolladorIA } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 
 const { useState, useEffect } = React;
@@ -297,7 +297,10 @@ function HomeScreen() {
     return () => { cancelled = true; };
   }, [myResidente?.id, mes, anio]);
   const puedoRegistrarImaginaria = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
-  const puedoGenerar = puedeGenerarCuadrante({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, estado: estadoMes });
+  // El acceso de desarrollador (V-46) solo destraba el PERMISO del ciclo, no el estado del mes:
+  // sigue sin ofrecerse fuera de Borrador, para él igual que para cualquiera.
+  const puedoGenerar = (puedeGenerarCuadrante({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, estado: estadoMes })
+    || (esAccesoDesarrolladorIA(myResidente?.email) && estadoMes === "BORRADOR"));
   const puedoOfrecerme = proximoMandato && !proximoMandato.mandato
     && proximoMandato.elegibles.includes(myResidente?.id) && !proximoMandato.meHeOfrecido;
   const hoy = new Date();

@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { puedeMoverCiclo, puedeGenerarCuadrante } from "../permisos.js";
+import { puedeMoverCiclo, puedeGenerarCuadrante, esAccesoDesarrolladorIA } from "../permisos.js";
 
 const RESPONSABLE = { isResponsable: true, grupo: "MAYOR", sinResponsable: false };
 const MAYOR = { isResponsable: false, grupo: "MAYOR", sinResponsable: false };
@@ -33,9 +33,12 @@ test("puedeMoverCiclo: con mandato vigente, un Mayor que no es el titular no mue
 
 // ── el botón de generar con IA (V-45) ─────────────────────────────────────────────────────────
 
-test("el Responsable ve el botón en un mes editable", () => {
+test("el Responsable ve el botón en Borrador", () => {
   assert.equal(puedeGenerarCuadrante({ ...RESPONSABLE, estado: "BORRADOR" }), true);
-  assert.equal(puedeGenerarCuadrante({ ...RESPONSABLE, estado: "VALIDADO" }), true);
+});
+
+test("un mes VALIDADO ya no ofrece el botón (V-46): no reescribir en silencio lo que el equipo ya revisó", () => {
+  assert.equal(puedeGenerarCuadrante({ ...RESPONSABLE, estado: "VALIDADO" }), false);
 });
 
 test("el resto de residentes NO lo ve, que es el requisito del encargo", () => {
@@ -68,4 +71,13 @@ test("sin saber el estado del mes no se ofrece: no saber no es saber que no", ()
 test("una sesión sin datos todavía no ve el botón", () => {
   assert.equal(puedeGenerarCuadrante({}), false);
   assert.equal(puedeGenerarCuadrante({ grupo: null, estado: "BORRADOR" }), false);
+});
+
+// ── acceso de desarrollador, solo para este botón (V-46) ─────────────────────────────────────
+
+test("esAccesoDesarrolladorIA: email exacto sí, cualquier otro no", () => {
+  assert.equal(esAccesoDesarrolladorIA("agustinlagioiosa@gmail.com"), true);
+  assert.equal(esAccesoDesarrolladorIA("otro@gmail.com"), false);
+  assert.equal(esAccesoDesarrolladorIA(undefined), false);
+  assert.equal(esAccesoDesarrolladorIA(null), false);
 });

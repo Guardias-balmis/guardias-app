@@ -42,6 +42,10 @@ function fakeSS(rows = {}) {
 
 const RESP = { id: "resp-1", nombre: "Rita Mayor", email: "resp@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
 const OTRO = { id: "otro-1", nombre: "Olga Pequeña", email: "otro@gmail.com", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" };
+// Mismas fechas que OTRO (Pequeño a `deps.today`, 2027-06-16): el acceso de desarrollador (V-46)
+// tiene que funcionar PESE a no ser Mayor, no por serlo.
+const DEV = { id: "dev-1", nombre: "Agustín Dev", email: "agustinlagioiosa@gmail.com", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" };
+const conDev = { residentes: [headerOf(TABLES.residentes), ...[RESP, OTRO, DEV].map((r) => recordToRow(TABLES.residentes, r))] };
 
 const PROPUESTA = [
   { fecha: "2027-07-01", residenteId: "resp-1", codigo: "G" },
@@ -135,6 +139,34 @@ test("sin mandato vigente lo puede lanzar cualquier Mayor (V-16), no se bloquea 
 
   assert.equal(generar(deps, loggedInAs(deps, "resp@gmail.com")).ok, true, "un Mayor sí puede");
   assert.match(generar(deps, loggedInAs(deps, "otro@gmail.com")).error, /solo un R3 o R4/, "un Pequeño no");
+});
+
+test("V-46: el acceso de desarrollador (email exacto) genera en Borrador aunque sea Pequeño", () => {
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm, extraSheets: conDev });
+
+  const r = generar(deps, loggedInAs(deps, DEV.email));
+  assert.equal(r.ok, true, "el acceso de desarrollador destraba el permiso del ciclo solo para esta acción");
+});
+
+test("V-46: el acceso de desarrollador NO destraba el resto del ciclo (marcarValidado sigue pidiendo Mayor/Responsable)", () => {
+  const deps = makeDeps({ extraSheets: conDev });
+  const session = loggedInAs(deps, DEV.email);
+
+  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /solo el Responsable|solo un R3 o R4/);
+});
+
+test("V-46: el acceso de desarrollador sigue exigiendo Borrador (un VALIDADO se rechaza igual que a cualquiera)", () => {
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm, extraSheets: conDev });
+  const session = loggedInAs(deps, DEV.email);
+  deps.store.appendRecord("cuadrantes", { mes: 7, anio: 2027, estado: "VALIDADO", actorId: "resp-1", fecha: "2027-06-01" });
+
+  const r = generar(deps, session);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /VALIDADO/);
 });
 
 test("una sesión inválida no llega ni a mirar el permiso", () => {
@@ -260,16 +292,18 @@ test("las marcas V/R/B del mes sobreviven: el generador solo borra lo que propon
   assert.equal(marcas.length, 1, "una V no es una propuesta del generador: no le pertenece y no la borra");
 });
 
-test("guardar deja el mes en BORRADOR aunque estuviera VALIDADO (editar revierte, V-10)", () => {
+test("un mes VALIDADO ya no se regenera (V-46): no se descarta en silencio lo que el equipo ya revisó", () => {
   const llm = fakeLlm([ok(RESPUESTA_OK)]);
   const deps = makeDeps({ llm });
   const session = loggedInAs(deps, "resp@gmail.com");
   deps.store.appendRecord("cuadrantes", { mes: 7, anio: 2027, estado: "VALIDADO", actorId: "resp-1", fecha: "2027-06-01" });
 
   const r = generar(deps, session);
-  assert.equal(r.ok, true);
-  assert.equal(r.estado, "BORRADOR");
-  assert.equal(call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "BORRADOR");
+  assert.equal(r.ok, false);
+  assert.match(r.error, /VALIDADO/);
+  assert.match(r.error, /Borrador/);
+  assert.equal(llm.prompts.length, 0, "ni un token de cuota gastado sobre un mes que no se va a regenerar");
+  assert.equal(call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "VALIDADO", "el mes no cambia de estado si no se generó nada");
 });
 
 // ── reintentos y fracaso (requisitos R9/R10) ──────────────────────────────────────────────────
