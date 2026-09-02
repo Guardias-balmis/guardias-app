@@ -2008,6 +2008,19 @@ function promptData(deps, mes, anio, snap) {
   };
 }
 
+// Acceso de desarrollador SOLO para `generarCuadranteIA` (decisión V-46, 2026-09-02, a pedido
+// explícito del autor de la app). El resto del permiso del ciclo —validar, publicar, despublicar,
+// excepciones, sorteo, imaginaria— sigue exigiendo Responsable o Mayor tal cual: esto NO toca
+// `requireCicloPermiso`, se comprueba aparte y solo aquí. El autor es R1/R2 (Pequeño) hoy, así que
+// no puede tener el permiso del ciclo por las reglas normales sin falsear su nivel real —que se
+// deriva de fechas y alimenta INV-11 y compañía, y eso sí rompería algo de verdad. Se identifica
+// por EMAIL y no por rol ni nivel, precisamente para no depender de nada que la app derive sola.
+const EMAIL_ACCESO_DESARROLLADOR_IA = "agustinlagioiosa@gmail.com";
+function esAccesoDesarrolladorIA(deps, session) {
+  const residente = allResidentes(deps).find((r) => r.id === session.sub);
+  return Boolean(residente) && residente.email === EMAIL_ACCESO_DESARROLLADOR_IA;
+}
+
 /**
  * `generarCuadranteIA` (decisión V-45). El orden importa y es el del encargo: permiso → estado →
  * contexto → propuesta del modelo → VALIDACIÓN → escritura. La escritura es el último paso y solo
@@ -2016,12 +2029,18 @@ function promptData(deps, mes, anio, snap) {
  */
 function handleGenerarIA(req, deps, session) {
   const denegado = requireCicloPermiso(deps, session, "generar el cuadrante con IA");
-  if (denegado) return denegado;
+  if (denegado && !esAccesoDesarrolladorIA(deps, session)) return denegado;
 
   const estadoActual = validCuadranteMesAnio(req, deps);
   if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
-  if (!deps.domain.canEdit(estadoActual)) {
+  if (estadoActual === "PUBLICADO") {
     return { ok: false, error: `el cuadrante de ${req.mes}/${req.anio} está PUBLICADO y no admite ediciones: despublícalo antes de regenerarlo` };
+  }
+  // Decisión V-46 (2026-09-02, a pedido del autor): antes se ofrecía también sobre VALIDADO. Una
+  // vez que el equipo se reúne y lo valida entre todos, regenerarlo por encima sería descartar en
+  // silencio un mes que ya se revisó y se dio por bueno — así que ahora solo se ofrece en Borrador.
+  if (estadoActual === "VALIDADO") {
+    return { ok: false, error: `el cuadrante de ${req.mes}/${req.anio} ya está VALIDADO: el generador con IA solo se ofrece en Borrador, para no reescribir un mes que el equipo ya revisó y dio por bueno` };
   }
   if (!deps.llm || typeof deps.llm.generar !== "function") {
     return { ok: false, error: "la generación con IA no está configurada en este despliegue: falta la propiedad GEMINI_API_KEY en la configuración del script" };
