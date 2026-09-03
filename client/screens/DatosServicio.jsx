@@ -12,7 +12,7 @@
 // comprobar en cada acción; aquí solo se decide qué se enseña.
 import { COLOR, S } from "./client/lib/design-tokens.js";
 import { parseFestivos } from "./client/lib/festivos-parse.js";
-import { puedeMoverCiclo } from "./client/lib/permisos.js";
+import { puedeMoverCiclo, esAccesoDesarrollador } from "./client/lib/permisos.js";
 import { periodsOfResident, levelOn } from "./v2/domain/residents.js";
 import { bridgesOfMonth } from "./v2/domain/calendar.js";
 import { todayISO } from "./client/lib/dates.js";
@@ -384,7 +384,7 @@ function Excepciones({ api, showToast, puedoEscribir }) {
 
 function DatosServicioScreen() {
   const app = window.useApp();
-  const { api, residentes, showToast, setTab } = app;
+  const { api, residentes, showToast, setTab, myResidente } = app;
   const [anio, setAnio] = useState(Number(todayISO().slice(0, 4)));
   // Mismo criterio y misma fuente que Calendar.jsx y Prefs.jsx: `sinResponsable` lo dice el
   // servidor en estadoCuadrante, nunca el `rol` del token, que se firmó en el login.
@@ -404,7 +404,7 @@ function DatosServicioScreen() {
   // puede cargarlos y corregirlos — ver el comentario de `crearFestivos` en router.js. Excepciones
   // (INV-9) SÍ sigue exigiendo el permiso del ciclo: justificar un 2×R2 es una decisión real, no
   // transcribir un dato.
-  const puedeExcepciones = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
+  const puedeExcepciones = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador: esAccesoDesarrollador(myResidente?.email) });
 
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 720, margin: "0 auto" }}>

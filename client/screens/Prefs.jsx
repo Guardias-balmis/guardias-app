@@ -8,7 +8,7 @@
 // (informativo, no bloquea).
 import { COLOR, S } from "./client/lib/design-tokens.js";
 import { datesOfMonth, weekday, compareISO, addDays, toISO, addMonths } from "./v2/domain/calendar.js";
-import { puedeMoverCiclo } from "./client/lib/permisos.js";
+import { puedeMoverCiclo, esAccesoDesarrollador } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 
 const { useState, useEffect } = React;
@@ -296,7 +296,7 @@ function PrefsScreen() {
   // siempre que no bloquean (si bloquearan, la llamada habría fallado con ok:false y nunca
   // habríamos llegado a onCreated), pero antes nadie los mostraba — se calculaban y se tiraban.
   const [riesgosUltimoBloqueo, setRiesgosUltimoBloqueo] = useState([]);
-  const puedoRegistrarAjenas = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
+  const puedoRegistrarAjenas = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador: esAccesoDesarrollador(myResidente?.email) });
 
   const cargarBloqueos = async () => {
     const r = await api.misBloqueos(anio, mes);

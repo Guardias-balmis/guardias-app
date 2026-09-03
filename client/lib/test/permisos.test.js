@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { puedeMoverCiclo, puedeGenerarCuadrante, esAccesoDesarrolladorIA } from "../permisos.js";
+import { puedeMoverCiclo, puedeGenerarCuadrante, esAccesoDesarrollador } from "../permisos.js";
 
 const RESPONSABLE = { isResponsable: true, grupo: "MAYOR", sinResponsable: false };
 const MAYOR = { isResponsable: false, grupo: "MAYOR", sinResponsable: false };
@@ -73,11 +73,25 @@ test("una sesión sin datos todavía no ve el botón", () => {
   assert.equal(puedeGenerarCuadrante({ grupo: null, estado: "BORRADOR" }), false);
 });
 
-// ── acceso de desarrollador, solo para este botón (V-46) ─────────────────────────────────────
+// ── acceso de desarrollador, para todo el ciclo (V-47, amplía V-46) ──────────────────────────
 
-test("esAccesoDesarrolladorIA: email exacto sí, cualquier otro no", () => {
-  assert.equal(esAccesoDesarrolladorIA("agustinlagioiosa@gmail.com"), true);
-  assert.equal(esAccesoDesarrolladorIA("otro@gmail.com"), false);
-  assert.equal(esAccesoDesarrolladorIA(undefined), false);
-  assert.equal(esAccesoDesarrolladorIA(null), false);
+test("esAccesoDesarrollador: email exacto sí (dentro de plazo), cualquier otro no", () => {
+  assert.equal(esAccesoDesarrollador("agustinlagioiosa@gmail.com", "2026-09-03"), true);
+  assert.equal(esAccesoDesarrollador("otro@gmail.com", "2026-09-03"), false);
+  assert.equal(esAccesoDesarrollador(undefined, "2026-09-03"), false);
+  assert.equal(esAccesoDesarrollador(null, "2026-09-03"), false);
+});
+
+test("esAccesoDesarrollador: caduca sola pasada la fecha límite (V-47)", () => {
+  assert.equal(esAccesoDesarrollador("agustinlagioiosa@gmail.com", "2027-03-31"), true, "el último día cuenta");
+  assert.equal(esAccesoDesarrollador("agustinlagioiosa@gmail.com", "2027-04-01"), false);
+});
+
+test("V-47: el acceso de desarrollador destraba puedeMoverCiclo entero, no solo generar", () => {
+  const dev = { isResponsable: false, grupo: "PEQUENO", sinResponsable: false, accesoDesarrollador: true };
+  assert.equal(puedeMoverCiclo(dev), true, "aunque sea Pequeño y haya Responsable vigente");
+});
+
+test("V-47: sin el acceso de desarrollador, puedeMoverCiclo sigue las reglas de siempre", () => {
+  assert.equal(puedeMoverCiclo({ ...PEQUENO, accesoDesarrollador: false }), false);
 });

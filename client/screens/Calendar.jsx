@@ -10,7 +10,7 @@ import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/dom
 import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit, equityWarnings } from "./v2/domain/cuadrante.js";
 import { closeViolations } from "./client/lib/closes.js";
 import { thirdPostViolations } from "./client/lib/thirdpost.js";
-import { puedeMoverCiclo as reglaCiclo } from "./client/lib/permisos.js";
+import { puedeMoverCiclo as reglaCiclo, esAccesoDesarrollador } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 // Aviso de descanso (INV-15) en el instante de escribir la celda. Existe sobre todo por el 3P:
 // `schedule.js` no lo reparte, así que siempre lo pone una persona encima de un mes ya generado,
@@ -136,7 +136,7 @@ function nombreMesDe(anio, mes) {
 
 function CalendarScreen() {
   const app = window.useApp();
-  const { anio, mes, setAnio, setMes, residentes, showToast, isResponsable, grupo } = app;
+  const { anio, mes, setAnio, setMes, residentes, showToast, isResponsable, grupo, myResidente } = app;
 
   const [asignaciones, setAsignaciones] = useState({}); // {[residenteId]: {[fecha]: codigo}}
   const [origenes, setOrigenes] = useState({});         // {[residenteId]: {[fecha]: "CEDIDA"|"COMPRADA"}} (INV-4)
@@ -187,7 +187,7 @@ function CalendarScreen() {
   // Mismo criterio que el servidor: el Responsable, o —si el mandato está sin decidir— cualquier
   // Mayor. Aquí solo decide qué botones se ven; quien manda es requireCicloPermiso en el router.
   const soyMayor = grupo === "MAYOR";
-  const puedeMoverCiclo = reglaCiclo({ isResponsable, grupo, sinResponsable });
+  const puedeMoverCiclo = reglaCiclo({ isResponsable, grupo, sinResponsable, accesoDesarrollador: esAccesoDesarrollador(myResidente?.email) });
   const bloqueadoPorPublicado = !canEdit(estado) || estadoError;
 
   useEffect(() => {
