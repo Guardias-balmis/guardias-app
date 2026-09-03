@@ -7,7 +7,7 @@
 // autor. Acentos de color: rojo=BAJA (sigue bloqueando), naranja=vacaciones/rotación/evitar
 // (informativo, no bloquea).
 import { COLOR, S } from "./client/lib/design-tokens.js";
-import { datesOfMonth, weekday, compareISO, addDays } from "./v2/domain/calendar.js";
+import { datesOfMonth, weekday, compareISO, addDays, toISO, addMonths } from "./v2/domain/calendar.js";
 import { puedeMoverCiclo } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 
@@ -338,6 +338,16 @@ function PrefsScreen() {
     );
   }
 
+  // Navegar de mes sin salir de la pantalla (a pedido del autor, 2026-09-03): antes solo se
+  // podía cambiar de mes desde el cuadrante, así que cargar preferencias del mes en curso y de
+  // los siguientes obligaba a ir y volver de pantalla en cada uno. `anio`/`mes` son estado
+  // global de la app (compartido con Calendar.jsx) — cambiarlos aquí también mueve el cuadrante.
+  const cambiarMes = (delta) => {
+    const iso = addMonths(toISO(anio, mes, 1), delta);
+    app.setAnio(Number(iso.slice(0, 4)));
+    app.setMes(Number(iso.slice(5, 7)));
+  };
+
   const set = (field) => (value) => setPrefs((p) => ({ ...p, [field]: value }));
   const toggleFecha = (field, fecha) => setPrefs((p) => ({
     ...p,
@@ -384,15 +394,24 @@ function PrefsScreen() {
       <SectionTitle>⚙️ Preferencias del mes</SectionTitle>
 
       <Card>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <button onClick={() => cambiarMes(-1)} style={{ ...S.smallBtn, background: COLOR.bluePale, color: COLOR.blue }}>◀</button>
           <div style={{ fontSize: 16, fontWeight: 700, color: COLOR.blueDark, textTransform: "capitalize" }}>
             {nombreMesDe(anio, mes)}
           </div>
+          <button onClick={() => cambiarMes(1)} style={{ ...S.smallBtn, background: COLOR.bluePale, color: COLOR.blue }}>▶</button>
+        </div>
+        <div style={{ marginTop: 10, textAlign: "center" }}>
           <button onClick={() => setTab("calendar")} style={{ ...S.smallBtn, background: COLOR.bluePale, color: COLOR.blue }}>
             Ver cuadrante →
           </button>
         </div>
       </Card>
+      <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: -8 }}>
+        Todo lo de esta pantalla es <b>por mes</b>: usa las flechas de arriba para ir cargando tus
+        preferencias del mes en curso y de los siguientes, una por una — recordá guardar antes de
+        cambiar de mes.
+      </div>
 
       <Card title="🎯 Guardias que quiero hacer este mes" accent={COLOR.turquoise}>
         <Counter value={prefs.maxGuardias} min={tieneAusenciaEsteMes ? 0 : 4} max={6} onChange={set("maxGuardias")} accent={COLOR.turquoise} bg={COLOR.turquoiseLight} />
