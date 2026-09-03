@@ -15,8 +15,9 @@ import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { absences, BLOQUEA_ASIGNACION } from "../../v2/domain/absences.js";
 import { groupOnDate } from "../../v2/domain/residents.js";
-import { parseISO } from "../../v2/domain/calendar.js";
+import { parseISO, addDays } from "../../v2/domain/calendar.js";
 import { previewBloqueoRisk } from "../../v2/domain/blockPreview.js";
+import { canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -63,7 +64,10 @@ function makeDeps({ mandatoDe = null } = {}) {
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     ss,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
-    domain: { absences, groupOnDate, parseISO, previewBloqueoRisk },
+    // `addDays`/`canEdit`/`stateAfterEdit` los necesita `writeBloqueoMarcas` (V-48): la marca
+    // V/R/B se escribe sola en la rejilla al crear el bloqueo, así que crearBloqueo ya no es
+    // "solo escribir en bloqueos" y también toca estas tres funciones del ciclo del cuadrante.
+    domain: { absences, groupOnDate, parseISO, addDays, previewBloqueoRisk, canEdit, stateAfterEdit },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
     fetchTokeninfo: (idToken) => ({

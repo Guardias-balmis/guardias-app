@@ -104,7 +104,7 @@ function NuevoBloqueo({ anio, mes, onCreated, showToast, api, paraOtros, residen
     if (ajena) extra.residenteId = residenteId;
     const r = await api.crearBloqueo(desde, hasta, motivo, extra);
     setSaving(false);
-    if (r.ok) { showToast(ajena ? "Ausencia registrada ✓" : "Bloqueo añadido ✓"); onCreated(r.riesgos); }
+    if (r.ok) { showToast(ajena ? "Ausencia registrada ✓" : "Bloqueo añadido ✓"); onCreated(r.riesgos, r.marcasSinEscribir); }
     else showToast("Error añadiendo el bloqueo: " + r.error, "err");
   };
 
@@ -296,6 +296,10 @@ function PrefsScreen() {
   // siempre que no bloquean (si bloquearan, la llamada habría fallado con ok:false y nunca
   // habríamos llegado a onCreated), pero antes nadie los mostraba — se calculaban y se tiraban.
   const [riesgosUltimoBloqueo, setRiesgosUltimoBloqueo] = useState([]);
+  // Días que `crearBloqueo` NO pudo marcar solo en la rejilla (V-48): ya tenían un código puesto
+  // o el mes está publicado. Se avisa para que quien registró la ausencia sepa que esos días hay
+  // que revisarlos a mano — la marca automática nunca pisa una asignación real ni un mes cerrado.
+  const [diasSinMarcar, setDiasSinMarcar] = useState([]);
   const puedoRegistrarAjenas = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador: esAccesoDesarrollador(myResidente?.email) });
 
   const cargarBloqueos = async () => {
@@ -493,6 +497,21 @@ function PrefsScreen() {
             </div>
           </div>
         )}
+        {diasSinMarcar.length > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            <Aviso>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <span>
+                  No se pudo poner la marca en la rejilla para {diasSinMarcar.length} día{diasSinMarcar.length === 1 ? "" : "s"} ({diasSinMarcar.map(fechaEs).join(", ")}):
+                  ya tenían un código puesto o el mes está publicado. Revisalos a mano si hace falta.
+                </span>
+                <button onClick={() => setDiasSinMarcar([])}
+                  style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0 }}
+                  aria-label="Cerrar aviso">×</button>
+              </div>
+            </Aviso>
+          </div>
+        )}
         {riesgosUltimoBloqueo.length > 0 && (
           <div style={{ marginBottom: 10 }}>
             <Aviso>
@@ -513,9 +532,10 @@ function PrefsScreen() {
         {showNuevoBloqueo ? (
           <NuevoBloqueo anio={anio} mes={mes} api={api} showToast={showToast}
             paraOtros={puedoRegistrarAjenas} residentes={app.residentes} miId={myResidente.id}
-            onCreated={(riesgos) => {
+            onCreated={(riesgos, sinMarcar) => {
               setShowNuevoBloqueo(false); cargarBloqueos(); cargarAjenas();
               setRiesgosUltimoBloqueo(riesgos || []);
+              setDiasSinMarcar(sinMarcar || []);
             }} />
         ) : (
           <Btn onClick={() => { setShowNuevoBloqueo(true); setRiesgosUltimoBloqueo([]); }} color={COLOR.orangeLight} textColor={COLOR.orange}>+ Añadir</Btn>

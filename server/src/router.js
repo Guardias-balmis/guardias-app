@@ -304,7 +304,10 @@ export function handleRequest(rawBody, deps) {
             residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo,
             provincia: req.provincia, guardiasEnCentroExterno: req.guardiasEnCentroExterno, activo: true,
           });
-          return { ok: true, id, residenteId, riesgos };
+          // V-48: la marca V/R/B se escribe sola en la rejilla para que el equipo la vea sin que
+          // nadie tenga que ir día a día a mano — ver el comentario de `writeBloqueoMarcas`.
+          const { escritos, sinMarcar } = writeBloqueoMarcas(deps, session, residenteId, req.motivo, rango.desde, rango.hasta);
+          return { ok: true, id, residenteId, riesgos, marcasEscritas: escritos, marcasSinEscribir: sinMarcar };
         });
 
       case "misBloqueos":
@@ -957,6 +960,69 @@ function activeBloqueosInMonth(deps, anio, mes) {
   const { usables, corruptas } = partitionBloqueos(deps, allBloqueos(deps));
   // Tope superior lexicográfico holgado: "-31" existe en ISO aunque el mes tenga 28/30 días.
   return [...bloqueosInRange(deps, usables, `${prefix}-01`, `${prefix}-31`), ...corruptas.map((c) => c.bloqueo)];
+}
+
+// El código de la rejilla que corresponde a cada motivo de Bloqueo (V-48): son exactamente los
+// tres códigos "de marca" que ya existían en ASIG_CODIGOS antes de esta decisión.
+const ASIG_CODIGO_DE_BLOQUEO = { VACACIONES: "V", ROTACION: "R", BAJA: "B" };
+
+/**
+ * Escribe sola la marca V/R/B en `asignaciones`, un día por cada uno del bloqueo recién creado
+ * (decisión del autor, 2026-09-03, V-48): antes había que ir día a día a mano en la rejilla del
+ * cuadrante para que el equipo VIERA una ausencia que la tabla `bloqueos` (la que de verdad leen
+ * los invariantes, V-19) ya tenía registrada desde el alta — la rejilla y la tabla real podían
+ * contarse historias distintas.
+ *
+ * Dos guardarraíles, no una copia ciega de `guardarAsignaciones`:
+ *  - Solo rellena celdas VACÍAS. Un día con un código ya puesto —una guardia real, por ejemplo—
+ *    no se pisa nunca: silenciar una asignación de verdad para poner una marca informativa sería
+ *    justo el tipo de pérdida de datos que este proyecto evita en todas partes (asignaciones es
+ *    append-only y nunca se borra). Esos días quedan en `sinMarcar` para que quien registró el
+ *    bloqueo sepa que tiene que revisarlos.
+ *  - Un mes PUBLICADO no se toca (mismo criterio que `guardarAsignaciones`, V-9b): sus días
+ *    también van a `sinMarcar`. Solo se revierte VALIDADO→BORRADOR (`stateAfterEdit`) en los
+ *    meses donde de verdad se escribió algo, no en los que quedaron intactos.
+ */
+function writeBloqueoMarcas(deps, session, residenteId, motivo, desde, hasta) {
+  const codigo = ASIG_CODIGO_DE_BLOQUEO[motivo];
+  if (!codigo) return { escritos: 0, sinMarcar: [] };
+
+  const fechas = [];
+  for (let f = desde; f <= hasta; f = deps.domain.addDays(f, 1)) fechas.push(f);
+
+  const codigoActual = new Map(
+    deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" })
+      .filter((a) => a.residenteId === residenteId)
+      .map((a) => [a.fecha, a.codigo]),
+  );
+
+  const porMes = new Map();
+  for (const f of fechas) {
+    const clave = f.slice(0, 7);
+    if (!porMes.has(clave)) porMes.set(clave, { mes: Number(f.slice(5, 7)), anio: Number(f.slice(0, 4)), fechas: [] });
+    porMes.get(clave).fechas.push(f);
+  }
+
+  const sinMarcar = [];
+  const cambios = [];
+  for (const { mes, anio, fechas: fechasMes } of porMes.values()) {
+    if (!deps.domain.canEdit(currentCuadranteEstado(deps, mes, anio))) { sinMarcar.push(...fechasMes); continue; }
+    for (const f of fechasMes) {
+      if ((codigoActual.get(f) || "") !== "") { sinMarcar.push(f); continue; }
+      cambios.push({ fecha: f, residenteId, codigo });
+    }
+  }
+  if (cambios.length === 0) return { escritos: 0, sinMarcar };
+
+  deps.store.appendRecords("asignaciones", cambios);
+  const mesesEscritos = new Set(cambios.map((c) => c.fecha.slice(0, 7)));
+  for (const { mes, anio } of porMes.values()) {
+    if (!mesesEscritos.has(monthPrefix(anio, mes))) continue;
+    const estado = currentCuadranteEstado(deps, mes, anio);
+    const siguiente = deps.domain.stateAfterEdit(estado);
+    if (siguiente !== estado) writeCuadranteEstado(deps, session, mes, anio, siguiente);
+  }
+  return { escritos: cambios.length, sinMarcar };
 }
 
 /**
