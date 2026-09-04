@@ -594,6 +594,13 @@ test("la bitácora se acota a 50 violaciones (+1 de resumen) y su fallo nunca co
   const fila = bitacora(deps).at(-1);
   assert.equal(fila.violaciones.length, 51);
   assert.match(fila.violaciones[50].detalle, /y 450 más \(recortado\)/);
+  // Y en caracteres: 60 violaciones con detalles e ids de 1.000 caracteres tampoco pasan de la celda.
+  const gordas = Array.from({ length: 60 }, (_, i) => ({ invariante: "FORMATO", severidad: "error", residenteId: "x".repeat(1000), detalle: `${i} ` + "y".repeat(1000) }));
+  const deps3 = makeDeps({ llm: fakeLlm([ok(RESPUESTA_OK)]), violaciones: () => gordas });
+  assert.equal(generar(deps3, loggedInAs(deps3, "resp@gmail.com")).resultado, "REVISION_MANUAL");
+  const celda = JSON.stringify(bitacora(deps3).at(-1).violaciones);
+  assert.ok(celda.length < 50000, `la celda mide ${celda.length}`);
+  assert.match(celda, /más \(recortado\)/);
 
   const deps2 = makeDeps({ llm: fakeLlm([ok(RESPUESTA_OK)]) });
   const session2 = loggedInAs(deps2, "resp@gmail.com");

@@ -248,3 +248,11 @@ test("un residente que termina o empieza a mitad de mes lleva su «solo hasta/de
   assert.match(p, /id="r2a" — Caro Dos \(.*\) — solo hasta el 2026-08-15, después NO/);
   assert.match(p, /id="r1n" — Nico Uno \(.*\) — solo desde el 2026-08-20/);
 });
+
+test("el reintento acota las violaciones que devuelve al modelo (60 líneas por bloque, 300 caracteres por detalle) y resume el resto", () => {
+  const muchas = Array.from({ length: 500 }, (_, i) => ({ invariante: "FORMATO", severidad: "error", detalle: `${i} ` + "z".repeat(1000) }));
+  const r = buildRetryPrompt({ prompt: "P", propuesta: [], violaciones: muchas });
+  assert.ok(r.length < 30000, `mide ${r.length}`);
+  assert.match(r, /y 440 más del mismo tipo/);
+  assert.equal((r.match(/\[FORMATO\]/g) || []).length, 60);
+});

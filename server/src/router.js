@@ -44,6 +44,10 @@ const MARCADORES_REJILLA = new Set(["V", "R", "B"]);
 // Tope de violaciones que se persisten por fila de `generaciones`: una celda de Sheets admite
 // 50.000 caracteres y una respuesta hostil (500 ids inventados) daba ~96 KB de JSON.
 const BITACORA_MAX_VIOLACIONES = 50;
+// …y en caracteres: 50 violaciones con un `detalle` de 1.000 caracteres cada una (ids de 1.000
+// caracteres inventados por el modelo) seguirían pasando de 50.000. Margen sobre el límite de Sheets.
+const BITACORA_MAX_CHARS = 40000;
+const BITACORA_MAX_DETALLE = 300;
 // `origen` marca la guardia cedida o comprada, que INV-4 excluye de los seis ejes de INV-3.
 // `tally.js:15` lo evalúa por TRUTHINESS, así que una errata cualquiera —no solo un valor de otro
 // enum— saca la guardia del cómputo y de los totales de la pestaña publicada, en silencio.
@@ -1613,9 +1617,14 @@ function escribirBitacora(deps, session, req, modelo, intentos, resultado, viola
   // haría creer que no se guardó nada — y regenerar en «reemplazar» un mes recién generado. La
   // bitácora es memoria de lo que pasó, nunca puede decidir si pasó.
   const lista = Array.isArray(violaciones) ? violaciones : [];
-  const recorte = lista.length > BITACORA_MAX_VIOLACIONES
-    ? [...lista.slice(0, BITACORA_MAX_VIOLACIONES), { invariante: "BITACORA", severidad: "aviso", detalle: `y ${lista.length - BITACORA_MAX_VIOLACIONES} más (recortado)` }]
-    : lista;
+  const acorta = (v) => ({
+    ...v,
+    detalle: String((v && v.detalle) || "").slice(0, BITACORA_MAX_DETALLE),
+    ...(v && typeof v.residenteId === "string" ? { residenteId: v.residenteId.slice(0, 100) } : {}),
+  });
+  const recorte = lista.slice(0, BITACORA_MAX_VIOLACIONES).map(acorta);
+  while (recorte.length > 0 && JSON.stringify(recorte).length > BITACORA_MAX_CHARS) recorte.pop();
+  if (recorte.length < lista.length) recorte.push({ invariante: "BITACORA", severidad: "aviso", detalle: `y ${lista.length - recorte.length} más (recortado)` });
   try {
     deps.store.appendRecord("generaciones", {
       mes: req.mes, anio: req.anio, fecha: deps.today, actorId: session.sub,

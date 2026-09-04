@@ -741,6 +741,9 @@ Genera el cuadrante completo de ${titulo} (mes=${mes}, año=${anio}) respetando 
  * de equidad que no bloquea nada, y vuelve con un `error` nuevo. Lo que impide guardar se dice
  * como obligatorio; lo demás, como mejora.
  */
+const RETRY_MAX_LINEAS = 60;
+const RETRY_MAX_DETALLE = 300;
+
 function buildRetryPrompt({ prompt, propuesta, violaciones, problema }) {
   const partes = [prompt, "", "─────────────────────────────────────────", ""];
   partes.push("Tu respuesta anterior NO se ha podido aceptar. Corrígela y vuelve a responder con el");
@@ -762,15 +765,23 @@ function buildRetryPrompt({ prompt, propuesta, violaciones, problema }) {
 
   const errores = (violaciones || []).filter((v) => v.severidad === "error");
   const avisos = (violaciones || []).filter((v) => v.severidad !== "error");
+  // Acotado: una respuesta hostil (500 ids inventados, o ids de 1.000 caracteres) hacía crecer el
+  // prompt del reintento sin tope; con 60 líneas por bloque y 300 caracteres por detalle el modelo
+  // tiene de sobra para corregir, y el resto se resume en una línea.
+  const lineas = (lista) => {
+    const out = lista.slice(0, RETRY_MAX_LINEAS).map((v) => `  - [${v.invariante}] ${String(v.detalle || "").slice(0, RETRY_MAX_DETALLE)}`);
+    if (lista.length > RETRY_MAX_LINEAS) out.push(`  - … y ${lista.length - RETRY_MAX_LINEAS} más del mismo tipo (corrige el patrón, no solo estas líneas)`);
+    return out;
+  };
 
   if (errores.length) {
     partes.push("OBLIGATORIO CORREGIR (el cuadrante no se puede guardar mientras siga incumpliendo esto):");
-    for (const v of errores) partes.push(`  - [${v.invariante}] ${v.detalle}`);
+    partes.push(...lineas(errores));
     partes.push("");
   }
   if (avisos.length) {
     partes.push("MEJORA si puedes, sin romper nada de lo anterior (esto no impide guardar):");
-    for (const v of avisos) partes.push(`  - [${v.invariante}] ${v.detalle}`);
+    partes.push(...lineas(avisos));
     partes.push("");
   }
   partes.push(`Responde ÚNICAMENTE con el JSON de esta forma, sin nada alrededor:\n${RESPONSE_SHAPE}`);
@@ -1007,6 +1018,10 @@ const MARCADORES_REJILLA = new Set(["V", "R", "B"]);
 // Tope de violaciones que se persisten por fila de `generaciones`: una celda de Sheets admite
 // 50.000 caracteres y una respuesta hostil (500 ids inventados) daba ~96 KB de JSON.
 const BITACORA_MAX_VIOLACIONES = 50;
+// …y en caracteres: 50 violaciones con un `detalle` de 1.000 caracteres cada una (ids de 1.000
+// caracteres inventados por el modelo) seguirían pasando de 50.000. Margen sobre el límite de Sheets.
+const BITACORA_MAX_CHARS = 40000;
+const BITACORA_MAX_DETALLE = 300;
 // `origen` marca la guardia cedida o comprada, que INV-4 excluye de los seis ejes de INV-3.
 // `tally.js:15` lo evalúa por TRUTHINESS, así que una errata cualquiera —no solo un valor de otro
 // enum— saca la guardia del cómputo y de los totales de la pestaña publicada, en silencio.
@@ -2576,9 +2591,14 @@ function escribirBitacora(deps, session, req, modelo, intentos, resultado, viola
   // haría creer que no se guardó nada — y regenerar en «reemplazar» un mes recién generado. La
   // bitácora es memoria de lo que pasó, nunca puede decidir si pasó.
   const lista = Array.isArray(violaciones) ? violaciones : [];
-  const recorte = lista.length > BITACORA_MAX_VIOLACIONES
-    ? [...lista.slice(0, BITACORA_MAX_VIOLACIONES), { invariante: "BITACORA", severidad: "aviso", detalle: `y ${lista.length - BITACORA_MAX_VIOLACIONES} más (recortado)` }]
-    : lista;
+  const acorta = (v) => ({
+    ...v,
+    detalle: String((v && v.detalle) || "").slice(0, BITACORA_MAX_DETALLE),
+    ...(v && typeof v.residenteId === "string" ? { residenteId: v.residenteId.slice(0, 100) } : {}),
+  });
+  const recorte = lista.slice(0, BITACORA_MAX_VIOLACIONES).map(acorta);
+  while (recorte.length > 0 && JSON.stringify(recorte).length > BITACORA_MAX_CHARS) recorte.pop();
+  if (recorte.length < lista.length) recorte.push({ invariante: "BITACORA", severidad: "aviso", detalle: `y ${lista.length - recorte.length} más (recortado)` });
   try {
     deps.store.appendRecord("generaciones", {
       mes: req.mes, anio: req.anio, fecha: deps.today, actorId: session.sub,

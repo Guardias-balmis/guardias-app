@@ -298,6 +298,9 @@ Genera el cuadrante completo de ${titulo} (mes=${mes}, año=${anio}) respetando 
  * de equidad que no bloquea nada, y vuelve con un `error` nuevo. Lo que impide guardar se dice
  * como obligatorio; lo demás, como mejora.
  */
+const RETRY_MAX_LINEAS = 60;
+const RETRY_MAX_DETALLE = 300;
+
 export function buildRetryPrompt({ prompt, propuesta, violaciones, problema }) {
   const partes = [prompt, "", "─────────────────────────────────────────", ""];
   partes.push("Tu respuesta anterior NO se ha podido aceptar. Corrígela y vuelve a responder con el");
@@ -319,15 +322,23 @@ export function buildRetryPrompt({ prompt, propuesta, violaciones, problema }) {
 
   const errores = (violaciones || []).filter((v) => v.severidad === "error");
   const avisos = (violaciones || []).filter((v) => v.severidad !== "error");
+  // Acotado: una respuesta hostil (500 ids inventados, o ids de 1.000 caracteres) hacía crecer el
+  // prompt del reintento sin tope; con 60 líneas por bloque y 300 caracteres por detalle el modelo
+  // tiene de sobra para corregir, y el resto se resume en una línea.
+  const lineas = (lista) => {
+    const out = lista.slice(0, RETRY_MAX_LINEAS).map((v) => `  - [${v.invariante}] ${String(v.detalle || "").slice(0, RETRY_MAX_DETALLE)}`);
+    if (lista.length > RETRY_MAX_LINEAS) out.push(`  - … y ${lista.length - RETRY_MAX_LINEAS} más del mismo tipo (corrige el patrón, no solo estas líneas)`);
+    return out;
+  };
 
   if (errores.length) {
     partes.push("OBLIGATORIO CORREGIR (el cuadrante no se puede guardar mientras siga incumpliendo esto):");
-    for (const v of errores) partes.push(`  - [${v.invariante}] ${v.detalle}`);
+    partes.push(...lineas(errores));
     partes.push("");
   }
   if (avisos.length) {
     partes.push("MEJORA si puedes, sin romper nada de lo anterior (esto no impide guardar):");
-    for (const v of avisos) partes.push(`  - [${v.invariante}] ${v.detalle}`);
+    partes.push(...lineas(avisos));
     partes.push("");
   }
   partes.push(`Responde ÚNICAMENTE con el JSON de esta forma, sin nada alrededor:\n${RESPONSE_SHAPE}`);
