@@ -714,7 +714,12 @@ export function handleRequest(rawBody, deps) {
           // `sinResponsable` viaja aquí y no en una acción aparte porque el cliente ya llama a
           // estadoCuadrante al abrir el mes: es lo que le permite avisar de que nadie tiene el
           // mandato y habilitar el ciclo a un Mayor (decisión V-16) sin una petición de más.
-          return { ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio), sinResponsable: mandatoVigente(deps) === null };
+          // `modosGeneracion` (V-47): el cliente solo ofrece «completar» si el servidor desplegado lo
+          // entiende. Sin esto, un cliente nuevo contra un Apps Script aún sin redesplegar mandaría
+          // `modo: "completar"`, el servidor viejo lo ignoraría y REEMPLAZARÍA el mes — borrando justo
+          // las guardias que la pantalla prometía respetar. El cliente se publica en Pages con el
+          // merge; el servidor, cuando alguien lo redespliega a mano: no se puede dar por hecho el orden.
+          return { ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio), sinResponsable: mandatoVigente(deps) === null, modosGeneracion: [...MODOS_GENERACION] };
         });
 
       // BORRADOR->VALIDADO (Fase 6.2, decisión V-9/V-10): solo el Responsable en mandato, y

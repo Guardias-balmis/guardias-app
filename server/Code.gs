@@ -235,18 +235,8 @@ function ensureGrid_(sh, filas, columnas) {
 }
 
 // Escritor único serializado para los 15 usuarios (script lock, no user lock).
-//
-// REENTRANTE por ejecución (2026-09-04): `Server.makeStore().transaction(fn)` coge el lock para que
-// una comprobación y su escritura sean atómicas, y las escrituras de dentro de `fn` vuelven a pasar
-// por aquí. Un `waitLock` anidado sobre el mismo lock esperaría a sí mismo hasta agotar los 30 s y
-// lanzaría; con la bandera, la llamada anidada simplemente ejecuta. La bandera es una variable
-// global del script, y en Apps Script cada ejecución tiene su propio ámbito global: no se comparte
-// entre peticiones concurrentes, así que no puede hacer creer a otra ejecución que ya tiene el lock.
-var lockHeld_ = false;
 function withScriptLock_(fn) {
-  if (lockHeld_) return fn();
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
-  lockHeld_ = true;
-  try { return fn(); } finally { lockHeld_ = false; lock.releaseLock(); }
+  try { return fn(); } finally { lock.releaseLock(); }
 }

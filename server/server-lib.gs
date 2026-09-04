@@ -185,7 +185,24 @@ var SheetsStore = (function () {
 
 const TMP_PREFIX = "_tmp_";
 
-function makeStore({ ss, withLock, newId }) {
+function makeStore({ ss, withLock: withLockCrudo, newId }) {
+  // El lock, REENTRANTE por ejecución (2026-09-04): `transaction(fn)` lo coge para que una
+  // comprobación y su escritura sean atómicas, y las escrituras de dentro de `fn` vuelven a pedirlo.
+  // Con el `LockService` de Apps Script un `waitLock` anidado sobre el mismo lock esperaría a sí
+  // mismo hasta agotar los 30 s y lanzaría, así que la reentrada se resuelve AQUÍ, en código
+  // probado, y no en `Code.gs`: así el adaptador impuro no cambia y un despliegue que repegue solo
+  // `server-lib.gs` (como manda CLAUDE.md para los cambios de dominio) no puede dejar el lock
+  // colgado. `dentro` es local a este store, que en Apps Script se construye por petición
+  // (`deps_()`), así que no se comparte entre ejecuciones concurrentes.
+  let dentro = false;
+  const withLock = (fn) => {
+    if (dentro) return fn();
+    return withLockCrudo(() => {
+      dentro = true;
+      try { return fn(); } finally { dentro = false; }
+    });
+  };
+
   function table(nameOrTable) {
     const t = typeof nameOrTable === "string" ? TABLES[nameOrTable] : nameOrTable;
     if (!t) throw new Error(`tabla desconocida: ${nameOrTable}`);
@@ -268,9 +285,9 @@ function makeStore({ ss, withLock, newId }) {
    * guardar una celda: el mes quedaba VALIDADO con una guardia que nadie validó. Lo mismo con dos
    * sorteos del Responsable a la vez (dos mandatos para el mismo periodo).
    *
-   * Las escrituras de dentro (`appendRecords`, `rebuildSheet`) vuelven a pedir el lock: `withLock`
-   * tiene que ser REENTRANTE (en Code.gs lo es por una bandera por ejecución; en tests y en el
-   * dev-server es `fn => fn()`). No se coge para leer suelto: solo para leer-y-escribir junto.
+   * Las escrituras de dentro (`appendRecords`, `rebuildSheet`) vuelven a pedir el lock, y la
+   * reentrada la resuelve el `withLock` de arriba: el lock real de Apps Script se coge UNA vez por
+   * transacción. No se coge para leer suelto: solo para leer-y-escribir junto.
    */
   function transaction(fn) {
     return withLock(fn);
@@ -1596,7 +1613,12 @@ function handleRequest(rawBody, deps) {
           // `sinResponsable` viaja aquí y no en una acción aparte porque el cliente ya llama a
           // estadoCuadrante al abrir el mes: es lo que le permite avisar de que nadie tiene el
           // mandato y habilitar el ciclo a un Mayor (decisión V-16) sin una petición de más.
-          return { ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio), sinResponsable: mandatoVigente(deps) === null };
+          // `modosGeneracion` (V-47): el cliente solo ofrece «completar» si el servidor desplegado lo
+          // entiende. Sin esto, un cliente nuevo contra un Apps Script aún sin redesplegar mandaría
+          // `modo: "completar"`, el servidor viejo lo ignoraría y REEMPLAZARÍA el mes — borrando justo
+          // las guardias que la pantalla prometía respetar. El cliente se publica en Pages con el
+          // merge; el servidor, cuando alguien lo redespliega a mano: no se puede dar por hecho el orden.
+          return { ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio), sinResponsable: mandatoVigente(deps) === null, modosGeneracion: [...MODOS_GENERACION] };
         });
 
       // BORRADOR->VALIDADO (Fase 6.2, decisión V-9/V-10): solo el Responsable en mandato, y

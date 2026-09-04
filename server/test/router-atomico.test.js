@@ -78,14 +78,28 @@ function loggedInAs(deps, email) {
   return call({ action: "login", idToken: "jwt", nonce }, deps).session;
 }
 
-test("marcarValidado lee, valida y escribe DENTRO de una sola transacción (el lock se coge una vez y las escrituras van anidadas)", () => {
+test("marcarValidado lee, valida y escribe DENTRO de una sola transacción: el lock real se coge UNA vez y la escritura de dentro no lo vuelve a pedir", () => {
   const deps = makeDeps();
   const session = loggedInAs(deps, "resp@gmail.com"); // Mayor sin Responsable: puede validar (V-16)
   deps.locks.veces = 0; deps.locks.maxima = 0;
   const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
   assert.equal(r.ok, true);
-  assert.equal(deps.locks.maxima, 2, "la escritura del estado se hace con el lock de la transacción ya cogido (reentrante)");
-  assert.equal(deps.locks.veces, 2, "una transacción + una escritura dentro, nada fuera");
+  // Si el store no absorbiera la reentrada, el `waitLock` de Apps Script se esperaría a sí mismo
+  // 30 s y lanzaría en cada validación: por eso se exige UNA sola llamada al lock crudo.
+  assert.equal(deps.locks.veces, 1, "una transacción, y la escritura del estado va dentro sin volver a pedir el lock");
+  assert.equal(deps.locks.maxima, 1);
+  assert.equal(call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "VALIDADO", "y la escritura ocurrió");
+});
+
+test("una escritura suelta (fuera de transacción) sigue cogiendo el lock, y dos transacciones seguidas lo cogen dos veces", () => {
+  const deps = makeDeps();
+  const session = loggedInAs(deps, "otro@gmail.com");
+  deps.locks.veces = 0;
+  call({ action: "guardarPreferencias", session, anio: 2027, mes: 7, prefs: { maxGuardias: 5 } }, deps);
+  assert.equal(deps.locks.veces, 1);
+  deps.store.transaction(() => deps.store.appendRecord("preferencias", { residenteId: "otro-1", anio: 2027, mes: 8, maxGuardias: 4 }));
+  deps.store.transaction(() => {});
+  assert.equal(deps.locks.veces, 3, "la bandera se suelta al salir: la siguiente transacción vuelve a coger el lock");
 });
 
 test("generarCuadranteIA no escribe si el mes cambió mientras el modelo pensaba: CONFLICTO, sin filas nuevas, y queda en la bitácora", () => {
@@ -221,4 +235,12 @@ test("colaImaginaria aparta a quien está de baja ese día, y listBloqueosRango 
   assert.equal(rango.ok, true);
   assert.equal(rango.bloqueos.some((b) => b.id === "corrupta"), false, "la fila ilegible no alimenta la aritmética de los cierres");
   assert.equal(call({ action: "listBloqueos", session, anio: 2027, mes: 7 }, deps).bloqueos.some((b) => b.id === "corrupta"), true, "pero sigue visible para cancelarla");
+});
+
+test("estadoCuadrante anuncia los modos de generación que entiende el servidor (el cliente no ofrece «completar» a un servidor viejo)", () => {
+  const deps = makeDeps();
+  const session = loggedInAs(deps, "otro@gmail.com");
+  const r = call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.modosGeneracion, ["completar", "reemplazar"]);
 });

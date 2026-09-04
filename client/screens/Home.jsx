@@ -126,14 +126,22 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
  * Los dos pasos (pulsar → confirmar) no son ceremonia: generar REEMPLAZA el cuadrante del mes, así
  * que un click de más sobre un mes ya montado a mano se lleva por delante el trabajo de una tarde.
  */
-function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, comprobando, verCuadrante }) {
+function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, comprobando, verCuadrante, completarDisponible }) {
   const [confirmando, setConfirmando] = useState(false);
   const [generando, setGenerando] = useState(false);
   const [resultado, setResultado] = useState(null);
   // Decisión V-47: «completar» respeta las guardias que ya están en la rejilla (las que cada
   // residente apuntó de antemano) y rellena el resto; «reemplazar» es lo de antes, el mes entero
-  // de nuevo. Completar es el defecto porque es el gesto que no destruye nada.
-  const [modo, setModo] = useState("completar");
+  // de nuevo. Completar es el defecto porque es el gesto que no destruye nada — pero SOLO si el
+  // servidor desplegado lo entiende (`estadoCuadrante.modosGeneracion`): el cliente sale a Pages
+  // con el merge y el servidor cuando alguien lo redespliega, y un servidor viejo ignoraría el modo
+  // y reemplazaría el mes, borrando justo lo que la pantalla prometía respetar.
+  // `modoElegido` es solo lo que la persona haya pulsado; el modo EFECTIVO se deriva, porque la
+  // tarjeta se monta antes de que `estadoCuadrante` responda y un `useState` inicial se quedaría
+  // congelado en «reemplazar» aunque el servidor sí supiera completar.
+  const [modoElegido, setModoElegido] = useState(null);
+  const modo = !completarDisponible ? "reemplazar" : (modoElegido || "completar");
+  const setModo = setModoElegido;
 
   // Cambiar de mes descarta lo que se estuviera enseñando: un resultado de agosto bajo el rótulo
   // de septiembre es peor que no enseñar nada.
@@ -184,17 +192,19 @@ function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, compr
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
         {[
-          ["completar", "Completar lo que falta", "respeta las guardias que ya hay en la rejilla y rellena el resto"],
-          ["reemplazar", "Reemplazar todo el mes", "sustituye todas las guardias del mes por las nuevas"],
-        ].map(([valor, titulo, detalle]) => (
+          ["completar", "Completar lo que falta", "respeta las guardias que ya hay en la rejilla y rellena el resto", !completarDisponible],
+          ["reemplazar", "Reemplazar todo el mes", "sustituye todas las guardias del mes por las nuevas", false],
+        ].map(([valor, titulo, detalle, noDisponible]) => (
           <label key={valor} style={{
-            display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, cursor: generando ? "default" : "pointer",
+            display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, cursor: generando || noDisponible ? "default" : "pointer",
             background: modo === valor ? COLOR.bluePale : COLOR.gray, border: `1.5px solid ${modo === valor ? COLOR.blue : COLOR.grayMid}`,
+            opacity: noDisponible ? 0.55 : 1,
           }}>
-            <input type="radio" name="modo-generacion" value={valor} checked={modo === valor} disabled={generando}
+            <input type="radio" name="modo-generacion" value={valor} checked={modo === valor} disabled={generando || noDisponible}
               onChange={() => setModo(valor)} style={{ marginTop: 2 }} />
             <span style={{ fontSize: 13, color: COLOR.blueDark, lineHeight: 1.4 }}>
               <b>{titulo}</b> — <span style={{ color: COLOR.grayDark }}>{detalle}</span>
+              {noDisponible && <span style={{ display: "block", color: COLOR.orange, fontSize: 12 }}>El servidor desplegado todavía no admite este modo: hasta que se redespliegue, solo se puede reemplazar.</span>}
             </span>
           </label>
         ))}
@@ -302,6 +312,9 @@ function HomeScreen() {
   // botón sobre un mes PUBLICADO. `null` mientras carga o si la consulta falló — y `null` no
   // ofrece el botón, porque no saber si está publicado no es lo mismo que saber que no lo está.
   const [estadoMes, setEstadoMes] = useState(null);
+  // Lo que el servidor desplegado sabe hacer al generar (V-47). `false` hasta que lo diga: un
+  // servidor anterior a V-47 no manda `modosGeneracion`, y entonces solo se ofrece «reemplazar».
+  const [completarDisponible, setCompletarDisponible] = useState(false);
   // Desplegable de "Equipo" (a pedido del autor, 2026-08-19): un nivel a la vez, no los cuatro a
   // la vez — clic de nuevo sobre el mismo nivel lo cierra.
   const [nivelAbierto, setNivelAbierto] = useState(null);
@@ -332,6 +345,7 @@ function HomeScreen() {
       // Un fallo aquí solo esconde los botones que dependen del permiso: no se asume ninguno.
       setSinResponsable(rEstado.ok ? rEstado.sinResponsable === true : false);
       setEstadoMes(rEstado.ok ? rEstado.estado : null);
+      setCompletarDisponible(Boolean(rEstado.ok && Array.isArray(rEstado.modosGeneracion) && rEstado.modosGeneracion.includes("completar")));
     })();
     return () => { cancelled = true; };
   }, [mes, anio]);
@@ -454,7 +468,7 @@ function HomeScreen() {
       </Card>
 
       <GeneradorIA api={app.api} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
-        setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")}
+        setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")} completarDisponible={completarDisponible}
         comprobando={estadoMes === null && puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable })} />
 
       <Imaginaria api={app.api} residentes={residentes} showToast={app.showToast} puedoRegistrar={puedoRegistrarImaginaria} />

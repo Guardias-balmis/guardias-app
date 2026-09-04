@@ -104,16 +104,6 @@ después de un `npm run deploy` que lo modifique, repetir a mano la verificació
   su SUMIF referencia esa pestaña por nombre y su MAXIFS/MINIFS de equidad calcula bien con
   ≥2 residentes de la misma cohorte.
 
-## Cambios en `Code.gs` que exigen repetir la verificación manual
-
-- **2026-09-04 — `withScriptLock_` reentrante.** `Server.makeStore().transaction(fn)` coge el lock
-  para que una comprobación y su escritura sean atómicas (`marcarValidado`, `publicarCuadrante`,
-  el sorteo del Responsable y la escritura final del generador con IA); las escrituras de dentro
-  vuelven a pasar por `withScriptLock_`, que ahora ejecuta directamente si esta misma ejecución ya
-  tiene el lock (bandera `lockHeld_`). Tras desplegar, comprobar que Validar, Publicar y Guardar
-  siguen respondiendo en segundos (un lock mal anidado se notaría como una espera de 30 s seguida
-  de un error de Apps Script en cada escritura).
-
 ## Mantenimiento (ritual anual — requisito rector)
 Cada enero, el R3 responsable entrante **inicia sesión en la cuenta del servicio** y abre Gmail
 y el Sheet (mantiene viva la cuenta y el OAuth client — ADR-001 R1/R2). Anota aquí quién y cuándo.
