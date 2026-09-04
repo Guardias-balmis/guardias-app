@@ -130,11 +130,13 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
 // en curso seguía en el servidor mientras la tarjeta volvía a montarse como si nada —botón
 // disponible otra vez, sin «Generando…» ni resultado— y el mes se escribía sin que nadie viera los
 // avisos (y con un segundo clic en «reemplazar» se reescribía). Se recuerda por mes.
-const generacionEnCurso = new Map(); // "anio-mes" → promesa del resultado
-const ultimoResultado = new Map();   // "anio-mes" → último resultado enseñado
+// La clave lleva también a la PERSONA: la memoria es del módulo y sobrevive a cerrar sesión, y sin
+// ella quien entrara después en la misma pestaña veía de entrada el resultado del anterior.
+const generacionEnCurso = new Map(); // "usuario|anio-mes" → promesa del resultado
+const ultimoResultado = new Map();   // "usuario|anio-mes" → último resultado enseñado
 
-function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, comprobando, estadoError, reintentar, verCuadrante, completarDisponible }) {
-  const claveMes = `${anio}-${mes}`;
+function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, puedo, comprobando, estadoError, reintentar, verCuadrante, completarDisponible }) {
+  const claveMes = `${usuario || ""}|${anio}-${mes}`;
   const [confirmando, setConfirmando] = useState(false);
   const [generando, setGenerando] = useState(generacionEnCurso.has(claveMes));
   const [resultado, setResultado] = useState(ultimoResultado.get(claveMes) || null);
@@ -523,7 +525,7 @@ function HomeScreen() {
           justo en el caso real de producción (sin Responsable) hasta que respondía Apps Script —
           el síntoma del 2026-08-31 otra vez. Si al llegar resulta que hay Responsable y no es él,
           `puedo` sigue en false y la tarjeta desaparece, como ahora. */}
-      <GeneradorIA api={app.api} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
+      <GeneradorIA api={app.api} usuario={app.auth && app.auth.residente && app.auth.residente.id} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
         setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")} completarDisponible={completarDisponible}
         estadoError={estadoError} reintentar={() => setReintento((n) => n + 1)}
         comprobando={estadoMes === null && (app.isResponsable || app.grupo === "MAYOR")} />
