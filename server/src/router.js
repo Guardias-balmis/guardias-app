@@ -644,7 +644,10 @@ export function handleRequest(rawBody, deps) {
       // puro sobre (candidatos, semilla), y la fila queda en `sorteos` para recomputarlo. Un
       // booleano «hubo sorteo» no prueba nada; esto sí.
       case "sortearEvento":
-        return authed(req, deps, () => {
+        // Comprobar («ya está sorteado») y escribir bajo el mismo lock: dos sorteos simultáneos del
+        // mismo evento pasaban ambos la guarda y quedaban dos filas de `sorteos` contradictorias, con
+        // uno de los dos viendo unos designados que no eran los que se escribieron.
+        return authed(req, deps, () => atomico(deps, () => {
           const evento = activeEventos(deps).find((e) => e.id === req.id);
           if (!evento) return { ok: false, error: "evento no encontrado" };
           if (evento.sorteoId) return { ok: false, error: "ese evento ya está sorteado" };
@@ -669,7 +672,7 @@ export function handleRequest(rawBody, deps) {
           });
           deps.store.appendRecord("eventos", { ...evento, designados, sorteoId });
           return { ok: true, designados, sorteoId, semilla };
-        });
+        }));
 
       // IMAGINARIA (INV-13, decisión V-20). Es una HERRAMIENTA, no un validador: dice a quién
       // llamar. La cola se DERIVA del historial de coberturas, nunca se almacena.

@@ -108,8 +108,10 @@ export function rowsToRecords(table, values) {
     // y la imaginaria para todo el equipo con un «Fecha ISO inválida: undefined» que no decía de
     // qué fila hablaba — y sin salida desde la app, porque sin id no hay nada que editar ni
     // cancelar. Ninguna tabla admite un registro sin id, así que una fila sin ninguna celda no es
-    // un registro ni un borrado lógico (esos llevan id y `activo=false` o `codigo=""`).
-    .filter((row) => Array.isArray(row) && row.some((c) => c !== "" && c !== null && c !== undefined))
+    // un registro ni un borrado lógico (esos llevan id y `activo=false` o `codigo=""`). Se miran
+    // SOLO las columnas de la tabla: `Code.gs:read` trae hasta `getLastColumn()`, y una nota suelta
+    // en una columna a la derecha de la tabla no convierte en registro una fila por lo demás vacía.
+    .filter((row) => Array.isArray(row) && row.slice(0, table.columns.length).some((c) => c !== "" && c !== null && c !== undefined))
     .map((row) => {
     const rec = {};
     table.columns.forEach((c, i) => {

@@ -327,3 +327,21 @@ test("crearBloqueo (simulación P-13 + escritura) y crearEvento (unicidad + escr
   assert.equal(r.ok, false);
   assert.match(r.error, /ya hay un evento DESPEDIDA/);
 });
+
+test("sortearEvento comprueba «ya está sorteado» DENTRO del lock: dos sorteos simultáneos del mismo evento dejan UN sorteo", () => {
+  const deps = makeDeps();
+  // Un segundo R2 para poder sortear (OTRO es el único Pequeño del fixture).
+  const nonce = call({ action: "getNonce" }, deps).nonce;
+  deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "r2b@gmail.com", email_verified: "true", sub: "g-6", exp: String(2_000_000), nonce });
+  assert.equal(call({ action: "altaResidente", idToken: "jwt", nonce, nombre: "Rosa Dos", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }, deps).ok, true);
+  const resp = loggedInAs(deps, "resp@gmail.com");
+  const ev = call({ action: "crearEvento", session: resp, tipo: "NAVIDAD", fecha: "2027-12-18", voluntarios: [] }, deps);
+  assert.equal(ev.ok, true);
+  let colado = null;
+  deps.locks.gancho = () => { colado = call({ action: "sortearEvento", session: resp, id: ev.id }, deps); };
+  const r = call({ action: "sortearEvento", session: resp, id: ev.id }, deps);
+  assert.equal(colado.ok, true, "el que se coló sortea");
+  assert.equal(r.ok, false);
+  assert.match(r.error, /ya está sorteado/);
+  assert.equal(deps.store.readRecords("sorteos").length, 1, "un solo sorteo registrado");
+});

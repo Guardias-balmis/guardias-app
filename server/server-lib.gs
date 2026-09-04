@@ -117,8 +117,10 @@ function rowsToRecords(table, values) {
     // y la imaginaria para todo el equipo con un «Fecha ISO inválida: undefined» que no decía de
     // qué fila hablaba — y sin salida desde la app, porque sin id no hay nada que editar ni
     // cancelar. Ninguna tabla admite un registro sin id, así que una fila sin ninguna celda no es
-    // un registro ni un borrado lógico (esos llevan id y `activo=false` o `codigo=""`).
-    .filter((row) => Array.isArray(row) && row.some((c) => c !== "" && c !== null && c !== undefined))
+    // un registro ni un borrado lógico (esos llevan id y `activo=false` o `codigo=""`). Se miran
+    // SOLO las columnas de la tabla: `Code.gs:read` trae hasta `getLastColumn()`, y una nota suelta
+    // en una columna a la derecha de la tabla no convierte en registro una fila por lo demás vacía.
+    .filter((row) => Array.isArray(row) && row.slice(0, table.columns.length).some((c) => c !== "" && c !== null && c !== undefined))
     .map((row) => {
     const rec = {};
     table.columns.forEach((c, i) => {
@@ -1602,7 +1604,10 @@ function handleRequest(rawBody, deps) {
       // puro sobre (candidatos, semilla), y la fila queda en `sorteos` para recomputarlo. Un
       // booleano «hubo sorteo» no prueba nada; esto sí.
       case "sortearEvento":
-        return authed(req, deps, () => {
+        // Comprobar («ya está sorteado») y escribir bajo el mismo lock: dos sorteos simultáneos del
+        // mismo evento pasaban ambos la guarda y quedaban dos filas de `sorteos` contradictorias, con
+        // uno de los dos viendo unos designados que no eran los que se escribieron.
+        return authed(req, deps, () => atomico(deps, () => {
           const evento = activeEventos(deps).find((e) => e.id === req.id);
           if (!evento) return { ok: false, error: "evento no encontrado" };
           if (evento.sorteoId) return { ok: false, error: "ese evento ya está sorteado" };
@@ -1627,7 +1632,7 @@ function handleRequest(rawBody, deps) {
           });
           deps.store.appendRecord("eventos", { ...evento, designados, sorteoId });
           return { ok: true, designados, sorteoId, semilla };
-        });
+        }));
 
       // IMAGINARIA (INV-13, decisión V-20). Es una HERRAMIENTA, no un validador: dice a quién
       // llamar. La cola se DERIVA del historial de coberturas, nunca se almacena.

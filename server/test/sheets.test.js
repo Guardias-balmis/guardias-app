@@ -220,4 +220,8 @@ test("una celda vacía o una fila vacía no producen registro: el campo se omite
   assert.equal(back.length, 1, "las filas con el contenido borrado a mano (Supr) no son registros");
   assert.equal(back[0].id, "r1");
   assert.equal(rowsToRecords(TABLES.residentes, [header, ["", "", "", "", ""]]).length, 0);
+  // Una nota suelta a la DERECHA de la tabla (Code.gs lee hasta getLastColumn) no resucita la fila…
+  assert.equal(rowsToRecords(TABLES.residentes, [header, [...header.map(() => ""), "nota al margen"]]).length, 0);
+  // …pero una fila con alguna celda de la tabla sí es un registro (aunque le falte el id: eso lo juzga quien la lea).
+  assert.equal(rowsToRecords(TABLES.residentes, [header, ["", "Sin Id", "", "", ""]]).length, 1);
 });

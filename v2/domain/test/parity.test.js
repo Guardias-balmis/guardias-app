@@ -251,6 +251,12 @@ test("el bundler FALLA RUIDOSAMENTE ante sintaxis no soportada (nunca la ignora)
   // Dos formas ESM válidas que se transformaban MAL en silencio (2026-09-04): ahora fallan alto.
   assert.throws(() => transformModule("x", 'export let n = 0;\nexport function inc() { n++; }'), /export let/);
   assert.throws(() => transformModule("x", 'export const A = 1, B = 2;'), /una sola declaración/);
+  // …también cuando la segunda declaración llega tras un literal o una llamada MULTILÍNEA.
+  assert.throws(() => transformModule("x", 'export const A = {\n  x: 1,\n}, B = 2;'), /una sola declaración/);
+  assert.throws(() => transformModule("x", 'export const A = f(\n  1), B = 2;'), /una sola declaración/);
+  assert.throws(() => transformModule("x", 'export const A = 1\n  , B = 2;'), /una sola declaración/);
+  // Y un objeto multilínea legítimo (comas DENTRO de las llaves, y otra sentencia después) pasa.
+  assert.match(transformModule("x", 'export const O = {\n  a: 1,\n  b: [1, 2],\n};\nexport const P = `x,\ny`;\nconst q = 1, r = 2;'), /return \{ O, P \};/);
   // …y lo que se parece pero es legítimo sigue pasando: comas dentro de paréntesis, corchetes o
   // cadenas, y una línea de texto que empieza por «importante» dentro de un template literal.
   assert.match(transformModule("x", 'export const f = (a, b = [1, 2]) => "a, b";'), /return \{ f \};/);
