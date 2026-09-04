@@ -108,20 +108,47 @@ function seccionEventos(eventos) {
  * ningún invariante y `maxGuardias` no puede saltarse el 4-6 de INV-2. Se marca en el texto para
  * que el modelo no las confunda con bloqueos — la ausencia de verdad va en su propia sección.
  */
+// `maxGuardias` cuenta si es un número, INCLUIDO el 0: la pantalla lo permite con una ausencia
+// registrada ese mes (mínimo 0 en vez de 4), y con un `||` de verdad/falso el 0 —que es justo la
+// preferencia más fuerte que se puede expresar— desaparecía del prompt.
+const tieneMax = (p) => typeof p.maxGuardias === "number" && Number.isFinite(p.maxGuardias);
+
 function seccionPreferencias(preferencias) {
   const utiles = (preferencias || []).filter(
-    (p) => (p.fechasEvitar && p.fechasEvitar.length) || p.maxGuardias || p.preferDobles || p.notas
+    (p) => (Array.isArray(p.fechasEvitar) && p.fechasEvitar.length) || tieneMax(p) || p.preferDobles || p.notas
   );
   if (utiles.length === 0) return "PREFERENCIAS PERSONALES DEL MES: ninguna registrada.";
   const lista = utiles.map((p) => {
     const partes = [];
-    if (p.fechasEvitar && p.fechasEvitar.length) partes.push(`preferiría evitar ${p.fechasEvitar.join(", ")}`);
-    if (p.maxGuardias) partes.push(`querría no pasar de ${p.maxGuardias} guardias`);
+    if (Array.isArray(p.fechasEvitar) && p.fechasEvitar.length) partes.push(`preferiría evitar ${p.fechasEvitar.join(", ")}`);
+    if (tieneMax(p)) partes.push(p.maxGuardias === 0 ? "pide NO hacer ninguna guardia este mes (tiene una ausencia registrada)" : `querría no pasar de ${p.maxGuardias} guardias`);
     if (p.preferDobles) partes.push(`doblete preferido: ${String(p.preferDobles).toLowerCase().replace(/_/g, "-")}`);
     if (p.notas) partes.push(`nota: "${p.notas}"`);
     return `  - id="${p.residenteId}" — ${partes.join("; ")}`;
   }).join("\n");
   return `PREFERENCIAS PERSONALES DEL MES (BLANDAS: son deseos, no obligaciones — respétalas solo si\nno te obligan a incumplir ninguna norma de abajo):\n${lista}`;
+}
+
+/**
+ * Guardias que YA están en la rejilla y hay que respetar (decisión V-47, modo «completar»). Son las
+ * que cada residente apuntó de antemano porque ya las tenía comprometidas, o las que puso a mano
+ * quien monta el cuadrante: el modelo tiene que construir el mes ALREDEDOR de ellas, no encima.
+ * Se le pide que las repita tal cual en su respuesta para que su propuesta sea el mes entero y no
+ * un parche, y el router descarta las repetidas al escribir. En modo «reemplazar» la lista llega
+ * vacía y se dice, para que no las busque.
+ */
+function seccionFijadas(fijadas) {
+  if (!fijadas || fijadas.length === 0) return "GUARDIAS YA FIJADAS EN LA REJILLA: ninguna. El mes empieza vacío.";
+  const lista = fijadas
+    .slice()
+    .sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0))
+    .map((a) => `  - ${a.fecha} — id="${a.residenteId}" — ${a.codigo}`)
+    .join("\n");
+  return `GUARDIAS YA FIJADAS EN LA REJILLA (OBLIGATORIO respetarlas: inclúyelas TAL CUAL en tu respuesta
+—misma fecha, mismo residenteId y mismo código—, no las muevas de día ni de persona, y no pongas
+a otro residente del mismo grupo (Mayor/Pequeño) ese mismo día; cuentan para el 4-6 mensual y
+para el descanso del día siguiente de quien las tiene):
+${lista}`;
 }
 
 /** Bloque de residentes por nivel derivado, con su contaje acumulado. Un nivel vacío no sale. */
@@ -142,7 +169,8 @@ function seccionResidentes(porNivel, acumulados) {
 /**
  * Prompt de generación. `datos` viene del router, ya derivado:
  *   { mes, anio, porNivel:{R4:[{id,nombre}],…}, acumulados:{id:{total,finde,…}}, bloqueos,
- *     festivos, puentes:[iso], voluntarios3P, eventos, preferencias }
+ *     festivos, puentes:[iso], voluntarios3P, eventos, preferencias,
+ *     fijadas:[{fecha,residenteId,codigo}] }   ← las guardias ya puestas en la rejilla (V-47)
  */
 export function buildGenerationPrompt(datos) {
   const { mes, anio } = datos;
@@ -155,6 +183,8 @@ nombre. Junto a cada uno se indica el contaje acumulado de SU año de residencia
 (±1) entre compañeros del mismo nivel, compensando a quien ya lleve más o menos guardias:
 
 ${seccionResidentes(datos.porNivel, datos.acumulados)}
+
+${seccionFijadas(datos.fijadas)}
 
 ${seccionBloqueos(datos.bloqueos)}
 
@@ -199,6 +229,9 @@ NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
 13. DESCANSO OBLIGATORIO: ningún residente puede hacer guardia dos días consecutivos, ni
     siquiera si una de las dos es un 3.º puesto. Cuenta también el borde con el mes anterior:
     si alguien tuvo guardia el último día del mes pasado, no puede tenerla el día 1.
+14. Las GUARDIAS YA FIJADAS de la lista de arriba son inamovibles: repítelas tal cual en tu
+    respuesta y reparte el resto del mes contando con ellas (para el 4-6 de cada uno, para la
+    equidad y para el descanso del día siguiente).
 
 FORMATO DE RESPUESTA (obligatorio, sin excepciones):
 Responde ÚNICAMENTE con un JSON con esta forma exacta, sin texto ni bloques markdown

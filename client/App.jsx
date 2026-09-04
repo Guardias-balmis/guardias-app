@@ -8,6 +8,7 @@ import { getSession, clearSession } from "./client/lib/auth.js";
 import { todayISO } from "./client/lib/dates.js";
 import { EXEC_URL } from "./client/config.js";
 import { levelOn, groupOf, periodsOfResident } from "./v2/domain/residents.js";
+import { partirResidentesLegibles } from "./client/lib/residentes.js";
 
 const { useState, useEffect, useCallback, createContext, useContext } = React;
 
@@ -18,37 +19,112 @@ window.useApp = useApp; // las pantallas .jsx no pueden `import` este módulo (d
 function App() {
   const [auth, setAuth] = useState(() => getSession());
   const [residentes, setResidentes] = useState([]);
+  // Los que tienen una fecha ilegible en la hoja (client/lib/residentes.js): apartados de
+  // `residentes` para que ninguna pantalla reviente al derivar su nivel, y nombrados en un aviso.
+  const [residentesIlegibles, setResidentesIlegibles] = useState([]);
+  const [residentesError, setResidentesError] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState("home");
+  const [tab, setTabRaw] = useState("home");
+  // Celdas sin guardar del cuadrante (lo escribe Calendar.jsx): cambiar de pestaña o cerrar
+  // sesión desmonta esa pantalla y las perdería en silencio, así que se pregunta antes.
+  const cambiosSinGuardarRef = React.useRef(0);
+  const confirmaPerderCambios = () => cambiosSinGuardarRef.current === 0
+    || window.confirm(`Tienes ${cambiosSinGuardarRef.current} cambios sin guardar en el cuadrante. ¿Salir y perderlos?`);
+  const setTab = useCallback((t) => {
+    if (!confirmaPerderCambios()) return;
+    cambiosSinGuardarRef.current = 0;
+    setTabRaw(t);
+  }, []);
   const [toast, setToast] = useState(null);
   const today = new Date();
   const [mes, setMes] = useState(today.getMonth() + 1); // 1-12
   const [anio, setAnio] = useState(today.getFullYear());
-
-  const api = React.useMemo(() => makeApi(EXEC_URL, { getSession: () => (getSession() || {}).session }), []);
+  // La lista de residentes que `login`/`altaResidente` ya devuelven (el servidor la acababa de
+  // leer para resolver el email): con ella no hace falta la petición de `listResidentes` nada más
+  // entrar, que era una ida y vuelta entera a Apps Script entre el clic en Google y ver Inicio.
+  const residentesDeLoginRef = React.useRef(null);
+  // Evita que varias peticiones en vuelo rechazadas por la misma sesión caducada disparen
+  // varios avisos: la primera cierra la sesión, las demás llegan ya sin sesión que cerrar.
+  const sesionCaducadaRef = React.useRef(false);
 
   const showToast = useCallback((msg, type = "ok") => {
+    // Tras cerrar la sesión por caducidad, las pantallas que aún tenían peticiones en vuelo
+    // llegan con su propio «Error cargando…: sesión expirada» y pisarían el aviso que explica
+    // qué ha pasado. Se silencian hasta el siguiente login (`onLoggedIn` levanta la veda).
+    if (sesionCaducadaRef.current && type === "err" && !getSession()) return;
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  const logout = useCallback(() => {
+  const cerrarSesion = useCallback(() => {
     clearSession();
     setAuth(null);
     setResidentes([]);
-    setTab("home"); // si no, el siguiente login hereda la pestaña de la sesión anterior
+    setResidentesIlegibles([]);
+    setResidentesError(null);
+    cambiosSinGuardarRef.current = 0;
+    setTabRaw("home"); // si no, el siguiente login hereda la pestaña de la sesión anterior
   }, []);
+  // El botón de cerrar sesión pregunta si hay celdas sin guardar; la caducidad (abajo) no puede
+  // preguntar nada: la sesión ya no sirve y los cambios no se podrían guardar de todas formas.
+  const logout = useCallback(() => { if (confirmaPerderCambios()) cerrarSesion(); }, [cerrarSesion]);
+
+  // Sesión rechazada por el servidor (caducada a las 12 h, o firmada con un secreto rotado):
+  // antes la app se quedaba en pie enseñando «sesión expirada» en cada pantalla, sin ofrecer
+  // volver a entrar. Ahora se cierra y se vuelve al login con el motivo, una sola vez.
+  const onSessionInvalid = useCallback(() => {
+    if (sesionCaducadaRef.current || !getSession()) return;
+    cerrarSesion();
+    sesionCaducadaRef.current = true;
+    // Directo, sin `showToast`: es el único aviso que tiene que verse después de cerrar la sesión.
+    setToast({ msg: "Tu sesión ha caducado: vuelve a entrar con Google", type: "err" });
+    setTimeout(() => setToast(null), 5000);
+  }, [cerrarSesion]);
+
+  const api = React.useMemo(() => makeApi(EXEC_URL, {
+    getSession: () => (getSession() || {}).session,
+    onSessionInvalid: (e) => onSessionInvalid(e),
+  }), [onSessionInvalid]);
+
+  // Única entrada de la lista de residentes al estado de la app (login, alta o listResidentes):
+  // aparta a los de fechas ilegibles y lo dice una vez, con nombres, para que alguien lo arregle
+  // en Ajustes → Residentes en vez de descubrirlo por una pantalla en blanco.
+  const recibeResidentes = useCallback((lista) => {
+    const { legibles, ilegibles } = partirResidentesLegibles(lista, todayISO());
+    setResidentes(legibles);
+    setResidentesIlegibles(ilegibles);
+    setResidentesError(null);
+  }, []);
+
+  const onLoggedIn = useCallback((r) => {
+    sesionCaducadaRef.current = false;
+    if (Array.isArray(r.residentes)) {
+      residentesDeLoginRef.current = r.residentes;
+      recibeResidentes(r.residentes);
+    }
+    setAuth({ session: r.session, residente: r.residente });
+  }, [recibeResidentes]);
 
   const loadResidentes = useCallback(async () => {
     if (!auth) return;
     setLoading(true);
     const r = await api.listResidentes();
-    if (r.ok) setResidentes(r.residentes);
-    else showToast("Error cargando residentes: " + r.error, "err");
+    if (r.ok) recibeResidentes(r.residentes);
+    else {
+      // Se guarda el error además del aviso: sin la lista la app no sabe ni quién eres (nivel,
+      // grupo, permisos), y un toast de tres segundos no es una salida — Inicio ofrece reintentar.
+      setResidentesError(r.error);
+      showToast("Error cargando residentes: " + r.error, "err");
+    }
     setLoading(false);
-  }, [auth, api, showToast]);
+  }, [auth, api, showToast, recibeResidentes]);
 
-  useEffect(() => { loadResidentes(); }, [auth?.session]);
+  useEffect(() => {
+    // Recién entrado con la lista ya en mano (ver `onLoggedIn`): no se repite la petición. Un
+    // backend anterior a este cambio no la manda, y entonces se pide como siempre.
+    if (residentesDeLoginRef.current) { residentesDeLoginRef.current = null; return; }
+    loadResidentes();
+  }, [auth?.session]);
 
   const myResidente = residentes.find((r) => r.id === auth?.residente?.id) || null;
   const nivel = myResidente ? levelOn(periodsOfResident(myResidente), todayISO()) : null;
@@ -56,9 +132,9 @@ function App() {
   const isResponsable = auth?.residente?.rol === "responsable";
 
   const ctx = {
-    api, auth, onLoggedIn: (r) => setAuth(r), logout,
-    residentes, loadResidentes, myResidente, nivel, grupo, isResponsable,
-    loading, setLoading, showToast,
+    api, auth, onLoggedIn, logout,
+    residentes, residentesIlegibles, residentesError, loadResidentes, myResidente, nivel, grupo, isResponsable,
+    loading, setLoading, showToast, cambiosSinGuardarRef,
     tab, setTab, mes, setMes, anio, setAnio,
   };
 

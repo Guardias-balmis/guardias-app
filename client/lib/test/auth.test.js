@@ -106,3 +106,106 @@ test("submitAlta con error del servidor llama onError y no toca el storage", asy
   assert.match(error, /vinculad/i);
   assert.equal(getSession(storage), null);
 });
+
+// ── nonce adelantado, refresco y GIS tardío (2026-09-04) ──
+import { prefetchNonce, waitForGis, _resetNoncePrefetch } from "../auth.js";
+
+test("setupGoogleSignIn CONSUME el nonce adelantado por prefetchNonce en vez de pedir otro", async () => {
+  _resetNoncePrefetch();
+  let pedidos = 0;
+  const api = fakeApi({ getNonce: async () => ({ ok: true, nonce: `n-${++pedidos}` }) });
+  prefetchNonce(api);
+  const gis = fakeGis();
+  await setupGoogleSignIn({ api, clientId: "cid", gis, buttonEl: {}, storage: fakeStorage(), onSuccess() {}, onNeedsAlta() {}, onError() {} });
+  assert.equal(pedidos, 1, "un solo nonce: el adelantado");
+  assert.equal(gis._calls.initialize.nonce, "n-1");
+});
+
+test("el nonce adelantado se consume UNA sola vez: el siguiente setup pide uno nuevo", async () => {
+  _resetNoncePrefetch();
+  let pedidos = 0;
+  const api = fakeApi({ getNonce: async () => ({ ok: true, nonce: `n-${++pedidos}` }) });
+  prefetchNonce(api);
+  const comun = { api, clientId: "cid", buttonEl: {}, storage: fakeStorage(), onSuccess() {}, onNeedsAlta() {}, onError() {} };
+  await setupGoogleSignIn({ ...comun, gis: fakeGis() });
+  const gis2 = fakeGis();
+  await setupGoogleSignIn({ ...comun, gis: gis2 });
+  assert.equal(pedidos, 2);
+  assert.equal(gis2._calls.initialize.nonce, "n-2");
+});
+
+test("refrescar() pide otro nonce, reinicializa GIS y vuelve a pintar el botón", async () => {
+  _resetNoncePrefetch();
+  let pedidos = 0;
+  const api = fakeApi({ getNonce: async () => ({ ok: true, nonce: `n-${++pedidos}` }) });
+  const gis = fakeGis();
+  let pintados = 0;
+  gis.renderButton = (el, opts) => { pintados++; gis._calls.renderButton = { el, opts }; };
+  const asa = await setupGoogleSignIn({ api, clientId: "cid", gis, buttonEl: {}, storage: fakeStorage(), onSuccess() {}, onNeedsAlta() {}, onError() {} });
+  assert.equal(await asa.refrescar(), true);
+  assert.equal(pedidos, 2);
+  assert.equal(gis._calls.initialize.nonce, "n-2", "GIS queda con el nonce nuevo");
+  assert.equal(pintados, 2, "el botón lleva el nonce dentro: hay que repintarlo");
+});
+
+test("un login rechazado por nonce reinicializa con uno nuevo y lo explica en llano", async () => {
+  _resetNoncePrefetch();
+  let pedidos = 0;
+  const gis = fakeGis();
+  let error = null;
+  const api = fakeApi({
+    getNonce: async () => ({ ok: true, nonce: `n-${++pedidos}` }),
+    login: async () => ({ ok: false, error: "nonce reusado o desconocido" }),
+  });
+  await setupGoogleSignIn({ api, clientId: "cid", gis, buttonEl: {}, storage: fakeStorage(), onSuccess() {}, onNeedsAlta() {}, onError: (e) => (error = e) });
+  await gis._fireCredential("id-token");
+  assert.match(error, /caducó/);
+  assert.equal(pedidos, 2, "hay un nonce nuevo listo para el siguiente clic");
+  assert.equal(gis._calls.initialize.nonce, "n-2");
+});
+
+test("cualquier otro fallo de login también deja un nonce nuevo (el anterior ya se gastó)", async () => {
+  _resetNoncePrefetch();
+  let pedidos = 0;
+  const gis = fakeGis();
+  let error = null;
+  const api = fakeApi({
+    getNonce: async () => ({ ok: true, nonce: `n-${++pedidos}` }),
+    login: async () => ({ ok: false, error: "aud incorrecta" }),
+  });
+  await setupGoogleSignIn({ api, clientId: "cid", gis, buttonEl: {}, storage: fakeStorage(), onSuccess() {}, onNeedsAlta() {}, onError: (e) => (error = e) });
+  await gis._fireCredential("id-token");
+  assert.equal(error, "aud incorrecta", "el mensaje real se conserva");
+  assert.equal(pedidos, 2);
+});
+
+test("sin nonce (backend caído) setupGoogleSignIn devuelve null y avisa, sin tocar GIS", async () => {
+  _resetNoncePrefetch();
+  const gis = fakeGis();
+  let error = null;
+  const api = fakeApi({ getNonce: async () => ({ ok: false, error: "el servidor de Google no respondió bien (HTTP 404)" }) });
+  const asa = await setupGoogleSignIn({ api, clientId: "cid", gis, buttonEl: {}, storage: fakeStorage(), onSuccess() {}, onNeedsAlta() {}, onError: (e) => (error = e) });
+  assert.equal(asa, null);
+  assert.match(error, /404/);
+  assert.equal(gis._calls.initialize, null);
+});
+
+test("storeSession guarda SOLO sesión y perfil: la lista de residentes que trae el login no se persiste", () => {
+  const storage = fakeStorage();
+  storeSession({ session: "tok", residente: { id: "r1", nombre: "Ana", rol: "residente" }, residentes: [{ id: "r1" }, { id: "r2" }] }, storage);
+  assert.deepEqual(getSession(storage), { session: "tok", residente: { id: "r1", nombre: "Ana", rol: "residente" } });
+});
+
+test("waitForGis espera a que el script de Google esté y devuelve el objeto", async () => {
+  let veces = 0;
+  const gis = await waitForGis({ getGis: () => (++veces >= 3 ? { initialize() {}, renderButton() {} } : undefined), intervaloMs: 1, esperar: async () => {} });
+  assert.ok(gis);
+  assert.equal(veces, 3);
+});
+
+test("waitForGis se rinde pasado el tope y devuelve null (para decirlo en pantalla, no esperar en silencio)", async () => {
+  let t = 0;
+  const gis = await waitForGis({ getGis: () => undefined, intervaloMs: 100, maxMs: 250, esperar: async () => { t += 100; } });
+  assert.equal(gis, null);
+  assert.ok(t >= 200, "sondeó varias veces antes de rendirse");
+});

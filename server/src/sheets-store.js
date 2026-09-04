@@ -95,5 +95,20 @@ export function makeStore({ ss, withLock, newId }) {
     });
   }
 
-  return { appendRecord, appendRecords, readRecords, readLatest, rebuildSheet };
+  /**
+   * Ejecuta `fn` con el lock de escritura cogido, para que una comprobación y la escritura que
+   * depende de ella sean atómicas frente a otros escritores (2026-09-04). Sin esto, `marcarValidado`
+   * leía el mes, lo validaba y escribía VALIDADO en tres pasos entre los que otro residente podía
+   * guardar una celda: el mes quedaba VALIDADO con una guardia que nadie validó. Lo mismo con dos
+   * sorteos del Responsable a la vez (dos mandatos para el mismo periodo).
+   *
+   * Las escrituras de dentro (`appendRecords`, `rebuildSheet`) vuelven a pedir el lock: `withLock`
+   * tiene que ser REENTRANTE (en Code.gs lo es por una bandera por ejecución; en tests y en el
+   * dev-server es `fn => fn()`). No se coge para leer suelto: solo para leer-y-escribir junto.
+   */
+  function transaction(fn) {
+    return withLock(fn);
+  }
+
+  return { appendRecord, appendRecords, readRecords, readLatest, rebuildSheet, transaction };
 }

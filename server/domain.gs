@@ -337,7 +337,60 @@ function monthReplacementPlan({ mes, anio, residentes = [], existentes = [], pro
   };
 }
 
-  return { monthReplacementPlan };
+// Lo que ocupa puesto en la rejilla (G/GF/GP/3P). Es el mismo conjunto que `validate.js:
+// OCUPA_PUESTO`, copiado y no importado A PROPÓSITO: `apply.js` va segundo en el bundle de Apps
+// Script (build/build-gas.mjs:DOMAIN_MODULES) y solo puede importar de `calendar.js`; importar
+// `validate.js` desde aquí invertiría el orden topológico y el bundle dejaría de cargar.
+const FIJABLES = new Set(["G", "GF", "GP", "3P"]);
+
+/**
+ * Plan para COMPLETAR el mes respetando lo que ya hay (decisión V-47): las guardias que ya están
+ * en la rejilla —las que cada residente puso de antemano porque ya las tenía comprometidas, o las
+ * que puso quien monta el cuadrante— son inamovibles, y la propuesta solo rellena lo que falta.
+ *
+ * Es el hermano de `monthReplacementPlan` con la regla contraria sobre lo existente: aquel BORRA
+ * toda guardia previa que la propuesta no pise (para que el mes quede exactamente como la
+ * propuesta); este NO borra ninguna. Existe porque el generador con IA se llevaba por delante lo
+ * que los residentes habían apuntado a mano antes de generar, y esa era justo la información que
+ * había que respetar.
+ *
+ * @returns {{cambios:object[], fijadas:object[], conflictos:object[], marcadores:object[],
+ *            fueraDelMes:object[], desconocidos:object[], borradas:object[]}}
+ *   - fijadas: las guardias (G/GF/GP/3P) que ya tiene el mes. Van al prompt como «ya fijadas» y a
+ *     la validación JUNTO con la propuesta: lo que se juzga es el mes resultante, no la propuesta
+ *     sola — si el modelo omite una fijada y pone a otro Mayor ese día, INV-1 lo ve.
+ *   - cambios: SOLO las filas de la propuesta que aportan algo: se descartan las que repiten una
+ *     fijada (misma clave y mismo código), que ya están escritas y así conservan su `origen`
+ *     (cedida/comprada) intacto. Nunca hay filas de borrado.
+ *   - conflictos: filas de la propuesta que pisan una fijada CON OTRO CÓDIGO. No se aplican
+ *     (mandaría la propuesta sobre lo que se pidió respetar); quien llama decide qué hacer, y el
+ *     router las convierte en un error de formato que vuelve al modelo en el reintento.
+ *   - marcadores, fueraDelMes, desconocidos, borradas: mismo significado que en
+ *     `monthReplacementPlan` (`borradas` siempre vacía aquí, se devuelve por simetría).
+ */
+function monthCompletionPlan({ mes, anio, residentes = [], existentes = [], propuesta = [] }) {
+  const delMes = new Set(datesOfMonth(anio, mes));
+  const conocidos = new Set(residentes.map((r) => r.id));
+  const fueraDelMes = propuesta.filter((a) => !delMes.has(a.fecha));
+  const desconocidos = propuesta.filter((a) => !conocidos.has(a.residenteId));
+
+  const fijadas = existentes.filter((a) => FIJABLES.has(a.codigo));
+  const marcadores = existentes.filter((a) => !FIJABLES.has(a.codigo));
+  const fijadaPorClave = new Map(fijadas.map((a) => [clave(a), a]));
+
+  const cambios = [];
+  const conflictos = [];
+  for (const a of propuesta) {
+    const fijada = fijadaPorClave.get(clave(a));
+    if (!fijada) { cambios.push({ fecha: a.fecha, residenteId: a.residenteId, codigo: a.codigo }); continue; }
+    if (fijada.codigo !== a.codigo) conflictos.push({ propuesta: a, fijada });
+    // Misma clave y mismo código: ya está en la tabla, no hay nada que escribir.
+  }
+
+  return { cambios, fijadas, conflictos, marcadores, fueraDelMes, desconocidos, borradas: [] };
+}
+
+  return { monthReplacementPlan, monthCompletionPlan };
 })();
 
 // ── residents.js ──

@@ -1,8 +1,21 @@
 // LoginScreen — Sign in with Google real (GIS + ID token verificado), sin implicit flow,
 // sin modo demo, sin backdoor de rol (bugs del v1 — ver docs/auditoria). Un residente sin
 // vincular ve aquí mismo el formulario de alta autoservicio (DoD-1).
+//
+// Lo que esta pantalla cuida del arranque (2026-09-04, pedido del autor: «más velocidad al
+// meter el correo con Google»):
+//  - El script de Google (GIS) va `async defer` y puede llegar DESPUÉS de que esto monte. Antes
+//    el efecto miraba `window.google` una sola vez y, si no estaba, se rendía para siempre: el
+//    botón no aparecía nunca y no había nada que pulsar salvo recargar. Ahora se espera a que
+//    llegue (`waitForGis`) y, si no llega en 15 s, se dice.
+//  - El nonce ya viene pedido por client/loader.js (`prefetchNonce`): `setupGoogleSignIn` lo
+//    consume en vez de pedir otro, así que el botón se pinta en cuanto GIS está.
+//  - El nonce caduca a los 5 min en el servidor: se refresca cada 4 con el temporizador y, como
+//    en un móvil la pestaña en segundo plano no ejecuta temporizadores, también al volver a ella.
+//  - Volver del formulario de alta («Cancelar») rehace el login entero: el nonce anterior se
+//    consumió al verificar el email, y el botón se desmontó con el formulario.
 import { COLOR } from "./client/lib/design-tokens.js";
-import { setupGoogleSignIn, submitAlta } from "./client/lib/auth.js";
+import { setupGoogleSignIn, submitAlta, waitForGis } from "./client/lib/auth.js";
 import { GOOGLE_CLIENT_ID } from "./client/config.js";
 import { addDays, addYears, compareISO } from "./v2/domain/calendar.js";
 import { todayISO } from "./client/lib/dates.js";
@@ -10,21 +23,63 @@ import { todayISO } from "./client/lib/dates.js";
 const { useState, useEffect, useRef } = React;
 const { Card, Btn, Aviso } = window.UI;
 
+// 4 min: por debajo de los 5 de vida del nonce en el servidor (Code.gs issueNonce_), con margen
+// para la latencia de Apps Script y para un temporizador que el navegador retrase.
+const NONCE_REFRESCO_MS = 4 * 60 * 1000;
+
 function LoginScreen() {
   const app = window.useApp();
   const buttonRef = useRef(null);
   const [error, setError] = useState(null);
   const [pending, setPending] = useState(null); // {pendingToken} tras login fallido por email no vinculado
+  const [esperandoGoogle, setEsperandoGoogle] = useState(true);
 
   useEffect(() => {
-    if (!window.google || !buttonRef.current) return;
-    setupGoogleSignIn({
-      api: app.api, clientId: GOOGLE_CLIENT_ID, gis: window.google.accounts.id, buttonEl: buttonRef.current,
-      onSuccess: (r) => app.onLoggedIn(r),
-      onNeedsAlta: (info) => setPending(info),
-      onError: (e) => setError(e),
-    });
-  }, []);
+    if (pending) return undefined; // el formulario de alta está en pantalla: no hay botón que pintar
+    let cancelado = false;
+    let asa = null;
+    let ultimaInit = 0;
+    let temporizador = null;
+
+    const refrescar = async () => {
+      if (cancelado || !asa) return;
+      ultimaInit = Date.now();
+      await asa.refrescar();
+    };
+    // Al volver a la pestaña tras un rato (móvil bloqueado, otra app): el temporizador no ha
+    // corrido y el nonce puede estar muerto. Se refresca solo si ya tocaba.
+    const alVolver = () => {
+      if (document.visibilityState === "visible" && Date.now() - ultimaInit >= NONCE_REFRESCO_MS) refrescar();
+    };
+
+    (async () => {
+      setEsperandoGoogle(true);
+      setError(null);
+      const gis = await waitForGis({ getGis: () => window.google && window.google.accounts && window.google.accounts.id });
+      if (cancelado) return;
+      setEsperandoGoogle(false);
+      if (!gis || !buttonRef.current) {
+        setError("No se pudo cargar el acceso con Google. Comprueba la conexión y recarga la página.");
+        return;
+      }
+      asa = await setupGoogleSignIn({
+        api: app.api, clientId: GOOGLE_CLIENT_ID, gis, buttonEl: buttonRef.current,
+        onSuccess: (r) => app.onLoggedIn(r),
+        onNeedsAlta: (info) => setPending(info),
+        onError: (e) => setError(e),
+      });
+      ultimaInit = Date.now();
+      if (cancelado || !asa) return;
+      temporizador = setInterval(refrescar, NONCE_REFRESCO_MS);
+      document.addEventListener("visibilitychange", alVolver);
+    })();
+
+    return () => {
+      cancelado = true;
+      if (temporizador) clearInterval(temporizador);
+      document.removeEventListener("visibilitychange", alVolver);
+    };
+  }, [pending]);
 
   if (pending) return <AltaForm pendingToken={pending.pendingToken} onCancel={() => setPending(null)} onSuccess={app.onLoggedIn} />;
 
@@ -38,6 +93,9 @@ function LoginScreen() {
         </div>
         <Card>
           <div ref={buttonRef} style={{ display: "flex", justifyContent: "center", minHeight: 44 }} />
+          {esperandoGoogle && !error && (
+            <div style={{ textAlign: "center", fontSize: 12, color: COLOR.grayDark, marginTop: 8 }}>Cargando el acceso con Google…</div>
+          )}
           {error && <div style={{ marginTop: 12 }}><Aviso color={COLOR.red} bg={COLOR.redLight}>{error}</Aviso></div>}
         </Card>
         <div style={{ textAlign: "center", marginTop: 20, fontSize: 12, color: COLOR.grayDark, lineHeight: 1.6 }}>

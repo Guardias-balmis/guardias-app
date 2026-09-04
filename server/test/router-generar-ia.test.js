@@ -19,7 +19,7 @@ import { validateThirdPost, thirdPostHistoryStart } from "../../v2/domain/thirdp
 import { groupOnDate, levelOn, periodsOfResident } from "../../v2/domain/residents.js";
 import { parseISO, addDays, bridgesOfMonth, academicYearOf } from "../../v2/domain/calendar.js";
 import { accumulatedTally } from "../../v2/domain/accumulate.js";
-import { monthReplacementPlan } from "../../v2/domain/apply.js";
+import { monthReplacementPlan, monthCompletionPlan } from "../../v2/domain/apply.js";
 import { canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
@@ -95,7 +95,7 @@ function makeDeps({ llm, violaciones = () => [], extraSheets = {} } = {}) {
       validateMonth: (ctx) => violaciones(ctx),
       validateThirdPost: () => [],
       buildMonthContext, rotationHistoryStart, thirdPostHistoryStart, parseISO, addDays,
-      bridgesOfMonth, academicYearOf, accumulatedTally, monthReplacementPlan,
+      bridgesOfMonth, academicYearOf, accumulatedTally, monthReplacementPlan, monthCompletionPlan,
       levelOn, periodsOfResident, groupOnDate,
       canEdit, stateAfterEdit,
     },
@@ -265,7 +265,7 @@ test("los AVISOS no impiden guardar y vuelven al cliente (V-14: la equidad nunca
   assert.equal(bitacora(deps)[0].resultado, "APLICADO");
 });
 
-test("generar sobre un mes que ya tenía guardias lo REEMPLAZA, no añade encima", () => {
+test("en modo REEMPLAZAR, generar sobre un mes que ya tenía guardias lo sustituye, no añade encima", () => {
   const llm = fakeLlm([ok(RESPUESTA_OK)]);
   const deps = makeDeps({ llm });
   const session = loggedInAs(deps, "resp@gmail.com");
@@ -274,11 +274,93 @@ test("generar sobre un mes que ya tenía guardias lo REEMPLAZA, no añade encima
   call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-15", residenteId: "resp-1", codigo: "G" }] }, deps);
   assert.equal(asignacionesDe(deps).length, 1);
 
-  const r = generar(deps, session);
+  const r = generar(deps, session, { modo: "reemplazar" });
   assert.equal(r.ok, true);
+  assert.equal(r.modo, "reemplazar");
   assert.equal(r.borradas, 1);
   const fechas = asignacionesDe(deps).map((a) => a.fecha).sort();
   assert.deepEqual(fechas, ["2027-07-01", "2027-07-02"], "la guardia previa del día 15 ya no está");
+});
+
+// ── modo COMPLETAR (decisión V-47): las guardias que ya había son inamovibles ─────────────────
+
+test("V-47: por defecto se COMPLETA — la guardia que un residente puso de antemano sobrevive y no hay borrados", () => {
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-15", residenteId: "resp-1", codigo: "G", origen: "CEDIDA" }] }, deps);
+
+  const r = generar(deps, session); // sin `modo`: el defecto
+  assert.equal(r.ok, true);
+  assert.equal(r.modo, "completar");
+  assert.equal(r.borradas, 0);
+  assert.equal(r.respetadas, 1);
+  assert.equal(r.guardados, 2);
+  const guardadas = asignacionesDe(deps);
+  assert.deepEqual(guardadas.map((a) => a.fecha).sort(), ["2027-07-01", "2027-07-02", "2027-07-15"]);
+  assert.equal(guardadas.find((a) => a.fecha === "2027-07-15").origen, "CEDIDA", "la fijada no se reescribe: conserva su origen");
+  assert.equal(bitacora(deps)[0].modo, "COMPLETAR");
+});
+
+test("V-47: el prompt lista las guardias ya fijadas y el validador juzga el mes RESULTANTE (fijadas + propuesta)", () => {
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  let visto = null;
+  const deps = makeDeps({ llm, violaciones: (ctx) => { visto = ctx; return []; } });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-15", residenteId: "resp-1", codigo: "G" }] }, deps);
+
+  generar(deps, session);
+  assert.match(llm.prompts[0], /GUARDIAS YA FIJADAS EN LA REJILLA \(OBLIGATORIO/);
+  assert.match(llm.prompts[0], /2027-07-15 — id="resp-1" — G/);
+  const fechas = (visto.asignaciones || []).map((a) => a.fecha).sort();
+  assert.deepEqual(fechas, ["2027-07-01", "2027-07-02", "2027-07-15"], "la fijada entra en lo que se valida");
+});
+
+test("V-47: si el modelo cambia el código de una fijada se le rechaza y se le explica en el reintento; la fijada queda intacta", () => {
+  const pisada = JSON.stringify({ asignaciones: [{ fecha: "2027-07-15", residenteId: "resp-1", codigo: "GF" }, ...PROPUESTA] });
+  const llm = fakeLlm([ok(pisada), ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-15", residenteId: "resp-1", codigo: "G" }] }, deps);
+
+  const r = generar(deps, session);
+  assert.equal(r.ok, true, "el segundo intento corrige");
+  assert.equal(r.intentos, 2);
+  assert.match(llm.prompts[1], /la guardia ya fijada de "resp-1" el 2027-07-15 es G y tu respuesta la cambia a GF/);
+  assert.equal(asignacionesDe(deps).find((a) => a.fecha === "2027-07-15").codigo, "G");
+});
+
+test("V-47: un mes ya completo que el modelo devuelve tal cual no escribe nada ni cambia de estado", () => {
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "guardarAsignaciones", session, cambios: PROPUESTA }, deps);
+  const filasAntes = deps.store.readRecords("asignaciones").length;
+
+  const r = generar(deps, session);
+  assert.equal(r.ok, true);
+  assert.equal(r.guardados, 0);
+  assert.equal(r.respetadas, 2);
+  assert.equal(deps.store.readRecords("asignaciones").length, filasAntes, "ni una fila nueva");
+  assert.equal(bitacora(deps)[0].resultado, "APLICADO");
+});
+
+test("V-47: las marcas V/R/B tampoco se tocan en modo completar", () => {
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-20", residenteId: "otro-1", codigo: "V" }] }, deps);
+  generar(deps, session);
+  assert.equal(asignacionesDe(deps).filter((a) => a.codigo === "V").length, 1);
+});
+
+test("V-47: un modo que no existe se rechaza sin gastar un intento (no puede degradar en silencio a reemplazar)", () => {
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm });
+  const r = generar(deps, loggedInAs(deps, "resp@gmail.com"), { modo: "sobrescribir" });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /modo de generación inválido/);
+  assert.equal(llm.prompts.length, 0);
 });
 
 test("las marcas V/R/B del mes sobreviven: el generador solo borra lo que propone", () => {

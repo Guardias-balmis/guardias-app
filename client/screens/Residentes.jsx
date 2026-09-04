@@ -21,6 +21,7 @@ import { COLOR, S, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js";
 import { puedeMoverCiclo } from "./client/lib/permisos.js";
 import { periodsOfResident, levelOn, validateTrainingPeriods } from "./v2/domain/residents.js";
 import { todayISO } from "./client/lib/dates.js";
+import { partirResidentesLegibles } from "./client/lib/residentes.js";
 
 const { useState, useEffect, useMemo } = React;
 const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
@@ -189,6 +190,57 @@ function Ficha({ api, residente, puedoEscribir, showToast, onCambio }) {
   );
 }
 
+/**
+ * Ficha de un residente cuyas fechas NO se pueden leer (tecleadas a mano en la hoja). Solo enseña
+ * el error y el editor de fechas: es la única salida dentro de la app, y `Ficha` no puede
+ * pintarlo porque deriva el nivel al renderizar y lanzaría.
+ */
+function FichaIlegible({ api, residente, motivo, puedoEscribir, showToast, onCambio }) {
+  const [inicio, setInicio] = useState("");
+  const [fin, setFin] = useState("");
+  const [busy, setBusy] = useState(false);
+  const guardar = async () => {
+    setBusy(true);
+    const r = await api.editarResidente(residente.id, { fechaInicio: inicio, fechaFin: fin });
+    setBusy(false);
+    if (r.ok) { showToast("Fechas corregidas ✓"); onCambio(); } else showToast(r.error, "err");
+  };
+  return (
+    <Card>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ background: COLOR.redLight, color: COLOR.red, fontSize: 12, fontWeight: 700, padding: "3px 8px", borderRadius: 6, minWidth: 34, textAlign: "center" }}>?</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: COLOR.blueDark }}>{residente.nombre || residente.id}</div>
+          <div style={{ fontSize: 12, color: COLOR.red, marginTop: 1 }}>
+            Fechas ilegibles en la hoja: {String(residente.fechaInicio ?? "—")} → {String(residente.fechaFin ?? "—")} ({motivo})
+          </div>
+        </div>
+      </div>
+      <div style={{ marginTop: 12, borderTop: `1px solid ${COLOR.grayMid}`, paddingTop: 12 }}>
+        <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 8, lineHeight: 1.5 }}>
+          Mientras siga así no aparece en ninguna pantalla ni cuenta para nada. Escribe las dos fechas
+          de residencia (día, mes y año) y guarda.
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <label style={etiqueta}>Incorporación</label>
+            <input type="date" value={inicio} disabled={!puedoEscribir} onChange={(e) => setInicio(e.target.value)} style={campo} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={etiqueta}>Fin</label>
+            <input type="date" value={fin} disabled={!puedoEscribir} onChange={(e) => setFin(e.target.value)} style={campo} />
+          </div>
+        </div>
+        {puedoEscribir && (
+          <div style={{ marginTop: 8 }}>
+            <Btn disabled={busy || !inicio || !fin} onClick={guardar}>Guardar fechas</Btn>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function ResidentesScreen() {
   const app = window.useApp();
   const { api, showToast, setTab, loadResidentes } = app;
@@ -228,14 +280,18 @@ function ResidentesScreen() {
   // Por nivel de hoy y luego por nombre: es el orden en que la gente piensa el equipo. Los que ya
   // han terminado van al final, pero NO se esconden: su historial sigue contando y su fecha de fin
   // es justo la que puede hacer falta corregir.
+  // Los de fechas ilegibles se apartan ANTES de ordenar y se pintan con `FichaIlegible`: derivar
+  // el nivel de uno de ellos lanza, y una excepción en render dejaba esta pantalla en blanco —
+  // justo la única desde la que se pueden corregir esas fechas.
+  const { legibles, ilegibles } = useMemo(() => partirResidentesLegibles(residentes || [], todayISO()), [residentes]);
   const ordenados = useMemo(() => {
     const rango = { R4: 0, R3: 1, R2: 2, R1: 3, PENDIENTE: 4, FINALIZADO: 5 };
-    return (residentes || []).slice().sort((a, b) => {
+    return legibles.slice().sort((a, b) => {
       const na = levelOn(periodsOfResident(a), todayISO());
       const nb = levelOn(periodsOfResident(b), todayISO());
       return (rango[na] ?? 9) - (rango[nb] ?? 9) || (a.nombre || "").localeCompare(b.nombre || "");
     });
-  }, [residentes]);
+  }, [legibles]);
 
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14, maxWidth: 720, margin: "0 auto" }}>
@@ -257,6 +313,9 @@ function ResidentesScreen() {
       {error && <Aviso color={COLOR.red} bg={COLOR.redLight}>No se pudo cargar el equipo: {error}</Aviso>}
       {!residentes && !error && <Card><div style={{ fontSize: 13, color: COLOR.grayDark }}>Cargando…</div></Card>}
 
+      {ilegibles.map(({ residente: r, motivo }) => (
+        <FichaIlegible key={r.id} api={api} residente={r} motivo={motivo} puedoEscribir={puedoEscribir} showToast={showToast} onCambio={cargar} />
+      ))}
       {ordenados.map((r) => (
         <Ficha key={r.id} api={api} residente={r} puedoEscribir={puedoEscribir} showToast={showToast} onCambio={cargar} />
       ))}

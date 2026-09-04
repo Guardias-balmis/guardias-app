@@ -74,7 +74,11 @@ export const TABLES = {
   // cada fila, y es también la «marca para revisión manual»: un `resultado=REVISION_MANUAL` dice
   // que ese mes hubo que montarlo a mano porque el modelo no supo. Append-only y sin `activo`: aquí
   // no hay nada que cancelar, solo cosas que pasaron.
-  generaciones: { name: "generaciones", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("fecha", "date"), col("actorId"), col("modelo"), col("intentos", "number"), col("resultado"), col("violaciones", "json")] },
+  // `modo` (decisión V-47): COMPLETAR (respetó las guardias que ya había) o REEMPLAZAR (sustituyó
+  // el mes). Va la ÚLTIMA a propósito: las hojas `generaciones` ya creadas conservan su cabecera
+  // de 9 columnas, y `rowsToRecords` mapea por posición, así que una columna añadida al final se
+  // lee bien en las filas nuevas y sale `undefined` (no basura) en las viejas.
+  generaciones: { name: "generaciones", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("fecha", "date"), col("actorId"), col("modelo"), col("intentos", "number"), col("resultado"), col("violaciones", "json"), col("modo")] },
   // Excepcion (spec.md §2, decisión V-29): degrada una violación DURA→AVISO donde la normativa lo
   // permite. Hoy el único consumidor es `validate.js:twoR2Justified` (INV-9, tipo "2xR2"): un
   // 2×R2 dentro de [desde,hasta] deja de avisar si hay una excepción documentada que lo cubra.

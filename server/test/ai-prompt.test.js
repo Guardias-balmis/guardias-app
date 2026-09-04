@@ -199,3 +199,26 @@ test("descarta los campos que el modelo se invente, y deja solo los tres del sch
   assert.equal(r.ok, true);
   assert.deepEqual(Object.keys(r.asignaciones[0]).sort(), ["codigo", "fecha", "residenteId"]);
 });
+
+// ── guardias ya fijadas (decisión V-47) ──
+
+test("las guardias ya fijadas van al prompt como obligatorias, ordenadas por fecha, y hay una norma que las declara inamovibles", () => {
+  const p = buildGenerationPrompt({
+    ...DATOS,
+    fijadas: [{ fecha: "2026-08-20", residenteId: "r2a", codigo: "GF" }, { fecha: "2026-08-03", residenteId: "r4a", codigo: "G" }],
+  });
+  assert.match(p, /GUARDIAS YA FIJADAS EN LA REJILLA \(OBLIGATORIO/);
+  assert.ok(p.indexOf('2026-08-03 — id="r4a" — G') < p.indexOf('2026-08-20 — id="r2a" — GF'), "ordenadas por fecha");
+  assert.match(p, /14\. Las GUARDIAS YA FIJADAS/);
+});
+
+test("sin fijadas (o en modo reemplazar) el prompt lo dice, para que el modelo no las busque", () => {
+  assert.match(buildGenerationPrompt(DATOS), /GUARDIAS YA FIJADAS EN LA REJILLA: ninguna/);
+  assert.match(buildGenerationPrompt({ ...DATOS, fijadas: [] }), /GUARDIAS YA FIJADAS EN LA REJILLA: ninguna/);
+});
+
+test("una preferencia de 0 guardias (permitida con ausencia registrada) NO desaparece del prompt, y un fechasEvitar que no es lista no lanza", () => {
+  const p = buildGenerationPrompt({ ...DATOS, preferencias: [{ residenteId: "r2a", maxGuardias: 0 }, { residenteId: "r3a", fechasEvitar: "2026-08-01", maxGuardias: 5 }] });
+  assert.match(p, /id="r2a" — pide NO hacer ninguna guardia/);
+  assert.match(p, /id="r3a" — querría no pasar de 5/);
+});
