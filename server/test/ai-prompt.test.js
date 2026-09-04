@@ -242,3 +242,9 @@ test("las celdas V/R/B ya marcadas en la rejilla se listan para que el modelo no
   assert.match(p, /2026-08-12 — id="r3a" — V/);
   assert.doesNotMatch(buildGenerationPrompt(DATOS), /CELDAS YA MARCADAS/);
 });
+
+test("un residente que termina o empieza a mitad de mes lleva su «solo hasta/desde» en la lista", () => {
+  const p = buildGenerationPrompt({ ...DATOS, porNivel: { ...DATOS.porNivel, R2: [{ id: "r2a", nombre: "Caro Dos", hasta: "2026-08-15" }], R1: [{ id: "r1n", nombre: "Nico Uno", desde: "2026-08-20" }] } });
+  assert.match(p, /id="r2a" — Caro Dos \(.*\) — solo hasta el 2026-08-15, después NO/);
+  assert.match(p, /id="r1n" — Nico Uno \(.*\) — solo desde el 2026-08-20/);
+});

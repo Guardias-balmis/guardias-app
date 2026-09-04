@@ -400,8 +400,15 @@ function PrefsScreen() {
     }
   };
 
+  // `cancelando` deshabilita los botones mientras la petición está en vuelo: un doble toque (fácil
+  // en el móvil con la latencia de Apps Script) mandaba `cancelarBloqueo` dos veces y, con las dos
+  // recargas que dispara cada respuesta, seis idas y vueltas donde bastan tres.
+  const [cancelando, setCancelando] = useState(null);
   const cancelarBloqueo = async (id) => {
+    if (cancelando !== null) return;
+    setCancelando(id);
     const r = await api.cancelarBloqueo(id);
+    setCancelando(null);
     if (r.ok) { showToast("Bloqueo cancelado"); cargarBloqueos(); cargarAjenas(); }
     else showToast("Error cancelando: " + r.error, "err");
   };
@@ -489,7 +496,7 @@ function PrefsScreen() {
                     {b.provincia ? ` · ${b.provincia}` : ""}
                     {!esBaja && <span style={{ fontWeight: 600 }}> · no bloquea</span>}
                   </div>
-                  <button onClick={() => cancelarBloqueo(b.id)} style={{ ...S.smallBtn, background: "#fff", color }}>Cancelar</button>
+                  <button onClick={() => cancelarBloqueo(b.id)} disabled={cancelando !== null} style={{ ...S.smallBtn, background: "#fff", color, opacity: cancelando !== null ? 0.6 : 1 }}>Cancelar</button>
                 </div>
               );
             })}
@@ -515,7 +522,7 @@ function PrefsScreen() {
                       <b>{quien ? quien.nombre : b.residenteId}</b> · {MOTIVO_LABEL[b.motivo] || b.motivo} ·{" "}
                       {fechaEs(b.desde)} – {fechaEs(b.hasta)}
                     </div>
-                    <button onClick={() => cancelarBloqueo(b.id)} style={{ ...S.smallBtn, background: "#fff", color }}>Cancelar</button>
+                    <button onClick={() => cancelarBloqueo(b.id)} disabled={cancelando !== null} style={{ ...S.smallBtn, background: "#fff", color, opacity: cancelando !== null ? 0.6 : 1 }}>Cancelar</button>
                   </div>
                 );
               })}

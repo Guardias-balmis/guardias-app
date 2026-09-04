@@ -455,7 +455,7 @@ test("un residenteId inventado se rechaza aunque INV-1 solo lo avise (V-21)", ()
   const r = generar(deps, loggedInAs(deps, "resp@gmail.com"));
   assert.equal(r.ok, false, "una fila que nadie puede ver ni corregir no se escribe nunca");
   assert.equal(asignacionesDe(deps).length, 0);
-  assert.match(llm.prompts[1], /"no-existe" no es de ningún residente/);
+  assert.match(llm.prompts[1], /"no-existe" no está en la lista de residentes activos/);
 });
 
 test("una ausencia con fecha ilegible para la generación ANTES de gastar un intento (V-22)", () => {
@@ -602,4 +602,56 @@ test("la bitácora se acota a 50 violaciones (+1 de resumen) y su fallo nunca co
   const r = generar(deps2, session2);
   assert.equal(r.ok, true, "el mes se escribió: la bitácora es memoria, no veredicto");
   assert.equal(asignacionesDe(deps2).length, 2);
+});
+
+test("reemplazar también juzga lo que SOBREVIVE: un 3P que la propuesta no borra (V-38) cuenta para INV-15 y va al prompt como fijado", () => {
+  // El juez (stub) ve INV-15 solo si el contexto lleva el 3P del día 3 junto a la G del día 4.
+  const violaciones = (ctx) => (JSON.stringify(ctx).includes('"2027-07-03"') && JSON.stringify(ctx).includes('"3P"')
+    ? [{ invariante: "INV-15", severidad: "error", detalle: "Guardias en días consecutivos: 2027-07-03 y 2027-07-04", residenteId: "resp-1" }] : []);
+  const propuesta = [...PROPUESTA, { fecha: "2027-07-04", residenteId: "resp-1", codigo: "G" }];
+  const llm = fakeLlm([ok(JSON.stringify({ asignaciones: propuesta }))]);
+  const deps = makeDeps({ llm, violaciones, extraSheets: { asignaciones: [headerOf(TABLES.asignaciones), fila("2027-07-03", "resp-1", "3P")] } });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = generar(deps, session, { modo: "reemplazar" });
+  assert.equal(r.ok, false, "antes se escribía un mes con INV-15 y la tarjeta decía «generado y guardado»");
+  assert.equal(r.resultado, "REVISION_MANUAL");
+  assert.ok(r.violaciones.some((v) => v.invariante === "INV-15"));
+  assert.match(llm.prompts[0], /GUARDIAS YA FIJADAS EN LA REJILLA \(OBLIGATORIO/);
+  assert.match(llm.prompts[0], /2027-07-03 — id="resp-1" — 3P/);
+  assert.deepEqual(asignacionesDe(deps).map((a) => a.codigo), ["3P"], "nada escrito, el 3P sigue");
+  // Y si la propuesta no choca con el 3P, se escribe y se cuenta como respetado.
+  const llm2 = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps2 = makeDeps({ llm: llm2, violaciones, extraSheets: { asignaciones: [headerOf(TABLES.asignaciones), fila("2027-07-10", "resp-1", "3P")] } });
+  const r2 = generar(deps2, loggedInAs(deps2, "resp@gmail.com"), { modo: "reemplazar" });
+  assert.equal(r2.ok, true);
+  assert.equal(r2.respetadas, 1);
+  assert.equal(asignacionesDe(deps2).filter((a) => a.codigo === "3P").length, 1);
+});
+
+test("quien termina la residencia a mitad de mes: el prompt dice «solo hasta» y una guardia posterior es FORMATO, no un aviso escrito", () => {
+  const CORTA = { ...OTRO, fechaFin: "2027-07-15" }; // R2 el día 1, FINALIZADO desde el 16
+  const llm = fakeLlm([ok(JSON.stringify({ asignaciones: [...PROPUESTA, { fecha: "2027-07-20", residenteId: "otro-1", codigo: "G" }] }))]);
+  const deps = makeDeps({ llm, extraSheets: { residentes: [headerOf(TABLES.residentes), ...[RESP, CORTA].map((r) => recordToRow(TABLES.residentes, r))] } });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = generar(deps, session, { modo: "reemplazar" });
+  assert.equal(r.ok, false);
+  assert.ok(r.violaciones.some((v) => v.invariante === "FORMATO" && /no está en activo el 2027-07-20/.test(v.detalle)), JSON.stringify(r.violaciones));
+  assert.match(llm.prompts[0], /id="otro-1" — Olga Pequeña \(.*\) — solo hasta el 2027-07-15/);
+  assert.equal(asignacionesDe(deps).length, 0);
+});
+
+test("si un residente deja de ser asignable mientras el modelo pensaba (periodos editados), el segundo juicio bajo el lock lo ve: CONFLICTO sin escribir", () => {
+  let deps;
+  let sessionResp;
+  const llm = fakeLlm([() => {
+    // Mientras «piensa», el Responsable corrige la fecha de fin de Olga a antes del mes.
+    assert.equal(call({ action: "editarResidente", session: sessionResp, residenteId: "otro-1", fechaFin: "2027-06-30" }, deps).ok, true);
+    return ok(RESPUESTA_OK); // …y el modelo devuelve un mes que le pone guardia el 2 de julio
+  }]);
+  deps = makeDeps({ llm });
+  sessionResp = loggedInAs(deps, "resp@gmail.com");
+  const r = generar(deps, sessionResp, { modo: "reemplazar" });
+  assert.equal(r.ok, false);
+  assert.equal(r.resultado, "CONFLICTO");
+  assert.equal(asignacionesDe(deps).length, 0);
 });

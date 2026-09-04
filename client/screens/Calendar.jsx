@@ -161,6 +161,11 @@ function CalendarScreen() {
   // "parte de una pulsación larga", para que ese click no cicle el código además de haber
   // abierto el selector — sin esto, soltar tras mantener presionado also dispara `onClick`.
   const longPressFiredRef = useRef(false);
+  // Foto de lo PERSISTIDO (lo cargado, y lo guardado con éxito): `aplica` compara contra ella para
+  // que ciclar o deshacer una celda hasta su valor guardado no deje un «cambio» pendiente. Sin esto,
+  // un clic accidental + Deshacer en un mes VALIDADO dejaba «Guardar (1)», escribía una fila vacía
+  // para una celda que nunca existió y devolvía el mes a BORRADOR sin que nada hubiera cambiado.
+  const baseRef = useRef({ asignaciones: {}, origenes: {} });
   const [guardando, setGuardando] = useState(false);
   const [validando, setValidando] = useState(false);
   const [violaciones, setViolaciones] = useState(null); // null = aún no validado
@@ -233,10 +238,12 @@ function CalendarScreen() {
         }
         setAsignaciones(idx);
         setOrigenes(idxOrigen);
+        baseRef.current = { asignaciones: idx, origenes: idxOrigen };
         setCargaError(false);
       } else {
         setAsignaciones({});
         setOrigenes({});
+        baseRef.current = { asignaciones: {}, origenes: {} };
         setCargaError(true);
         showToast("Error cargando cuadrante: " + r.error, "err");
       }
@@ -326,7 +333,16 @@ function CalendarScreen() {
     setAvisoDescanso(vecina ? { residenteId, fecha, vecina } : null);
     setAsignaciones((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: codigo } }));
     setOrigenes((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: origen } }));
-    setPendientes((prev) => ({ ...prev, [`${residenteId}|${fecha}`]: { fecha, residenteId, codigo, origen } }));
+    const clave = `${residenteId}|${fecha}`;
+    const baseCodigo = (baseRef.current.asignaciones[residenteId] || {})[fecha] || "";
+    const baseOrigen = (baseRef.current.origenes[residenteId] || {})[fecha] || "";
+    setPendientes((prev) => {
+      if (codigo === baseCodigo && origen === baseOrigen) { // igual que lo guardado: no hay cambio que mandar
+        const { [clave]: _quitada, ...resto } = prev;
+        return resto;
+      }
+      return { ...prev, [clave]: { fecha, residenteId, codigo, origen } };
+    });
     setViolaciones(null);
     setEquidadPorConfirmar(null);
     setCierresError(null);
@@ -414,6 +430,7 @@ function CalendarScreen() {
     setGuardando(false);
     if (r.ok) {
       setPendientes({});
+      baseRef.current = { asignaciones, origenes }; // lo que hay en pantalla es ahora lo persistido
       // Editar un mes VALIDADO lo revierte a BORRADOR en el servidor (Fase 6.2) — se refleja
       // aquí sin otra petición, con la misma regla de dominio que aplicó el servidor.
       setEstado(stateAfterEdit(estado));

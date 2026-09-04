@@ -642,7 +642,10 @@ function seccionResidentes(porNivel, acumulados) {
     const filas = lista.map((r) => {
       const resumen = resumenAcumulado(acumulados && acumulados[r.id]);
       const llevo = resumen ? `llevo hasta ahora: ${resumen}` : "sin guardias registradas todavía este año de residencia";
-      return `  - id="${r.id}" — ${r.nombre} (${llevo})`;
+      // Presencia parcial: termina o empieza a mitad de mes. Sin esto el modelo le ponía guardia a
+      // quien ya se había ido, y el router la rechaza como FORMATO.
+      const parcial = [r.desde ? `solo desde el ${r.desde}` : null, r.hasta ? `solo hasta el ${r.hasta}, después NO` : null].filter(Boolean);
+      return `  - id="${r.id}" — ${r.nombre} (${llevo})${parcial.length ? ` — ${parcial.join("; ")}` : ""}`;
     }).join("\n");
     return `${nivel} (${GRUPO_LABEL[nivel]}):\n${filas}`;
   }).filter(Boolean);
@@ -2288,9 +2291,17 @@ function promptData(deps, mes, anio, snap) {
   const monthStart = `${prefix}-01`;
 
   const porNivel = { R4: [], R3: [], R2: [], R1: [] };
+  const finDeMes = `${prefix}-31`; // comparación de cadenas: cualquier día del mes es <= a esto
   for (const r of snap.residentes) {
     const nivel = deps.domain.levelOn(deps.domain.periodsOfResident(r), monthStart);
-    if (porNivel[nivel]) porNivel[nivel].push({ id: r.id, nombre: r.nombre });
+    if (!porNivel[nivel]) continue;
+    // Presencia parcial en el mes: quien termina (fechaFin) o empieza (fechaInicio) a mitad. El
+    // modelo no ve fechas de residencia, así que se le dice en la propia lista; el router rechaza
+    // como FORMATO cualquier guardia fuera de esos días (`noAsignablesEseDia`).
+    const entrada = { id: r.id, nombre: r.nombre };
+    if (typeof r.fechaFin === "string" && r.fechaFin >= monthStart && r.fechaFin <= finDeMes) entrada.hasta = r.fechaFin;
+    if (typeof r.fechaInicio === "string" && r.fechaInicio > monthStart && r.fechaInicio <= finDeMes) entrada.desde = r.fechaInicio;
+    porNivel[nivel].push(entrada);
   }
 
   // `snap.asignaciones` es la tabla ENTERA: no hace falta acotar el rango como hacía el cliente
@@ -2393,13 +2404,32 @@ function handleGenerarIA(req, deps, session) {
   // alguien FINALIZADO o aún no incorporado era «conocido» para el plan, no caía en FORMATO, e INV-1
   // solo lo marcaba como aviso (V-21, pensado para la rejilla manual): la guardia de quien ya se fue
   // se ESCRIBÍA. Para el generador es un defecto de la RESPUESTA: nadie fuera de su lista.
-  const asignables = snap.residentes.filter((r) => NIVELES_ASIGNABLES.has(deps.domain.levelOn(deps.domain.periodsOfResident(r), monthStart)));
-  const planDe = (propuesta) => (completar ? deps.domain.monthCompletionPlan : deps.domain.monthReplacementPlan)({
-    mes: req.mes, anio: req.anio, residentes: asignables, existentes, propuesta,
+  const asignablesDe = (snapX) => snapX.residentes.filter((r) => NIVELES_ASIGNABLES.has(deps.domain.levelOn(deps.domain.periodsOfResident(r), monthStart)));
+  // `snapX` porque el plan se recalcula con el snapshot fresco en el segundo juicio (bajo el lock):
+  // quien dejó de ser asignable mientras el modelo pensaba (periodos editados) cae en `desconocidos`.
+  const planDe = (propuesta, snapX = snap) => (completar ? deps.domain.monthCompletionPlan : deps.domain.monthReplacementPlan)({
+    mes: req.mes, anio: req.anio, residentes: asignablesDe(snapX), existentes, propuesta,
   });
+  // Y día a día: el nivel se mira el día 1 para la LISTA, pero quien termina la residencia a mitad
+  // de mes (o se incorpora después del día 1) no puede hacer guardia los días en que ya no está (o
+  // aún no está). INV-1 solo lo avisa (V-21, pensado para la rejilla manual); para el generador es
+  // un defecto de la respuesta y se rechaza — y el prompt le dice al modelo hasta/desde qué día cuenta.
+  const noAsignablesEseDia = (propuesta, snapX) => {
+    const porId = new Map(snapX.residentes.map((r) => [r.id, r]));
+    return propuesta.filter((a) => {
+      const r = porId.get(a.residenteId);
+      if (!r || typeof a.fecha !== "string" || !a.fecha.startsWith(prefix)) return false; // ids desconocidos y fechas de otro mes ya tienen su rechazo
+      return !NIVELES_ASIGNABLES.has(deps.domain.levelOn(deps.domain.periodsOfResident(r), a.fecha));
+    });
+  };
   // Las fijadas se calculan UNA vez con la propuesta vacía: no dependen de lo que el modelo diga.
   const fijadas = completar ? planDe([]).fijadas : [];
-  const prompt = buildGenerationPrompt({ ...promptData(deps, req.mes, req.anio, snap), fijadas });
+  // En «reemplazar» también sobrevive algo: los 3P ya puestos, que `monthReplacementPlan` solo borra
+  // si la propuesta trae 3P (V-38). Si el modelo no sabe que están, pone a esa persona el día
+  // anterior o el siguiente y el mes escrito incumple INV-15 (descanso, regla legal) sin que el juez
+  // lo viera — porque juzgaba la propuesta sola, no lo que iba a quedar en la rejilla.
+  const conservadas = completar ? [] : existentes.filter((a) => a.codigo === "3P");
+  const prompt = buildGenerationPrompt({ ...promptData(deps, req.mes, req.anio, snap), fijadas: completar ? fijadas : conservadas });
   const modelo = (deps.llm && deps.llm.modelo) || "(sin declarar)";
 
   // El juez: exactamente el mismo que usa `marcarValidado`, ni más estricto ni más laxo. Un
@@ -2407,7 +2437,7 @@ function handleGenerarIA(req, deps, session) {
   // mano tampoco, y la app se quedaría sin cuadrante por exceso de celo. Parametrizado por el
   // snapshot porque se vuelve a juzgar, con uno fresco, justo antes de escribir (ver abajo).
   const validarCon = (snapX) => (propuesta) => {
-    const plan = planDe(propuesta);
+    const plan = planDe(propuesta, snapX);
     // El guardarraíl de V-31, expresado como violaciones para que viaje al reintento: una fecha de
     // otro mes o un id inventado no incumplen ningún invariante (`validateMonth` ni los mira, sus
     // índices solo tienen días del mes y `desconocidos` es aviso) y sin embargo se ESCRIBIRÍAN —
@@ -2421,7 +2451,11 @@ function handleGenerarIA(req, deps, session) {
       })),
       ...plan.desconocidos.map((a) => ({
         invariante: "FORMATO", severidad: "error", residenteId: a.residenteId,
-        detalle: `el residenteId "${a.residenteId}" no es de ningún residente: usa exactamente los ids de la lista de arriba`,
+        detalle: `el residenteId "${a.residenteId}" no está en la lista de residentes activos de este mes: usa exactamente los ids de la lista de arriba`,
+      })),
+      ...noAsignablesEseDia(propuesta, snapX).map((a) => ({
+        invariante: "FORMATO", severidad: "error", residenteId: a.residenteId,
+        detalle: `el residente "${a.residenteId}" no está en activo el ${a.fecha} (mira su «solo desde/hasta» en la lista): no le pongas guardia ese día`,
       })),
       ...(plan.conflictos || []).map((c) => ({
         invariante: "FORMATO", severidad: "error", residenteId: c.fijada.residenteId,
@@ -2442,10 +2476,14 @@ function handleGenerarIA(req, deps, session) {
       })),
     ];
     if (rechazos.length > 0) return rechazos; // no vale la pena juzgar un mes que ni siquiera es este
-    // En modo completar se juzga el mes RESULTANTE: lo fijado más lo que la propuesta añade. Juzgar
-    // solo la propuesta daría por bueno un día en que el modelo, ignorando una fijada, pone a otro
-    // Mayor — y ese día tendría dos al escribirse.
-    const aJuzgar = completar ? [...plan.fijadas, ...plan.cambios] : propuesta;
+    // Se juzga siempre el mes RESULTANTE, lo que va a quedar escrito: en completar, lo fijado más lo
+    // que la propuesta añade (juzgar solo la propuesta daría por bueno un día en que el modelo,
+    // ignorando una fijada, pone a otro Mayor — y ese día tendría dos al escribirse); en reemplazar,
+    // la propuesta más las guardias que el plan NO va a borrar (los 3P que sobreviven por V-38:
+    // `plan.marcadores` son exactamente las filas no borrables para ESTA propuesta).
+    const aJuzgar = completar
+      ? [...plan.fijadas, ...plan.cambios]
+      : [...plan.marcadores.filter((a) => CODIGOS_GUARDIA.has(a.codigo)), ...propuesta];
     return [
       ...deps.domain.validateMonth(buildCuadranteCtx(deps, req.mes, req.anio, snapX, aJuzgar)),
       ...deps.domain.validateThirdPost(buildThirdPostCtx(deps, req.mes, req.anio, snapX, aJuzgar)),
@@ -2524,7 +2562,7 @@ function handleGenerarIA(req, deps, session) {
 
   return {
     ok: true, estado: escrito.siguiente, modelo, intentos: r.intentos, modo,
-    guardados: plan.cambios.length, borradas: plan.borradas.length, respetadas: fijadas.length,
+    guardados: plan.cambios.length, borradas: plan.borradas.length, respetadas: completar ? fijadas.length : plan.marcadores.filter((a) => CODIGOS_GUARDIA.has(a.codigo)).length,
     // Los avisos que quedan viajan de vuelta: no bloquean (V-14), pero quien acaba de guardar un
     // mes tiene derecho a ver que cojea en equidad antes de darlo por bueno.
     violaciones: r.violaciones,

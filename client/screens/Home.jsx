@@ -518,10 +518,15 @@ function HomeScreen() {
         })}
       </Card>
 
+      {/* `comprobando` para CUALQUIER Mayor mientras no llegue `estadoCuadrante`: `sinResponsable` viaja
+          en esa misma respuesta, así que gatear la tarjeta inerte por `puedeMoverCiclo` la escondía
+          justo en el caso real de producción (sin Responsable) hasta que respondía Apps Script —
+          el síntoma del 2026-08-31 otra vez. Si al llegar resulta que hay Responsable y no es él,
+          `puedo` sigue en false y la tarjeta desaparece, como ahora. */}
       <GeneradorIA api={app.api} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
         setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")} completarDisponible={completarDisponible}
         estadoError={estadoError} reintentar={() => setReintento((n) => n + 1)}
-        comprobando={estadoMes === null && puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable })} />
+        comprobando={estadoMes === null && (app.isResponsable || app.grupo === "MAYOR")} />
 
       <Imaginaria api={app.api} residentes={residentes} showToast={app.showToast} puedoRegistrar={puedoRegistrarImaginaria} />
 

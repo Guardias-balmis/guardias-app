@@ -199,7 +199,10 @@ function seccionResidentes(porNivel, acumulados) {
     const filas = lista.map((r) => {
       const resumen = resumenAcumulado(acumulados && acumulados[r.id]);
       const llevo = resumen ? `llevo hasta ahora: ${resumen}` : "sin guardias registradas todavía este año de residencia";
-      return `  - id="${r.id}" — ${r.nombre} (${llevo})`;
+      // Presencia parcial: termina o empieza a mitad de mes. Sin esto el modelo le ponía guardia a
+      // quien ya se había ido, y el router la rechaza como FORMATO.
+      const parcial = [r.desde ? `solo desde el ${r.desde}` : null, r.hasta ? `solo hasta el ${r.hasta}, después NO` : null].filter(Boolean);
+      return `  - id="${r.id}" — ${r.nombre} (${llevo})${parcial.length ? ` — ${parcial.join("; ")}` : ""}`;
     }).join("\n");
     return `${nivel} (${GRUPO_LABEL[nivel]}):\n${filas}`;
   }).filter(Boolean);

@@ -46,11 +46,15 @@ function Ficha({ api, residente, puedoEscribir, showToast, onCambio }) {
 
   // Al recargar la lista tras guardar, la ficha tiene que reflejar lo que hay ahora en la tabla y
   // no lo que se teclease antes: si no, un guardado con éxito seguiría mostrando el valor viejo.
+  // Depende de los DATOS y no de la identidad del objeto: `listResidentes` responde 2-3 s después de
+  // abrir la pantalla (y cada guardado de otra ficha vuelve a pedirla), y con `[residente]` la
+  // relectura creaba objetos nuevos y pisaba en silencio lo que la persona llevaba tecleado.
+  const periodosClave = JSON.stringify(residente.periodos || null);
   useEffect(() => {
     setInicio(residente.fechaInicio || "");
     setFin(residente.fechaFin || "");
     setPeriodos(periodosDeTabla(residente));
-  }, [residente]);
+  }, [residente.id, residente.fechaInicio, residente.fechaFin, periodosClave]);
 
   const nivelHoy = levelOn(periodsOfResident(residente), todayISO());
   // «Editados» = DISTINTOS de lo que saldría de las fechas, no «hay filas en la tabla». No es lo
