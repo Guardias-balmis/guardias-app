@@ -144,16 +144,30 @@ test("sin mandato vigente lo puede lanzar cualquier Mayor (V-16), no se bloquea 
 test("V-46: el acceso de desarrollador (email exacto) genera en Borrador aunque sea Pequeño", () => {
   const llm = fakeLlm([ok(RESPUESTA_OK)]);
   const deps = makeDeps({ llm, extraSheets: conDev });
+  deps.today = "2027-01-15"; // dentro de la fecha límite de V-47 (el default del fixture, 2027-06-16, ya la rebasa)
 
   const r = generar(deps, loggedInAs(deps, DEV.email));
-  assert.equal(r.ok, true, "el acceso de desarrollador destraba el permiso del ciclo solo para esta acción");
+  assert.equal(r.ok, true, "el acceso de desarrollador destraba el permiso del ciclo dentro de plazo");
 });
 
-test("V-46: el acceso de desarrollador NO destraba el resto del ciclo (marcarValidado sigue pidiendo Mayor/Responsable)", () => {
+test("V-47: el acceso de desarrollador SÍ destraba el resto del ciclo dentro de plazo (amplía V-46)", () => {
   const deps = makeDeps({ extraSheets: conDev });
+  deps.today = "2027-01-15"; // dentro de la fecha límite de V-47 (el default del fixture, 2027-06-16, ya la rebasa)
   const session = loggedInAs(deps, DEV.email);
 
-  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  // Cualquier acción que pase por requireCicloPermiso vale de sonda; se usa `crearBloqueo` sobre
+  // OTRO residente (motivo BAJA, para no depender de `previewBloqueoRisk`, ausente del fixture) en
+  // vez de `marcarValidado`, que aquí sí requiere mockear los cierres de equidad.
+  const r = call({ action: "crearBloqueo", session, residenteId: OTRO.id, motivo: "BAJA", desde: "2027-07-10", hasta: "2027-07-12" }, deps);
+  assert.equal(r.ok, true, "el desarrollador puede mover el ciclo entero mientras corrige errores en producción");
+});
+
+test("V-47: pasada la fecha límite, el acceso de desarrollador caduca solo y vuelve a exigir Mayor/Responsable", () => {
+  const deps = makeDeps({ extraSheets: conDev });
+  deps.today = "2027-04-01"; // un día después del límite fijado en router.js
+  const session = loggedInAs(deps, DEV.email);
+
+  const r = call({ action: "crearBloqueo", session, residenteId: OTRO.id, motivo: "BAJA", desde: "2027-07-10", hasta: "2027-07-12" }, deps);
   assert.equal(r.ok, false);
   assert.match(r.error, /solo el Responsable|solo un R3 o R4/);
 });
@@ -161,6 +175,7 @@ test("V-46: el acceso de desarrollador NO destraba el resto del ciclo (marcarVal
 test("V-46: el acceso de desarrollador sigue exigiendo Borrador (un VALIDADO se rechaza igual que a cualquiera)", () => {
   const llm = fakeLlm([ok(RESPUESTA_OK)]);
   const deps = makeDeps({ llm, extraSheets: conDev });
+  deps.today = "2027-01-15"; // dentro de la fecha límite de V-47 (el default del fixture, 2027-06-16, ya la rebasa)
   const session = loggedInAs(deps, DEV.email);
   deps.store.appendRecord("cuadrantes", { mes: 7, anio: 2027, estado: "VALIDADO", actorId: "resp-1", fecha: "2027-06-01" });
 

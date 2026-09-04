@@ -1134,7 +1134,10 @@ function handleRequest(rawBody, deps) {
             residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo,
             provincia: req.provincia, guardiasEnCentroExterno: req.guardiasEnCentroExterno, activo: true,
           });
-          return { ok: true, id, residenteId, riesgos };
+          // V-48: la marca V/R/B se escribe sola en la rejilla para que el equipo la vea sin que
+          // nadie tenga que ir día a día a mano — ver el comentario de `writeBloqueoMarcas`.
+          const { escritos, sinMarcar } = writeBloqueoMarcas(deps, session, residenteId, req.motivo, rango.desde, rango.hasta);
+          return { ok: true, id, residenteId, riesgos, marcasEscritas: escritos, marcasSinEscribir: sinMarcar };
         });
 
       case "misBloqueos":
@@ -1789,6 +1792,69 @@ function activeBloqueosInMonth(deps, anio, mes) {
   return [...bloqueosInRange(deps, usables, `${prefix}-01`, `${prefix}-31`), ...corruptas.map((c) => c.bloqueo)];
 }
 
+// El código de la rejilla que corresponde a cada motivo de Bloqueo (V-48): son exactamente los
+// tres códigos "de marca" que ya existían en ASIG_CODIGOS antes de esta decisión.
+const ASIG_CODIGO_DE_BLOQUEO = { VACACIONES: "V", ROTACION: "R", BAJA: "B" };
+
+/**
+ * Escribe sola la marca V/R/B en `asignaciones`, un día por cada uno del bloqueo recién creado
+ * (decisión del autor, 2026-09-03, V-48): antes había que ir día a día a mano en la rejilla del
+ * cuadrante para que el equipo VIERA una ausencia que la tabla `bloqueos` (la que de verdad leen
+ * los invariantes, V-19) ya tenía registrada desde el alta — la rejilla y la tabla real podían
+ * contarse historias distintas.
+ *
+ * Dos guardarraíles, no una copia ciega de `guardarAsignaciones`:
+ *  - Solo rellena celdas VACÍAS. Un día con un código ya puesto —una guardia real, por ejemplo—
+ *    no se pisa nunca: silenciar una asignación de verdad para poner una marca informativa sería
+ *    justo el tipo de pérdida de datos que este proyecto evita en todas partes (asignaciones es
+ *    append-only y nunca se borra). Esos días quedan en `sinMarcar` para que quien registró el
+ *    bloqueo sepa que tiene que revisarlos.
+ *  - Un mes PUBLICADO no se toca (mismo criterio que `guardarAsignaciones`, V-9b): sus días
+ *    también van a `sinMarcar`. Solo se revierte VALIDADO→BORRADOR (`stateAfterEdit`) en los
+ *    meses donde de verdad se escribió algo, no en los que quedaron intactos.
+ */
+function writeBloqueoMarcas(deps, session, residenteId, motivo, desde, hasta) {
+  const codigo = ASIG_CODIGO_DE_BLOQUEO[motivo];
+  if (!codigo) return { escritos: 0, sinMarcar: [] };
+
+  const fechas = [];
+  for (let f = desde; f <= hasta; f = deps.domain.addDays(f, 1)) fechas.push(f);
+
+  const codigoActual = new Map(
+    deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" })
+      .filter((a) => a.residenteId === residenteId)
+      .map((a) => [a.fecha, a.codigo]),
+  );
+
+  const porMes = new Map();
+  for (const f of fechas) {
+    const clave = f.slice(0, 7);
+    if (!porMes.has(clave)) porMes.set(clave, { mes: Number(f.slice(5, 7)), anio: Number(f.slice(0, 4)), fechas: [] });
+    porMes.get(clave).fechas.push(f);
+  }
+
+  const sinMarcar = [];
+  const cambios = [];
+  for (const { mes, anio, fechas: fechasMes } of porMes.values()) {
+    if (!deps.domain.canEdit(currentCuadranteEstado(deps, mes, anio))) { sinMarcar.push(...fechasMes); continue; }
+    for (const f of fechasMes) {
+      if ((codigoActual.get(f) || "") !== "") { sinMarcar.push(f); continue; }
+      cambios.push({ fecha: f, residenteId, codigo });
+    }
+  }
+  if (cambios.length === 0) return { escritos: 0, sinMarcar };
+
+  deps.store.appendRecords("asignaciones", cambios);
+  const mesesEscritos = new Set(cambios.map((c) => c.fecha.slice(0, 7)));
+  for (const { mes, anio } of porMes.values()) {
+    if (!mesesEscritos.has(monthPrefix(anio, mes))) continue;
+    const estado = currentCuadranteEstado(deps, mes, anio);
+    const siguiente = deps.domain.stateAfterEdit(estado);
+    if (siguiente !== estado) writeCuadranteEstado(deps, session, mes, anio, siguiente);
+  }
+  return { escritos: cambios.length, sinMarcar };
+}
+
 /**
  * Las tres tablas que necesitan las comprobaciones de un mes, leídas UNA vez. Existe porque
  * validar un mes ahora comprueba el mes (INV-1..14) y además los cierres de equidad de INV-3
@@ -1929,7 +1995,9 @@ function mandatoVigente(deps) {
 }
 
 /**
- * Permiso para mover el ciclo del cuadrante (validar/publicar/despublicar).
+ * Permiso para mover el ciclo del cuadrante (validar/publicar/despublicar/excepciones/sorteo/
+ * imaginaria/editar fechas y periodos formativos/registrar o cancelar la ausencia de otro
+ * residente — todo lo que llama a esta función).
  *
  * Regla base (decisión V-9c): lo hace el Responsable en mandato. Añadido de la decisión V-16:
  * si NO hay mandato vigente el ciclo no se queda bloqueado — cualquier residente Mayor (R3/R4
@@ -1942,8 +2010,14 @@ function mandatoVigente(deps) {
  * Ojo con `session.rol`: se calcula en el login y viaja firmado dentro del token, así que puede
  * ser de hace horas. La existencia del mandato se relee AQUÍ del store en cada llamada — si el
  * sorteo se resolvió a mitad de la sesión de alguien, el permiso deja de ser el de su token.
+ *
+ * Decisión V-47 (2026-09-03, ampliando V-46): antes de mirar mandato o grupo se comprueba
+ * `esAccesoDesarrollador`, que destraba TODO este permiso —ya no solo `generarCuadranteIA`— para
+ * el autor de la app mientras corrige errores de esta primera puesta en producción, y caduca solo
+ * en la fecha fijada ahí sin que nadie tenga que acordarse de retirar el código.
  */
 function requireCicloPermiso(deps, session, accion) {
+  if (esAccesoDesarrollador(deps, session)) return null;
   const mandato = mandatoVigente(deps);
   if (mandato) {
     return mandato.residenteId === session.sub ? null : { ok: false, error: `solo el Responsable puede ${accion}` };
@@ -2008,17 +2082,24 @@ function promptData(deps, mes, anio, snap) {
   };
 }
 
-// Acceso de desarrollador SOLO para `generarCuadranteIA` (decisión V-46, 2026-09-02, a pedido
-// explícito del autor de la app). El resto del permiso del ciclo —validar, publicar, despublicar,
-// excepciones, sorteo, imaginaria— sigue exigiendo Responsable o Mayor tal cual: esto NO toca
-// `requireCicloPermiso`, se comprueba aparte y solo aquí. El autor es R1/R2 (Pequeño) hoy, así que
-// no puede tener el permiso del ciclo por las reglas normales sin falsear su nivel real —que se
-// deriva de fechas y alimenta INV-11 y compañía, y eso sí rompería algo de verdad. Se identifica
-// por EMAIL y no por rol ni nivel, precisamente para no depender de nada que la app derive sola.
-const EMAIL_ACCESO_DESARROLLADOR_IA = "agustinlagioiosa@gmail.com";
-function esAccesoDesarrolladorIA(deps, session) {
+// Acceso de desarrollador para TODO el permiso del ciclo (decisión V-47, 2026-09-03, a pedido
+// explícito del autor de la app — amplía V-46, que cubría solo `generarCuadranteIA`). Vive DENTRO
+// de `requireCicloPermiso`, así que validar/publicar/despublicar/excepciones/sorteo/imaginaria y
+// las ediciones de fechas/periodos formativos/ausencias de otro residente quedan destrabadas
+// igual: el autor va a corregir errores de esta primera puesta en producción durante los próximos
+// meses y necesita poder resolver cualquier incidencia sin depender de tener el mandato de
+// Responsable ni ser Mayor — forzarle el nivel o el grupo falsearía un dato que se deriva de
+// fechas reales y alimenta INV-11 y compañía, así que sigue resolviéndose por identidad (email),
+// no por rol ni nivel (mismo argumento que V-46). `FECHA_LIMITE_ACCESO_DESARROLLADOR` lo caduca
+// solo: pasada esa fecha esta función vuelve a devolver `false` sin que nadie tenga que acordarse
+// de retirar el bloque a mano — una excepción que solo se revierte si alguien se acuerda no
+// sobrevive los diez años que el proyecto exige de sí mismo.
+const EMAIL_ACCESO_DESARROLLADOR = "agustinlagioiosa@gmail.com";
+const FECHA_LIMITE_ACCESO_DESARROLLADOR = "2027-03-31";
+function esAccesoDesarrollador(deps, session) {
+  if (deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return false;
   const residente = allResidentes(deps).find((r) => r.id === session.sub);
-  return Boolean(residente) && residente.email === EMAIL_ACCESO_DESARROLLADOR_IA;
+  return Boolean(residente) && residente.email === EMAIL_ACCESO_DESARROLLADOR;
 }
 
 /**
@@ -2029,7 +2110,7 @@ function esAccesoDesarrolladorIA(deps, session) {
  */
 function handleGenerarIA(req, deps, session) {
   const denegado = requireCicloPermiso(deps, session, "generar el cuadrante con IA");
-  if (denegado && !esAccesoDesarrolladorIA(deps, session)) return denegado;
+  if (denegado) return denegado;
 
   const estadoActual = validCuadranteMesAnio(req, deps);
   if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };

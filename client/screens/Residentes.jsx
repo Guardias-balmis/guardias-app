@@ -18,7 +18,7 @@
 // servicio, no propios. Leer está abierto, y a quien no puede escribir se le DICE en vez de
 // esconderle la pantalla. El servidor lo vuelve a comprobar en cada acción.
 import { COLOR, S, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js";
-import { puedeMoverCiclo } from "./client/lib/permisos.js";
+import { puedeMoverCiclo, esAccesoDesarrollador } from "./client/lib/permisos.js";
 import { periodsOfResident, levelOn, validateTrainingPeriods } from "./v2/domain/residents.js";
 import { todayISO } from "./client/lib/dates.js";
 
@@ -191,7 +191,7 @@ function Ficha({ api, residente, puedoEscribir, showToast, onCambio }) {
 
 function ResidentesScreen() {
   const app = window.useApp();
-  const { api, showToast, setTab, loadResidentes } = app;
+  const { api, showToast, setTab, loadResidentes, myResidente } = app;
   const [residentes, setResidentes] = useState(null);
   const [error, setError] = useState(null);
 
@@ -223,7 +223,7 @@ function ResidentesScreen() {
     })();
     return () => { cancelled = true; };
   }, []);
-  const puedoEscribir = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
+  const puedoEscribir = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador: esAccesoDesarrollador(myResidente?.email) });
 
   // Por nivel de hoy y luego por nombre: es el orden en que la gente piensa el equipo. Los que ya
   // han terminado van al final, pero NO se esconden: su historial sigue contando y su fecha de fin

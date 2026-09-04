@@ -8,8 +8,9 @@ import assert from "node:assert/strict";
 import nodeCrypto from "node:crypto";
 import { handleRequest } from "../src/router.js";
 import { absences } from "../../v2/domain/absences.js";
-import { parseISO } from "../../v2/domain/calendar.js";
+import { parseISO, addDays } from "../../v2/domain/calendar.js";
 import { previewBloqueoRisk } from "../../v2/domain/blockPreview.js";
+import { canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 
@@ -48,7 +49,9 @@ function makeDeps(overrides = {}) {
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
     // `parseISO` porque `crearBloqueo` valida el rango de verdad (no por orden lexicográfico).
-    domain: { absences, parseISO, previewBloqueoRisk },
+    // `addDays`/`canEdit`/`stateAfterEdit` los necesita `writeBloqueoMarcas` (V-48): la marca
+    // V/R/B se escribe sola en la rejilla al crear el bloqueo.
+    domain: { absences, parseISO, addDays, previewBloqueoRisk, canEdit, stateAfterEdit },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
     consumeNonce: (n) => nonces.delete(n),
     fetchTokeninfo: () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "ana@gmail.com", email_verified: "true", sub: "g-1", exp: String(2_000_000), nonce: [...nonces][0] }),
@@ -168,4 +171,62 @@ test("crearBloqueo, misBloqueos y cancelarBloqueo requieren sesión", () => {
   assert.equal(call({ action: "crearBloqueo", desde: "2026-08-01", hasta: "2026-08-10", motivo: "VACACIONES" }, deps).ok, false);
   assert.equal(call({ action: "misBloqueos", anio: 2026, mes: 8 }, deps).ok, false);
   assert.equal(call({ action: "cancelarBloqueo", id: "x" }, deps).ok, false);
+});
+
+// ── V-48: la marca V/R/B se escribe sola en la rejilla al crear el bloqueo ──────────────────────
+
+const asignacionesDe = (deps, session, anio, mes) => call({ action: "listAsignaciones", session, anio, mes }, deps).asignaciones;
+
+test("V-48: VACACIONES escribe V, ROTACION escribe R y BAJA escribe B en cada día del rango", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  const r = call({ action: "crearBloqueo", session, desde: "2026-08-01", hasta: "2026-08-03", motivo: "VACACIONES" }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(r.marcasEscritas, 3);
+  assert.deepEqual(r.marcasSinEscribir, []);
+  const asig = asignacionesDe(deps, session, 2026, 8).filter((a) => a.residenteId === "uuid-ana");
+  assert.deepEqual(asig.map((a) => `${a.fecha}=${a.codigo}`).sort(), ["2026-08-01=V", "2026-08-02=V", "2026-08-03=V"]);
+
+  const rot = call({ action: "crearBloqueo", session, desde: "2026-09-01", hasta: "2026-09-01", motivo: "ROTACION" }, deps);
+  assert.equal(asignacionesDe(deps, session, 2026, 9).find((a) => a.fecha === "2026-09-01").codigo, "R");
+
+  const baja = call({ action: "crearBloqueo", session, desde: "2026-10-01", hasta: "2026-10-01", motivo: "BAJA" }, deps);
+  assert.equal(asignacionesDe(deps, session, 2026, 10).find((a) => a.fecha === "2026-10-01").codigo, "B");
+});
+
+test("V-48: no pisa un día que ya tiene un código puesto a mano, y lo dice en marcasSinEscribir", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2026-08-02", residenteId: "uuid-ana", codigo: "G" }] }, deps);
+
+  const r = call({ action: "crearBloqueo", session, desde: "2026-08-01", hasta: "2026-08-03", motivo: "VACACIONES" }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(r.marcasEscritas, 2, "el día 2 ya ocupado no cuenta como escrito");
+  assert.deepEqual(r.marcasSinEscribir, ["2026-08-02"]);
+
+  const asig = asignacionesDe(deps, session, 2026, 8).filter((a) => a.residenteId === "uuid-ana");
+  assert.equal(asig.find((a) => a.fecha === "2026-08-01").codigo, "V");
+  assert.equal(asig.find((a) => a.fecha === "2026-08-02").codigo, "G", "la guardia real puesta a mano no se pisa");
+  assert.equal(asig.find((a) => a.fecha === "2026-08-03").codigo, "V");
+});
+
+test("V-48: un mes PUBLICADO no se toca (mismo criterio que guardarAsignaciones, V-9b)", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  deps.store.appendRecord("cuadrantes", { mes: 8, anio: 2026, estado: "PUBLICADO", actorId: "uuid-ana", fecha: "2026-07-01" });
+
+  const r = call({ action: "crearBloqueo", session, desde: "2026-08-01", hasta: "2026-08-03", motivo: "VACACIONES" }, deps);
+  assert.equal(r.ok, true, "el bloqueo en sí se registra igual: solo la marca de la rejilla se omite");
+  assert.equal(r.marcasEscritas, 0);
+  assert.deepEqual(r.marcasSinEscribir, ["2026-08-01", "2026-08-02", "2026-08-03"]);
+  assert.deepEqual(asignacionesDe(deps, session, 2026, 8).filter((a) => a.residenteId === "uuid-ana"), []);
+});
+
+test("V-48: un bloqueo que cruza dos meses reparte las marcas en cada uno", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  const r = call({ action: "crearBloqueo", session, desde: "2026-08-30", hasta: "2026-09-02", motivo: "VACACIONES" }, deps);
+  assert.equal(r.marcasEscritas, 4);
+  assert.equal(asignacionesDe(deps, session, 2026, 8).find((a) => a.fecha === "2026-08-30").codigo, "V");
+  assert.equal(asignacionesDe(deps, session, 2026, 9).find((a) => a.fecha === "2026-09-02").codigo, "V");
 });

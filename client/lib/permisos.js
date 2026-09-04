@@ -1,3 +1,5 @@
+import { todayISO } from "./dates.js";
+
 // El permiso del ciclo (decisión V-16) visto desde el cliente, en un solo sitio.
 //
 // La regla la manda el servidor (`requireCicloPermiso` en router.js) y esto NO la sustituye:
@@ -16,9 +18,10 @@
  *   - isResponsable: si la sesión es la del titular del mandato vigente (contexto de la app)
  *   - grupo: "MAYOR" | "PEQUENO" | null, derivado de fechas como todo lo demás
  *   - sinResponsable: lo que devuelve `estadoCuadrante`; true si no hay mandato vigente
+ *   - accesoDesarrollador: el resultado de `esAccesoDesarrollador` para esta sesión (V-47)
  */
-export function puedeMoverCiclo({ isResponsable, grupo, sinResponsable }) {
-  return Boolean(isResponsable) || (Boolean(sinResponsable) && grupo === "MAYOR");
+export function puedeMoverCiclo({ isResponsable, grupo, sinResponsable, accesoDesarrollador }) {
+  return Boolean(accesoDesarrollador) || Boolean(isResponsable) || (Boolean(sinResponsable) && grupo === "MAYOR");
 }
 
 /**
@@ -38,20 +41,24 @@ export function puedeMoverCiclo({ isResponsable, grupo, sinResponsable }) {
  * Y como siempre: esto decide qué se ENSEÑA. El permiso de verdad lo vuelve a comprobar
  * `requireCicloPermiso` en el servidor, que es donde no se puede falsear.
  *
- * @param {object} p  los tres de `puedeMoverCiclo` más `estado` ("BORRADOR"|"VALIDADO"|"PUBLICADO")
+ * @param {object} p  los cuatro de `puedeMoverCiclo` más `estado` ("BORRADOR"|"VALIDADO"|"PUBLICADO")
  */
-export function puedeGenerarCuadrante({ isResponsable, grupo, sinResponsable, estado }) {
-  return puedeMoverCiclo({ isResponsable, grupo, sinResponsable }) && estado === "BORRADOR";
+export function puedeGenerarCuadrante({ isResponsable, grupo, sinResponsable, accesoDesarrollador, estado }) {
+  return puedeMoverCiclo({ isResponsable, grupo, sinResponsable, accesoDesarrollador }) && estado === "BORRADOR";
 }
 
-// Acceso de desarrollador SOLO para el botón de generar con IA (decisión V-46, 2026-09-02, a
-// pedido explícito del autor de la app): no toca `puedeMoverCiclo` ni `puedeGenerarCuadrante`, así
-// que ninguna otra acción del ciclo (validar/publicar/despublicar/excepciones/sorteo) se ve
-// afectada. El autor es R1/R2 hoy y no puede pasar a ser Mayor sin falsear su nivel real —se
-// deriva de fechas y alimenta INV-11 y compañía—, así que se identifica por EMAIL, no por rol ni
-// nivel. Esto SOLO decide qué se ENSEÑA: el servidor vuelve a comprobar el mismo email por su
-// cuenta en `handleGenerarIA`, que es donde de verdad no se puede falsear.
-const EMAIL_ACCESO_DESARROLLADOR_IA = "agustinlagioiosa@gmail.com";
-export function esAccesoDesarrolladorIA(email) {
-  return email === EMAIL_ACCESO_DESARROLLADOR_IA;
+// Acceso de desarrollador para TODO el permiso del ciclo (decisión V-47, 2026-09-03, a pedido
+// explícito del autor de la app — amplía V-46, que cubría solo el botón de generar con IA): ahora
+// se pasa como `accesoDesarrollador` a `puedeMoverCiclo`, así que también se enseñan validar,
+// publicar, despublicar, excepciones, sorteo e imaginaria, mientras el autor corrige errores de
+// esta primera puesta en producción. El autor es R1/R2 hoy y no puede pasar a ser Mayor sin
+// falsear su nivel real —se deriva de fechas y alimenta INV-11 y compañía—, así que se identifica
+// por EMAIL, no por rol ni nivel. `FECHA_LIMITE_ACCESO_DESARROLLADOR` lo caduca solo, sin que haga
+// falta acordarse de retirar este bloque. Esto SOLO decide qué se ENSEÑA: el servidor vuelve a
+// comprobar el mismo email y la misma fecha por su cuenta en `requireCicloPermiso`, que es donde
+// de verdad no se puede falsear.
+const EMAIL_ACCESO_DESARROLLADOR = "agustinlagioiosa@gmail.com";
+const FECHA_LIMITE_ACCESO_DESARROLLADOR = "2027-03-31";
+export function esAccesoDesarrollador(email, hoy = todayISO()) {
+  return email === EMAIL_ACCESO_DESARROLLADOR && hoy <= FECHA_LIMITE_ACCESO_DESARROLLADOR;
 }
