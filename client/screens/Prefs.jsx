@@ -8,6 +8,7 @@
 // (informativo, no bloquea).
 import { COLOR, S } from "./client/lib/design-tokens.js";
 import { datesOfMonth, weekday, compareISO, addDays, toISO, addMonths } from "./v2/domain/calendar.js";
+import { rangoValido } from "./client/lib/fechas.js";
 import { puedeMoverCiclo } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 
@@ -97,7 +98,9 @@ function NuevoBloqueo({ anio, mes, onCreated, showToast, api, paraOtros, residen
   const [residenteId, setResidenteId] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const valido = desde && hasta && compareISO(desde, hasta) <= 0;
+  // `rangoValido` y no `compareISO` a pelo: mientras se teclea el año, el input emite "0002-09-04" y
+  // `parseISO` lanzaría EN EL RENDER, desmontando la app entera (ver client/lib/fechas.js).
+  const valido = rangoValido(desde, hasta);
   const ajena = paraOtros && residenteId && residenteId !== miId;
 
   const crear = async () => {

@@ -209,3 +209,21 @@ test("waitForGis se rinde pasado el tope y devuelve null (para decirlo en pantal
   assert.equal(gis, null);
   assert.ok(t >= 200, "sondeó varias veces antes de rendirse");
 });
+
+test("cada nonce va ligado a su callback: un login que empezó con N1 sigue mandando N1 aunque el refresco haya pasado a N2", async () => {
+  _resetNoncePrefetch();
+  let pedidos = 0;
+  const recibidos = [];
+  const gis = fakeGis();
+  const api = fakeApi({
+    getNonce: async () => ({ ok: true, nonce: `n-${++pedidos}` }),
+    login: async (credential, nonce) => { recibidos.push(nonce); return { ok: true, session: "s", residente: { id: "r1", nombre: "Ana", rol: "residente" } }; },
+  });
+  const asa = await setupGoogleSignIn({ api, clientId: "cid", gis, buttonEl: {}, storage: fakeStorage(), onSuccess() {}, onNeedsAlta() {}, onError() {} });
+  const primera = gis._calls.initialize; // la configuración que GIS tenía cuando la persona pulsó
+  assert.equal(primera.nonce, "n-1");
+  await asa.refrescar(); // el temporizador pasa a n-2 con el selector de cuentas aún abierto
+  assert.equal(gis._calls.initialize.nonce, "n-2");
+  await primera.callback({ credential: "token-acuñado-con-n-1" });
+  assert.deepEqual(recibidos, ["n-1"], "el token lleva n-1 dentro: se manda n-1, no el nonce nuevo");
+});

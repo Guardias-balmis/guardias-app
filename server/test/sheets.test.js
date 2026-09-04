@@ -198,3 +198,26 @@ test("appendRecord sigue funcionando (es appendRecords de un elemento) y respeta
   assert.equal(st.appendRecord("bloqueos", { id, residenteId: "r1", desde: "2027-01-01", hasta: "2027-01-05", motivo: "BAJA", activo: false }), id);
   assert.equal(st.readLatest("bloqueos", (r) => r.id).length, 1, "la reinserción con el mismo id es una cancelación, no una fila nueva");
 });
+
+// ── texto libre protegido y filas en blanco (2026-09-04, revisión adversarial) ──
+test("el texto libre viaja con apóstrofe (Sheets no lo interpreta como fórmula ni lo autoconvierte) y vuelve intacto", () => {
+  const rec = { id: "p1", residenteId: "r1", anio: 2027, mes: 7, maxGuardias: 5, notas: "=2+2 y del 15/7 estoy fuera" };
+  const row = recordToRow(TABLES.preferencias, rec);
+  const iNotas = headerOf(TABLES.preferencias).indexOf("notas");
+  assert.equal(row[iNotas], "'=2+2 y del 15/7 estoy fuera", "prefijado: así la celda es texto plano");
+  assert.equal(row[headerOf(TABLES.preferencias).indexOf("id")], "'p1");
+  assert.equal(row[headerOf(TABLES.preferencias).indexOf("maxGuardias")], "5", "los números no se tocan");
+  const back = rowsToRecords(TABLES.preferencias, [headerOf(TABLES.preferencias), row])[0];
+  assert.deepEqual(back, rec);
+});
+
+test("una celda vacía o una fila vacía no producen registro: el campo se omite y la fila se descarta", () => {
+  const header = headerOf(TABLES.residentes);
+  const filaBlanca = header.map(() => "");
+  const filaConNulos = header.map(() => null);
+  const buena = recordToRow(TABLES.residentes, { id: "r1", nombre: "Ana", email: "a@b", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" });
+  const back = rowsToRecords(TABLES.residentes, [header, filaBlanca, buena, filaConNulos]);
+  assert.equal(back.length, 1, "las filas con el contenido borrado a mano (Supr) no son registros");
+  assert.equal(back[0].id, "r1");
+  assert.equal(rowsToRecords(TABLES.residentes, [header, ["", "", "", "", ""]]).length, 0);
+});

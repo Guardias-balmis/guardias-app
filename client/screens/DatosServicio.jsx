@@ -16,8 +16,9 @@ import { puedeMoverCiclo } from "./client/lib/permisos.js";
 import { periodsOfResident, levelOn } from "./v2/domain/residents.js";
 import { bridgesOfMonth } from "./v2/domain/calendar.js";
 import { todayISO } from "./client/lib/dates.js";
+import { fechaValida } from "./client/lib/fechas.js";
 
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
 
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -38,12 +39,18 @@ function Festivos({ api, anio, showToast, puedoEscribir }) {
   const [texto, setTexto] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Una respuesta que llega tarde de OTRO año no pisa la del año en pantalla (dos pulsaciones de ›
+  // seguidas con latencia dispar de Apps Script): mismo guardarraíl que `mesEnPantallaRef` en Prefs.
+  const anioEnPantallaRef = useRef(anio);
+  anioEnPantallaRef.current = anio;
   const cargar = async () => {
-    const r = await api.listFestivosRango(`${anio}-01-01`, `${anio}-12-31`);
+    const pedido = anio;
+    const r = await api.listFestivosRango(`${pedido}-01-01`, `${pedido}-12-31`);
+    if (pedido !== anioEnPantallaRef.current) return;
     if (r.ok) { setFestivos(r.festivos.slice().sort((a, b) => (a.fecha < b.fecha ? -1 : 1))); setError(null); }
     else { setFestivos(null); setError(r.error); }
   };
-  useEffect(() => { cargar(); }, [anio]);
+  useEffect(() => { setFestivos(null); cargar(); }, [anio]);
 
   // Vista previa EN VIVO de lo que se va a escribir, y de lo que no. Se enseña antes de tocar la
   // tabla: `crearFestivos` rechaza el lote entero si algo falla, y sin esto no se sabría cuál.
@@ -169,7 +176,13 @@ function Eventos({ api, residentes, showToast, puedoEscribir }) {
   const nombre = (id) => (residentes.find((r) => r.id === id) || {}).nombre || id;
   // Solo los R2 pueden cubrir el evento (normativa p.3): ofrecer a los demás como voluntarios
   // sería ofrecer algo que el sorteo va a descartar.
-  const r2 = residentes.filter((r) => nivelEn(r, fecha) === "R2");
+  // Con la fecha a medio teclear ("0002-…") o borrada, `levelOn` lanzaría EN EL RENDER y la app
+  // entera se desmontaba —con el texto pegado en el cuadro de festivos incluido (client/lib/fechas.js).
+  const fechaOk = fechaValida(fecha);
+  const r2 = useMemo(() => {
+    if (!fechaOk) return [];
+    try { return residentes.filter((r) => nivelEn(r, fecha) === "R2"); } catch { return []; }
+  }, [residentes, fecha, fechaOk]);
   useEffect(() => { setVoluntarios((v) => v.filter((id) => r2.some((r) => r.id === id))); }, [fecha]);
 
   const accion = async (fn, ok) => {
@@ -271,9 +284,10 @@ function Eventos({ api, residentes, showToast, puedoEscribir }) {
           </div>
 
           <div style={{ marginTop: 10 }}>
-            <Btn onClick={() => accion(() => api.crearEvento(tipo, fecha, voluntarios), () => "Evento registrado ✓")} disabled={busy}>
+            <Btn onClick={() => accion(() => api.crearEvento(tipo, fecha, voluntarios), () => "Evento registrado ✓")} disabled={busy || !fechaOk}>
               Registrar evento
             </Btn>
+            {!fechaOk && <div style={{ fontSize: 11, color: COLOR.grayDark, marginTop: 6 }}>Escribe una fecha completa para el evento.</div>}
           </div>
         </div>
       )}

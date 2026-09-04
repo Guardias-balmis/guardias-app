@@ -222,3 +222,23 @@ test("una preferencia de 0 guardias (permitida con ausencia registrada) NO desap
   assert.match(p, /id="r2a" — pide NO hacer ninguna guardia/);
   assert.match(p, /id="r3a" — querría no pasar de 5/);
 });
+
+// ── bordes del mes y celdas marcadas (2026-09-04, revisión adversarial) ──
+
+test("las guardias de los bordes del mes van al prompt (la norma 13 no se puede cumplir sin saber quién tuvo el 31), y sin ellas se dice", () => {
+  const p = buildGenerationPrompt({
+    ...DATOS,
+    bordes: [{ fecha: "2026-09-01", residenteId: "r2a", codigo: "G" }, { fecha: "2026-07-31", residenteId: "r4a", codigo: "GP" }],
+  });
+  assert.match(p, /GUARDIAS EN LOS BORDES DEL MES \(NO son de este mes/);
+  assert.ok(p.indexOf('2026-07-31 — id="r4a" — GP') < p.indexOf('2026-09-01 — id="r2a" — G'), "ordenadas por fecha");
+  assert.match(p, /13\. DESCANSO OBLIGATORIO[\s\S]*GUARDIAS EN LOS BORDES DEL MES/);
+  assert.match(buildGenerationPrompt(DATOS), /GUARDIAS EN LOS BORDES DEL MES: ninguna/);
+});
+
+test("las celdas V/R/B ya marcadas en la rejilla se listan para que el modelo no proponga guardia encima; sin ninguna, la sección no aparece", () => {
+  const p = buildGenerationPrompt({ ...DATOS, marcadores: [{ fecha: "2026-08-12", residenteId: "r3a", codigo: "V" }] });
+  assert.match(p, /CELDAS YA MARCADAS EN LA REJILLA/);
+  assert.match(p, /2026-08-12 — id="r3a" — V/);
+  assert.doesNotMatch(buildGenerationPrompt(DATOS), /CELDAS YA MARCADAS/);
+});

@@ -486,3 +486,120 @@ test("el validador juzga la PROPUESTA, no lo que hay guardado en el Sheet", () =
   const fechas = [...new Set((visto.asignaciones || []).map((a) => a.fecha))];
   assert.ok(fechas.includes("2027-07-01") && fechas.includes("2027-07-02"), "el ctx debe llevar la propuesta");
 });
+
+// ── segunda tanda de la revisión adversarial (2026-09-04): lo que el validador no veía ──
+
+const fila = (fecha, residenteId, codigo, id = `a-${fecha}-${residenteId}`) => recordToRow(TABLES.asignaciones, { id, fecha, residenteId, codigo });
+
+test("la misma persona y día dos veces (G y 3P) es FORMATO: el validador juzgaba una lista y el Sheet guardaba otra (última fila gana)", () => {
+  const llm = fakeLlm([ok(JSON.stringify({ asignaciones: [...PROPUESTA, { fecha: "2027-07-01", residenteId: "resp-1", codigo: "3P" }] }))]);
+  const deps = makeDeps({ llm });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  for (const modo of ["completar", "reemplazar"]) {
+    const r = generar(deps, session, { modo });
+    assert.equal(r.ok, false, modo);
+    assert.equal(r.resultado, "REVISION_MANUAL");
+    assert.ok(r.violaciones.some((v) => v.invariante === "FORMATO" && /aparece 2 veces \(G, 3P\)/.test(v.detalle)), JSON.stringify(r.violaciones));
+  }
+  assert.equal(asignacionesDe(deps).length, 0, "no se escribe nada");
+});
+
+test("una propuesta sobre una celda V/R/B de la rejilla es FORMATO (la tarjeta promete conservarlas), y el prompt las lista para que no las proponga", () => {
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm, extraSheets: { asignaciones: [headerOf(TABLES.asignaciones), fila("2027-07-02", "otro-1", "V")] } });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = generar(deps, session, { modo: "reemplazar" });
+  assert.equal(r.ok, false);
+  assert.ok(r.violaciones.some((v) => v.invariante === "FORMATO" && /marcada V/.test(v.detalle)), JSON.stringify(r.violaciones));
+  assert.match(llm.prompts[0], /CELDAS YA MARCADAS EN LA REJILLA/);
+  assert.match(llm.prompts[0], /2027-07-02 — id="otro-1" — V/);
+  assert.deepEqual(asignacionesDe(deps).map((a) => a.codigo), ["V"], "la V sigue ahí y nada más se escribió");
+});
+
+test("un residente FINALIZADO que el prompt no lista es «desconocido» para el plan: FORMATO, no una guardia escrita con un aviso", () => {
+  const FIN = { id: "fin-1", nombre: "Fin Acabado", email: "fin@gmail.com", fechaInicio: "2020-05-25", fechaFin: "2024-05-26" };
+  const llm = fakeLlm([ok(JSON.stringify({ asignaciones: [...PROPUESTA, { fecha: "2027-07-03", residenteId: "fin-1", codigo: "G" }] }))]);
+  const deps = makeDeps({ llm, extraSheets: { residentes: [headerOf(TABLES.residentes), ...[RESP, OTRO, FIN].map((r) => recordToRow(TABLES.residentes, r))] } });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = generar(deps, session, { modo: "reemplazar" });
+  assert.equal(r.ok, false);
+  assert.ok(r.violaciones.some((v) => v.invariante === "FORMATO" && v.residenteId === "fin-1"), JSON.stringify(r.violaciones));
+  assert.doesNotMatch(llm.prompts[0], /id="fin-1"/, "el prompt nunca lo listó");
+  assert.equal(asignacionesDe(deps).length, 0);
+});
+
+test("el prompt lleva las guardias de los BORDES del mes (norma 13), que no son fijadas ni se escriben", () => {
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm, extraSheets: { asignaciones: [headerOf(TABLES.asignaciones), fila("2027-06-30", "resp-1", "G"), fila("2027-08-01", "otro-1", "GF"), fila("2027-06-29", "otro-1", "G")] } });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = generar(deps, session);
+  assert.equal(r.ok, true);
+  const p = llm.prompts[0];
+  assert.match(p, /GUARDIAS EN LOS BORDES DEL MES \(NO son de este mes/);
+  assert.match(p, /2027-06-30 — id="resp-1" — G/);
+  assert.match(p, /2027-08-01 — id="otro-1" — GF/);
+  assert.doesNotMatch(p, /2027-06-29/, "solo el día pegado, no todo el histórico");
+  assert.match(p, /GUARDIAS YA FIJADAS EN LA REJILLA: ninguna/, "las de fuera del mes no son fijadas");
+});
+
+test("completar con fijadas que YA incumplen una regla dura: FIJADAS_INVALIDAS sin gastar ningún intento ni llamar al modelo", () => {
+  const INV15 = [{ invariante: "INV-15", severidad: "error", detalle: "Guardias en días consecutivos: 2027-07-10 y 2027-07-11", residenteId: "resp-1" }];
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm, violaciones: () => INV15, extraSheets: { asignaciones: [headerOf(TABLES.asignaciones), fila("2027-07-10", "resp-1", "G"), fila("2027-07-11", "resp-1", "G")] } });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = generar(deps, session, { modo: "completar" });
+  assert.equal(r.ok, false);
+  assert.equal(r.resultado, "FIJADAS_INVALIDAS");
+  assert.equal(r.intentos, 0);
+  assert.equal(llm.prompts.length, 0, "ni una llamada al modelo");
+  assert.match(r.error, /ya están en la rejilla/);
+  assert.deepEqual(r.violaciones, INV15);
+  assert.equal(bitacora(deps).at(-1).resultado, "FIJADAS_INVALIDAS");
+  assert.equal(asignacionesDe(deps).length, 2, "nada nuevo escrito");
+  // En reemplazar no hay fijadas que respetar: se intenta con el modelo como siempre.
+  const r2 = generar(deps, session, { modo: "reemplazar" });
+  assert.equal(r2.resultado, "REVISION_MANUAL");
+  assert.equal(llm.prompts.length, 3);
+});
+
+test("una BAJA registrada mientras el modelo pensaba: la propuesta se vuelve a juzgar bajo el lock y, si ya no pasa, CONFLICTO sin escribir", () => {
+  let juicios = 0;
+  const INV5 = [{ invariante: "INV-5", severidad: "error", detalle: "Asignación G el 2027-07-02 sobre bloqueo BAJA", residenteId: "otro-1" }];
+  let deps;
+  let sessionOtro;
+  // El `llm` falso registra la baja de Olga DURANTE la generación (como haría ella desde Preferencias
+  // mientras el Responsable espera al modelo) y luego devuelve un mes que le pone guardia ese día.
+  const llm = fakeLlm([() => {
+    assert.equal(call({ action: "crearBloqueo", session: sessionOtro, motivo: "BAJA", desde: "2027-07-02", hasta: "2027-07-02" }, deps).ok, true);
+    return ok(RESPUESTA_OK);
+  }]);
+  // Primer juicio (en el ciclo del generador): limpio. Segundo (bajo el lock, con el snapshot fresco): INV-5.
+  deps = makeDeps({ llm, violaciones: () => (++juicios >= 2 ? INV5 : []) });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  sessionOtro = loggedInAs(deps, "otro@gmail.com");
+  const r = generar(deps, session);
+  assert.equal(r.ok, false);
+  assert.equal(r.resultado, "CONFLICTO");
+  assert.match(r.error, /registró una ausencia/);
+  assert.equal(juicios, 2, "se juzgó dos veces: al proponer y al escribir");
+  assert.equal(asignacionesDe(deps).length, 0, "no se escribió ni una guardia sobre la baja");
+  assert.equal(bitacora(deps).at(-1).resultado, "CONFLICTO");
+});
+
+test("la bitácora se acota a 50 violaciones (+1 de resumen) y su fallo nunca convierte un mes ya escrito en un error", () => {
+  const muchas = Array.from({ length: 500 }, (_, i) => ({ invariante: "INV-1", severidad: "error", detalle: `día ${i}` }));
+  const deps = makeDeps({ llm: fakeLlm([ok(RESPUESTA_OK)]), violaciones: () => muchas });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  assert.equal(generar(deps, session).resultado, "REVISION_MANUAL");
+  const fila = bitacora(deps).at(-1);
+  assert.equal(fila.violaciones.length, 51);
+  assert.match(fila.violaciones[50].detalle, /y 450 más \(recortado\)/);
+
+  const deps2 = makeDeps({ llm: fakeLlm([ok(RESPUESTA_OK)]) });
+  const session2 = loggedInAs(deps2, "resp@gmail.com");
+  const append = deps2.ss.append;
+  deps2.ss.append = (n, rows) => { if (n === "generaciones") throw new Error("celda de más de 50000 caracteres"); return append(n, rows); };
+  const r = generar(deps2, session2);
+  assert.equal(r.ok, true, "el mes se escribió: la bitácora es memoria, no veredicto");
+  assert.equal(asignacionesDe(deps2).length, 2);
+});

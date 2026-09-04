@@ -116,8 +116,13 @@ export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage 
   let nonce = null;
   const opcionesBoton = { theme: "outline", size: "large", width: 320, text: "continue_with" };
 
-  const callback = async (response) => {
-    const r = await api.login(response.credential, nonce);
+  // Cada nonce va ligado a SU callback, no a una variable compartida: el refresco periódico (cada 4
+  // min, o al volver a la pestaña) reasignaba el nonce mientras el selector de cuentas de Google
+  // seguía abierto con el anterior, y el ID token volvía acuñado con N1 pero el cliente mandaba N2 —
+  // «nonce reusado o desconocido», y un login que fallaba sin culpa de nadie. El servidor acepta
+  // cualquier nonce no consumido dentro de sus 5 minutos, así que N1 sigue valiendo.
+  const callbackPara = (nonceDeEsta) => async (response) => {
+    const r = await api.login(response.credential, nonceDeEsta);
     if (r.ok) {
       storeSession(r, storage);
       onSuccess(r);
@@ -139,7 +144,7 @@ export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage 
       return false;
     }
     nonce = nonceRes.nonce;
-    gis.initialize({ client_id: clientId, nonce, callback });
+    gis.initialize({ client_id: clientId, nonce, callback: callbackPara(nonce) });
     // El botón se vuelve a pintar en cada inicialización: la configuración (nonce incluido) se
     // fija al renderizarlo, así que un botón viejo seguiría mandando el nonce viejo.
     gis.renderButton(buttonEl, opcionesBoton);

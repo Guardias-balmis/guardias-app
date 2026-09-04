@@ -17,7 +17,8 @@
 import { COLOR } from "./client/lib/design-tokens.js";
 import { setupGoogleSignIn, submitAlta, waitForGis } from "./client/lib/auth.js";
 import { GOOGLE_CLIENT_ID } from "./client/config.js";
-import { addDays, addYears, compareISO } from "./v2/domain/calendar.js";
+import { addDays, addYears } from "./v2/domain/calendar.js";
+import { rangoValido } from "./client/lib/fechas.js";
 import { todayISO } from "./client/lib/dates.js";
 
 const { useState, useEffect, useRef } = React;
@@ -33,6 +34,11 @@ function LoginScreen() {
   const [error, setError] = useState(null);
   const [pending, setPending] = useState(null); // {pendingToken} tras login fallido por email no vinculado
   const [esperandoGoogle, setEsperandoGoogle] = useState(true);
+  // Sin botón de Google (no cargó el script, o no hubo nonce porque Apps Script arrancaba en frío o
+  // la red falló un instante): antes la pantalla se quedaba muerta con el error y sin salida. Ahora
+  // se ofrece reintentar, que vuelve a correr el efecto de abajo.
+  const [sinAcceso, setSinAcceso] = useState(false);
+  const [reintento, setReintento] = useState(0);
 
   useEffect(() => {
     if (pending) return undefined; // el formulario de alta está en pantalla: no hay botón que pintar
@@ -55,11 +61,13 @@ function LoginScreen() {
     (async () => {
       setEsperandoGoogle(true);
       setError(null);
+      setSinAcceso(false);
       const gis = await waitForGis({ getGis: () => window.google && window.google.accounts && window.google.accounts.id });
       if (cancelado) return;
       setEsperandoGoogle(false);
       if (!gis || !buttonRef.current) {
-        setError("No se pudo cargar el acceso con Google. Comprueba la conexión y recarga la página.");
+        setError("No se pudo cargar el acceso con Google. Comprueba la conexión y vuelve a intentarlo.");
+        setSinAcceso(true);
         return;
       }
       asa = await setupGoogleSignIn({
@@ -69,7 +77,12 @@ function LoginScreen() {
         onError: (e) => setError(e),
       });
       ultimaInit = Date.now();
-      if (cancelado || !asa) return;
+      if (cancelado) return;
+      if (!asa) {
+        setError((e) => "No se pudo preparar el acceso con Google" + (e ? `: ${e}` : "") + ".");
+        setSinAcceso(true);
+        return;
+      }
       temporizador = setInterval(refrescar, NONCE_REFRESCO_MS);
       document.addEventListener("visibilitychange", alVolver);
     })();
@@ -79,7 +92,7 @@ function LoginScreen() {
       if (temporizador) clearInterval(temporizador);
       document.removeEventListener("visibilitychange", alVolver);
     };
-  }, [pending]);
+  }, [pending, reintento]);
 
   if (pending) return <AltaForm pendingToken={pending.pendingToken} onCancel={() => setPending(null)} onSuccess={app.onLoggedIn} />;
 
@@ -97,6 +110,11 @@ function LoginScreen() {
             <div style={{ textAlign: "center", fontSize: 12, color: COLOR.grayDark, marginTop: 8 }}>Cargando el acceso con Google…</div>
           )}
           {error && <div style={{ marginTop: 12 }}><Aviso color={COLOR.red} bg={COLOR.redLight}>{error}</Aviso></div>}
+          {sinAcceso && (
+            <div style={{ marginTop: 10, display: "flex", justifyContent: "center" }}>
+              <Btn onClick={() => setReintento((n) => n + 1)} color={COLOR.blue} textColor="#fff">Reintentar</Btn>
+            </div>
+          )}
         </Card>
         <div style={{ textAlign: "center", marginTop: 20, fontSize: 12, color: COLOR.grayDark, lineHeight: 1.6 }}>
           Acceso exclusivo para residentes de Radiodiagnóstico<br />del Hospital Dr. Balmis
@@ -115,7 +133,9 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
-  const fechasValidas = fechaInicio && fechaFin && compareISO(fechaInicio, fechaFin) <= 0;
+  // `rangoValido` y no `compareISO` a pelo: mientras se teclea el año, el input emite "0002-09-04"
+  // y `parseISO` lanzaría EN EL RENDER, desmontando la app entera (ver client/lib/fechas.js).
+  const fechasValidas = rangoValido(fechaInicio, fechaFin);
 
   const onFechaInicioChange = (v) => {
     setFechaInicio(v);

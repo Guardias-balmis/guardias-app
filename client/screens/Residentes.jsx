@@ -21,7 +21,6 @@ import { COLOR, S, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js";
 import { puedeMoverCiclo } from "./client/lib/permisos.js";
 import { periodsOfResident, levelOn, validateTrainingPeriods } from "./v2/domain/residents.js";
 import { todayISO } from "./client/lib/dates.js";
-import { partirResidentesLegibles } from "./client/lib/residentes.js";
 
 const { useState, useEffect, useMemo } = React;
 const { Card, SectionTitle, Btn, Aviso, Info } = window.UI;
@@ -59,12 +58,13 @@ function Ficha({ api, residente, puedoEscribir, showToast, onCambio }) {
   // `activo`, y añadírsela es lo que V-19(d) descartó porque `rowsToRecords` mapea por posición—,
   // así que escribe los derivados. Con la comprobación por existencia, restaurar dejaba la etiqueta
   // diciendo «periodos editados» sobre unos periodos que son exactamente los automáticos.
-  const derivados = useMemo(
-    () => periodsOfResident({ fechaInicio: residente.fechaInicio, fechaFin: residente.fechaFin }),
-    [residente.fechaInicio, residente.fechaFin]
-  );
+  // `null` si no se pueden derivar (fechas invertidas o ilegibles): esta pantalla es la única desde
+  // la que se corrigen, así que es la última que puede permitirse lanzar en el render.
+  const derivados = useMemo(() => {
+    try { return periodsOfResident({ fechaInicio: residente.fechaInicio, fechaFin: residente.fechaFin }); } catch { return null; }
+  }, [residente.fechaInicio, residente.fechaFin]);
   const editados = residente.periodos !== undefined
-    && JSON.stringify(residente.periodos) !== JSON.stringify(derivados);
+    && (derivados === null || JSON.stringify(residente.periodos) !== JSON.stringify(derivados));
 
   // Validación EN VIVO con la misma función que el servidor (`validateTrainingPeriods`): así el
   // botón no se pulsa para recibir un error que ya se podía ver. No sustituye al del servidor —
@@ -75,7 +75,9 @@ function Ficha({ api, residente, puedoEscribir, showToast, onCambio }) {
   );
   const errores = useMemo(() => {
     if (enDominio.some((p) => !p.start || !p.end)) return ["Faltan fechas por rellenar"];
-    return validateTrainingPeriods(enDominio);
+    // Mientras se teclea el año el input emite "0002-…" y `parseISO` lanza: eso no es un error del
+    // periodo, es un estado del teclado, y lanzar aquí desmontaba la app (ver client/lib/fechas.js).
+    try { return validateTrainingPeriods(enDominio); } catch { return ["Alguna fecha está incompleta o no es válida"]; }
   }, [enDominio]);
 
   const cambiaPeriodo = (i, campoNombre, valor) =>
@@ -243,24 +245,19 @@ function FichaIlegible({ api, residente, motivo, puedoEscribir, showToast, onCam
 
 function ResidentesScreen() {
   const app = window.useApp();
-  const { api, showToast, setTab, loadResidentes } = app;
-  const [residentes, setResidentes] = useState(null);
-  const [error, setError] = useState(null);
+  const { api, showToast, setTab, loadResidentes, residentes: legibles, residentesIlegibles: ilegibles, residentesError: error } = app;
 
-  // Lista propia y no la del contexto de App: esta pantalla la reescribe, y necesita releerla
-  // después de cada guardado para que la ficha muestre lo que hay en la tabla de verdad.
-  //
-  // Pero refresca TAMBIÉN la del contexto (`loadResidentes`), y eso no es opcional: de ahí sacan
-  // los residentes la rejilla del cuadrante, el generador y el inicio, y las tres derivan el nivel
-  // con `periodsOfResident`. Sin este refresco, editar unos periodos aquí y pasar al Cuadrante sin
-  // recargar la página enseñaba el nivel VIEJO — comprobado en vivo: Iván salía R2 donde ya era R1.
-  const cargar = async () => {
-    const r = await api.listResidentes();
-    if (r.ok) { setResidentes(r.residentes); setError(null); }
-    else { setResidentes(null); setError(r.error); }
-    await loadResidentes();
-  };
+  // La lista es la del contexto de App, ya partida en legibles/ilegibles (`recibeResidentes`), y
+  // no una copia propia: antes esta pantalla pedía `listResidentes` para sí Y volvía a pedirlo para
+  // el contexto — dos idas y vueltas enteras a Apps Script en serie al abrir y tras cada guardado.
+  // Refrescar el contexto no es opcional: de ahí sacan los residentes la rejilla del cuadrante, el
+  // generador y el inicio, y las tres derivan el nivel con `periodsOfResident`. Sin ese refresco,
+  // editar unos periodos aquí y pasar al Cuadrante enseñaba el nivel VIEJO (Iván salía R2 donde ya
+  // era R1). Se relee una vez al abrir —es la pantalla que edita, y lo que edita otro tiene que
+  // verse— y después de cada guardado.
+  const cargar = loadResidentes;
   useEffect(() => { cargar(); }, []);
+  const cargando = legibles.length === 0 && ilegibles.length === 0 && !error;
 
   // Mismo criterio y misma fuente que Calendar.jsx, Prefs.jsx y DatosServicio.jsx: `sinResponsable`
   // lo dice el servidor, nunca el `rol` del token — que se firmó en el login y puede ser anterior
@@ -271,7 +268,9 @@ function ResidentesScreen() {
     (async () => {
       const hoy = new Date();
       const r = await api.estadoCuadrante(hoy.getUTCFullYear(), hoy.getUTCMonth() + 1);
-      if (!cancelled) setSinResponsable(r.ok ? r.sinResponsable === true : false);
+      if (cancelled) return;
+      setSinResponsable(r.ok ? r.sinResponsable === true : false);
+      if (r.ok && app.actualizaResponsable) app.actualizaResponsable(r.responsableId);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -283,7 +282,6 @@ function ResidentesScreen() {
   // Los de fechas ilegibles se apartan ANTES de ordenar y se pintan con `FichaIlegible`: derivar
   // el nivel de uno de ellos lanza, y una excepción en render dejaba esta pantalla en blanco —
   // justo la única desde la que se pueden corregir esas fechas.
-  const { legibles, ilegibles } = useMemo(() => partirResidentesLegibles(residentes || [], todayISO()), [residentes]);
   const ordenados = useMemo(() => {
     const rango = { R4: 0, R3: 1, R2: 2, R1: 3, PENDIENTE: 4, FINALIZADO: 5 };
     return legibles.slice().sort((a, b) => {
@@ -311,7 +309,7 @@ function ResidentesScreen() {
       </Info>
 
       {error && <Aviso color={COLOR.red} bg={COLOR.redLight}>No se pudo cargar el equipo: {error}</Aviso>}
-      {!residentes && !error && <Card><div style={{ fontSize: 13, color: COLOR.grayDark }}>Cargando…</div></Card>}
+      {cargando && <Card><div style={{ fontSize: 13, color: COLOR.grayDark }}>Cargando…</div></Card>}
 
       {ilegibles.map(({ residente: r, motivo }) => (
         <FichaIlegible key={r.id} api={api} residente={r} motivo={motivo} puedoEscribir={puedoEscribir} showToast={showToast} onCambio={cargar} />

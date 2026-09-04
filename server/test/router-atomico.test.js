@@ -10,13 +10,14 @@ import { makeStore } from "../src/sheets-store.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "../../v2/domain/validate.js";
 import { validateThirdPost, thirdPostHistoryStart } from "../../v2/domain/thirdpost.js";
 import { groupOnDate, levelOn, periodsOfResident } from "../../v2/domain/residents.js";
-import { parseISO, addDays, bridgesOfMonth, academicYearOf } from "../../v2/domain/calendar.js";
+import { parseISO, addDays, bridgesOfMonth, academicYearOf, toISO, daysInMonth, datesOfMonth } from "../../v2/domain/calendar.js";
 import { accumulatedTally } from "../../v2/domain/accumulate.js";
 import { monthReplacementPlan, monthCompletionPlan } from "../../v2/domain/apply.js";
 import { canEdit, canValidate, canPublish, stateAfterEdit } from "../../v2/domain/cuadrante.js";
 import { quarterCloseWindow, validateQuarterClose, yearCloseHistoryStart, yearCloseFestivosRange, buildYearCloseContext, validateResidencyYearClose } from "../../v2/domain/equity.js";
 import { eligibleCandidates, resolveMethod, drawResponsible, validateResponsible } from "../../v2/domain/responsible.js";
 import { previewBloqueoRisk } from "../../v2/domain/blockPreview.js";
+import { buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows, cursoLabel } from "../../v2/domain/projection.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -38,7 +39,7 @@ function fakeSS(rows = {}) {
 const RESP = { id: "resp-1", nombre: "Rita Mayor", email: "resp@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
 const OTRO = { id: "otro-1", nombre: "Olga Pequeña", email: "otro@gmail.com", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" };
 
-function makeDeps({ llm, violaciones = () => [] } = {}) {
+function makeDeps({ llm, violaciones = () => [], lockNoReentrante = false } = {}) {
   const ss = fakeSS({
     residentes: [headerOf(TABLES.residentes), ...[RESP, OTRO].map((r) => recordToRow(TABLES.residentes, r))],
     responsables: [headerOf(TABLES.responsables)],
@@ -49,21 +50,31 @@ function makeDeps({ llm, violaciones = () => [] } = {}) {
     preferencias: [headerOf(TABLES.preferencias)], imaginaria: [headerOf(TABLES.imaginaria)], sorteos: [headerOf(TABLES.sorteos)],
   });
   const nonces = new Set();
-  const locks = { veces: 0, profundidad: 0, maxima: 0 };
-  // `withLock` instrumentado y reentrante, como el de Code.gs: cuenta cuántas veces se coge y
-  // hasta qué profundidad, para poder afirmar que la comprobación y la escritura van juntas.
-  const withLock = (fn) => { locks.veces++; locks.profundidad++; locks.maxima = Math.max(locks.maxima, locks.profundidad); try { return fn(); } finally { locks.profundidad--; } };
+  // `withLock` instrumentado: cuenta cuántas veces se coge y hasta qué profundidad, para poder
+  // afirmar que la comprobación y la escritura van juntas. Con `lockNoReentrante` imita al
+  // `LockService` real (una llamada anidada lanza, como el `waitLock` que se espera a sí mismo). Y
+  // `locks.gancho`, si se pone, se ejecuta UNA vez justo antes de que el siguiente que pida el lock
+  // lo obtenga: es «otra ejecución se coló entera mientras yo esperaba», el intercalado que Apps
+  // Script produce con dos peticiones a la vez.
+  const locks = { veces: 0, profundidad: 0, maxima: 0, gancho: null };
+  const withLock = (fn) => {
+    if (lockNoReentrante && locks.profundidad > 0) throw new Error("Lock timeout: another process was holding the lock for too long");
+    if (locks.gancho) { const g = locks.gancho; locks.gancho = null; g(); }
+    locks.veces++; locks.profundidad++; locks.maxima = Math.max(locks.maxima, locks.profundidad);
+    try { return fn(); } finally { locks.profundidad--; }
+  };
   return {
     now: 1_000_000, today: "2027-06-16", clientId: CLIENT_ID, sessionSecret: "s", sessionTtl: 3600, crypto, ss, locks,
     store: makeStore({ ss, withLock, newId: () => `id-${nodeCrypto.randomUUID()}` }),
     llm,
     domain: {
       absences, validateMonth: (ctx) => violaciones(ctx), validateThirdPost: () => [],
-      buildMonthContext, rotationHistoryStart, thirdPostHistoryStart, parseISO, addDays, bridgesOfMonth, academicYearOf,
+      buildMonthContext, rotationHistoryStart, thirdPostHistoryStart, parseISO, addDays, bridgesOfMonth, academicYearOf, toISO, daysInMonth, datesOfMonth,
       accumulatedTally, monthReplacementPlan, monthCompletionPlan, levelOn, periodsOfResident, groupOnDate,
       canEdit, canValidate, canPublish, stateAfterEdit,
       quarterCloseWindow, validateQuarterClose, yearCloseHistoryStart, yearCloseFestivosRange, buildYearCloseContext, validateResidencyYearClose,
       eligibleCandidates, resolveMethod, drawResponsible, validateResponsible, previewBloqueoRisk,
+      buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows, cursoLabel,
     },
     newSeed: () => "semilla",
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
@@ -243,4 +254,76 @@ test("estadoCuadrante anuncia los modos de generación que entiende el servidor 
   const r = call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps);
   assert.equal(r.ok, true);
   assert.deepEqual(r.modosGeneracion, ["completar", "reemplazar"]);
+});
+
+// ── comprobar-y-escribir también en los OTROS escritores (2026-09-04, segunda tanda) ──
+
+test("con un lock que NO admite anidarse (el LockService real), validar y publicar siguen funcionando: la reentrada la absorbe el store", () => {
+  const deps = makeDeps({ lockNoReentrante: true });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  assert.equal(call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps).ok, true);
+  assert.equal(call({ action: "publicarCuadrante", session, mes: 7, anio: 2027 }, deps).ok, true);
+  assert.equal(call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps).estado, "PUBLICADO");
+});
+
+test("guardarAsignaciones lee el estado DENTRO del lock: si otro valida el mes mientras espera, la celda nueva lo devuelve a BORRADOR en vez de colarse en un mes VALIDADO", () => {
+  const deps = makeDeps();
+  const otro = loggedInAs(deps, "otro@gmail.com");
+  const resp = loggedInAs(deps, "resp@gmail.com");
+  // T2 (validar) se cuela ENTERA mientras T1 (guardar) espera al lock.
+  deps.locks.gancho = () => { assert.equal(call({ action: "marcarValidado", session: resp, mes: 7, anio: 2027 }, deps).ok, true); };
+  const r = call({ action: "guardarAsignaciones", session: otro, cambios: [{ fecha: "2027-07-10", residenteId: "otro-1", codigo: "G" }] }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(deps.locks.gancho, null, "el intercalado ocurrió");
+  // Leído fuera del lock veía BORRADOR, no escribía transición, y el mes quedaba VALIDADO con una
+  // guardia que nadie validó. Leído dentro ve VALIDADO y `stateAfterEdit` lo devuelve a BORRADOR.
+  assert.equal(call({ action: "estadoCuadrante", session: otro, mes: 7, anio: 2027 }, deps).estado, "BORRADOR");
+});
+
+test("altaResidente comprueba el email DENTRO del lock: dos altas simultáneas del mismo email dejan UN solo residente", () => {
+  const deps = makeDeps();
+  const alta = () => {
+    const nonce = call({ action: "getNonce" }, deps).nonce;
+    deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "nuevo@gmail.com", email_verified: "true", sub: "g-9", exp: String(2_000_000), nonce });
+    return call({ action: "altaResidente", idToken: "jwt", nonce, nombre: "Nuevo", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }, deps);
+  };
+  let segunda = null;
+  deps.locks.gancho = () => { segunda = alta(); };
+  const primera = alta();
+  assert.equal(segunda.ok, true, "la que se coló primero entra");
+  assert.equal(primera.ok, false);
+  assert.match(primera.error, /ya está vinculado/);
+  const lista = call({ action: "listResidentes", session: segunda.session }, deps).residentes;
+  assert.equal(lista.filter((r) => r.email === "nuevo@gmail.com").length, 1);
+});
+
+test("altaResidente rechaza un nombre que empiece por «=» (en las pestañas publicadas sería una fórmula)", () => {
+  const deps = makeDeps();
+  const nonce = call({ action: "getNonce" }, deps).nonce;
+  deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "f@gmail.com", email_verified: "true", sub: "g-8", exp: String(2_000_000), nonce });
+  const r = call({ action: "altaResidente", idToken: "jwt", nonce, nombre: '=HYPERLINK("http://x")', fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /«=»/);
+});
+
+test("crearBloqueo (simulación P-13 + escritura) y crearEvento (unicidad + escritura) van cada uno en UN solo lock", () => {
+  const deps = makeDeps();
+  // Un segundo Pequeño, para que las vacaciones de Olga no dejen a su grupo sin nadie (P-13 las rechazaría).
+  const nonce = call({ action: "getNonce" }, deps).nonce;
+  deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "peque2@gmail.com", email_verified: "true", sub: "g-7", exp: String(2_000_000), nonce });
+  assert.equal(call({ action: "altaResidente", idToken: "jwt", nonce, nombre: "Pepe Pequeño", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }, deps).ok, true);
+  const session = loggedInAs(deps, "otro@gmail.com");
+  deps.locks.veces = 0; deps.locks.maxima = 0;
+  assert.equal(call({ action: "crearBloqueo", session, motivo: "VACACIONES", desde: "2027-08-02", hasta: "2027-08-04" }, deps).ok, true);
+  assert.equal(deps.locks.veces, 1, "la simulación y la fila van bajo el mismo lock");
+  assert.equal(deps.locks.maxima, 1);
+  const resp = loggedInAs(deps, "resp@gmail.com");
+  deps.locks.veces = 0;
+  assert.equal(call({ action: "crearEvento", session: resp, tipo: "NAVIDAD", fecha: "2027-12-18", voluntarios: [] }, deps).ok, true);
+  assert.equal(deps.locks.veces, 1);
+  // Y el intercalado: dos Navidades del mismo curso a la vez → entra una sola.
+  deps.locks.gancho = () => { assert.equal(call({ action: "crearEvento", session: resp, tipo: "DESPEDIDA", fecha: "2028-05-20", voluntarios: [] }, deps).ok, true); };
+  const r = call({ action: "crearEvento", session: resp, tipo: "DESPEDIDA", fecha: "2028-05-21", voluntarios: [] }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /ya hay un evento DESPEDIDA/);
 });

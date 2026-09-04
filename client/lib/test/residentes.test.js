@@ -30,3 +30,17 @@ test("lista vacía o ausente: nada que apartar", () => {
   assert.deepEqual(partirResidentesLegibles([], "2026-09-04"), { legibles: [], ilegibles: [] });
   assert.deepEqual(partirResidentesLegibles(undefined, "2026-09-04"), { legibles: [], ilegibles: [] });
 });
+
+test("una fechaFin ilegible con los periodos ya en la tabla también es ilegible: la pantalla de Residentes, la única que la corrige, no debe lanzar", () => {
+  const r = {
+    id: "dani", nombre: "Dani", fechaInicio: "2025-05-26", fechaFin: "25/05/2029",
+    periodos: [
+      { year: 1, start: "2025-05-26", end: "2026-05-25" }, { year: 2, start: "2026-05-26", end: "2027-05-25" },
+      { year: 3, start: "2027-05-26", end: "2028-05-25" }, { year: 4, start: "2028-05-26", end: "2029-05-25" },
+    ],
+  };
+  const { legibles, ilegibles } = partirResidentesLegibles([r], "2026-09-04");
+  assert.equal(legibles.length, 0);
+  assert.equal(ilegibles.length, 1);
+  assert.match(ilegibles[0].motivo, /25\/05\/2029/);
+});

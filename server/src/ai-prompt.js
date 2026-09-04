@@ -151,6 +151,46 @@ para el descanso del día siguiente de quien las tiene):
 ${lista}`;
 }
 
+/**
+ * Guardias en los BORDES del mes: el último día del anterior y el día 1 del siguiente. No son de
+ * este mes y no se piden en la respuesta, pero la norma 13 (descanso, INV-15 en `error`) las
+ * necesita: sin ellas el modelo no podía saber a quién no poner el día 1, y el primer intento
+ * caía por INV-15 casi siempre que alguien tenía la guardia del 31 — un intento de tres gastado
+ * en una regla que el prompt prometía conocer y no daba.
+ */
+function seccionBordes(bordes) {
+  if (!bordes || bordes.length === 0) return "GUARDIAS EN LOS BORDES DEL MES: ninguna (el último día del mes anterior y el día 1 del siguiente no tienen guardia registrada).";
+  const lista = bordes
+    .slice()
+    .sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0))
+    .map((a) => `  - ${a.fecha} — id="${a.residenteId}" — ${a.codigo}`)
+    .join("\n");
+  return `GUARDIAS EN LOS BORDES DEL MES (NO son de este mes: no las incluyas en tu respuesta; pero quien
+las tiene NO puede hacer guardia el día pegado — ni el día 1 quien tuvo el último día del mes
+anterior, ni el último día quien ya la tiene el día 1 del mes siguiente):
+${lista}`;
+}
+
+/**
+ * Celdas V/R/B ya marcadas en la rejilla del mes. No son ausencias (V-19: la ausencia es la fila
+ * de `bloqueos`, que va en su propia sección), pero la tarjeta promete conservarlas y una guardia
+ * propuesta con la misma clave las pisaría — el router la rechaza como FORMATO, y esto es para que
+ * el modelo no la proponga de entrada.
+ */
+function seccionMarcadores(marcadores) {
+  if (!marcadores || marcadores.length === 0) return "";
+  const lista = marcadores
+    .slice()
+    .sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0))
+    .map((a) => `  - ${a.fecha} — id="${a.residenteId}" — ${a.codigo}`)
+    .join("\n");
+  return `CELDAS YA MARCADAS EN LA REJILLA (V vacaciones, R rotación, B baja, apuntadas a mano; NO propongas
+guardia a esa persona ese día — la celda se conserva tal cual y no debe aparecer en tu respuesta):
+${lista}
+
+`;
+}
+
 /** Bloque de residentes por nivel derivado, con su contaje acumulado. Un nivel vacío no sale. */
 function seccionResidentes(porNivel, acumulados) {
   const bloques = NIVELES.map((nivel) => {
@@ -186,7 +226,9 @@ ${seccionResidentes(datos.porNivel, datos.acumulados)}
 
 ${seccionFijadas(datos.fijadas)}
 
-${seccionBloqueos(datos.bloqueos)}
+${seccionBordes(datos.bordes)}
+
+${seccionMarcadores(datos.marcadores)}${seccionBloqueos(datos.bloqueos)}
 
 ${seccionFestivos(datos.festivos, datos.puentes)}
 
@@ -227,8 +269,10 @@ NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
     G para el resto. Usa EXCLUSIVAMENTE las fechas festivas de la lista de arriba: no deduzcas
     festivos por tu cuenta ni por el calendario que creas recordar.
 13. DESCANSO OBLIGATORIO: ningún residente puede hacer guardia dos días consecutivos, ni
-    siquiera si una de las dos es un 3.º puesto. Cuenta también el borde con el mes anterior:
-    si alguien tuvo guardia el último día del mes pasado, no puede tenerla el día 1.
+    siquiera si una de las dos es un 3.º puesto. Cuenta también el borde con el mes anterior y
+    con el siguiente: la lista GUARDIAS EN LOS BORDES DEL MES dice quién tuvo la guardia del
+    último día del mes pasado (no puede tenerla el día 1) y quién ya la tiene el día 1 del mes
+    siguiente (no puede tenerla el último día).
 14. Las GUARDIAS YA FIJADAS de la lista de arriba son inamovibles: repítelas tal cual en tu
     respuesta y reparte el resto del mes contando con ellas (para el 4-6 de cada uno, para la
     equidad y para el descanso del día siguiente).

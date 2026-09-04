@@ -1,22 +1,24 @@
-// Residentes cuyas fechas se pueden leer, separados de los que no (2026-09-04).
+// Qué residentes puede pintar la app y cuáles no (decisiones V-22/V-24, 2026-09-04).
 //
-// Por qué existe: el Sheet es datastore y entregable a la vez y se edita a mano, así que una
-// `fechaInicio` tecleada como "31/05/2026" en la hoja `residentes` es algo que PUEDE pasar (el
-// alta y `editarResidente` ya no lo dejan entrar, pero la hoja sí). El nivel se deriva de esas
-// fechas en CADA pantalla y para TODOS los residentes al pintar —Inicio, el cuadrante, el
-// equipo— y `periodsOfResident`/`levelOn` lanzan con una fecha ilegible: una excepción en render
-// desmonta el árbol entero, o sea que una fila mal tecleada dejaba la app en blanco para las
-// quince personas, sin ningún mensaje. `App.jsx` aparta aquí a los ilegibles al cargar la lista y
-// avisa nombrándolos; `Residentes.jsx` los enseña con su error y el editor de fechas, que es la
-// salida dentro de la herramienta (nadie va a poder arreglar la hoja a mano dentro de diez años).
+// Cada pantalla deriva el nivel de TODOS los residentes al renderizar (`levelOn(periodsOfResident)`),
+// y `parseISO` lanza ante una fecha que no es ISO estricta. Con una sola fila mal tecleada en la hoja
+// («31/05/2026», o «25/05/2029» en `fechaFin`), la excepción subía al render y React desmontaba la
+// SPA entera para todo el equipo. Esto aparta a esos residentes ANTES de que ninguna pantalla los
+// toque: los legibles se pintan como siempre; los ilegibles se enseñan aparte, con el motivo, y la
+// pantalla de Residentes ofrece su editor de fechas para corregirlos desde la app.
 //
-// Módulo `.js` real (no `.jsx`) para poder probarse con node:test y compartirse entre pantallas.
+// Se comprueban las dos fechas de la ficha ADEMÁS de la derivación del nivel: `periodsOfResident`
+// devuelve las filas de `periodos` sin mirar `fechaInicio`/`fechaFin` cuando hay cuatro, así que un
+// residente con periodos editados y una `fechaFin` ilegible pasaba por legible en Inicio y en el
+// cuadrante — y justo la pantalla de Residentes, la única desde la que se puede corregir esa fecha,
+// era la que lanzaba al derivar los periodos automáticos para compararlos.
 
-import { periodsOfResident, levelOn } from "../../v2/domain/residents.js";
+import { parseISO } from "../../v2/domain/calendar.js";
+import { levelOn, periodsOfResident } from "../../v2/domain/residents.js";
 
 /**
- * @param {object[]} residentes  tal y como llegan de `listResidentes`/`login`
- * @param {string} hoy  fecha ISO con la que se comprueba que el nivel se puede derivar
+ * @param {object[]} residentes  tal cual llegan del servidor
+ * @param {string} hoy  ISO del día (para derivar el nivel)
  * @returns {{legibles: object[], ilegibles: {residente: object, motivo: string}[]}}
  */
 export function partirResidentesLegibles(residentes, hoy) {
@@ -24,10 +26,12 @@ export function partirResidentesLegibles(residentes, hoy) {
   const ilegibles = [];
   for (const r of residentes || []) {
     try {
+      if (r.fechaInicio !== undefined && r.fechaInicio !== "") parseISO(r.fechaInicio);
+      if (r.fechaFin !== undefined && r.fechaFin !== "") parseISO(r.fechaFin);
       levelOn(periodsOfResident(r), hoy);
       legibles.push(r);
     } catch (e) {
-      ilegibles.push({ residente: r, motivo: String((e && e.message) || e) });
+      ilegibles.push({ residente: r, motivo: (e && e.message) || String(e) });
     }
   }
   return { legibles, ilegibles };

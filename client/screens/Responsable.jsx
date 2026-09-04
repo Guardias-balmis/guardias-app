@@ -5,7 +5,7 @@
 // cualquiera pueda recomputar el resultado (auditable).
 import { COLOR, S } from "./client/lib/design-tokens.js";
 
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 const { Card, SectionTitle, Btn, Info, Aviso } = window.UI;
 
 function nombreDe(residentes, id) {
@@ -21,8 +21,15 @@ function ResponsableScreen() {
   const [historial, setHistorial] = useState([]);
   const [busy, setBusy] = useState(false);
 
+  // La respuesta de un año que llega TARDE no pinta bajo la cabecera de otro: con dos pulsaciones de
+  // › seguidas y latencia dispar de Apps Script, los elegibles y el botón de ofrecerse eran los de
+  // 2027 bajo el rótulo «Mandato 2028», y «Sortear» habría sorteado el 2028 viendo candidatos del 2027.
+  const anioEnPantallaRef = useRef(anio);
+  anioEnPantallaRef.current = anio;
   const cargar = async () => {
-    const [rEstado, rHist] = await Promise.all([api.estadoResponsable(anio), api.listResponsables()]);
+    const pedido = anio;
+    const [rEstado, rHist] = await Promise.all([api.estadoResponsable(pedido), api.listResponsables()]);
+    if (pedido !== anioEnPantallaRef.current) return;
     if (rEstado.ok) setEstado(rEstado);
     else showToast("Error cargando el estado del responsable: " + rEstado.error, "err");
     if (rHist.ok) setHistorial(rHist.mandatos);
@@ -34,7 +41,16 @@ function ResponsableScreen() {
     setBusy(true);
     const r = await fn();
     setBusy(false);
-    if (r.ok) { showToast(mensajeOk); cargar(); }
+    if (r.ok) {
+      showToast(mensajeOk);
+      cargar();
+      // Si el sorteo (o el voluntariado único) acaba de decidir el mandato VIGENTE, el permiso del
+      // ciclo en pantalla se actualiza ya: el `rol` del token es del login y el ganador seguía sin
+      // botones hasta volver a entrar, aunque el servidor ya le aceptara todo (V-16).
+      const hoy = new Date();
+      const rEstado = await api.estadoCuadrante(hoy.getUTCFullYear(), hoy.getUTCMonth() + 1);
+      if (rEstado.ok && app.actualizaResponsable) app.actualizaResponsable(rEstado.responsableId);
+    }
     else showToast("Error: " + r.error, "err");
   };
 

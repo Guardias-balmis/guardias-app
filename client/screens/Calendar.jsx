@@ -250,7 +250,7 @@ function CalendarScreen() {
       setFestivos(rFestivos.ok ? rFestivos.festivos : []);
       setFestivosError(!rFestivos.ok);
       setEstadoError(!rEstado.ok);
-      if (rEstado.ok) { setEstado(rEstado.estado); setSinResponsable(rEstado.sinResponsable === true); } // en error se conserva el último estado conocido; estadoError ya bloquea la edición
+      if (rEstado.ok) { setEstado(rEstado.estado); setSinResponsable(rEstado.sinResponsable === true); if (app.actualizaResponsable) app.actualizaResponsable(rEstado.responsableId); } // en error se conserva el último estado conocido; estadoError ya bloquea la edición
       else showToast("Error comprobando el estado del cuadrante: " + rEstado.error, "err");
       setPendientes({});
       undoStackRef.current = [];

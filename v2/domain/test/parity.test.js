@@ -10,7 +10,7 @@ import vm from "node:vm";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import nodeCrypto from "node:crypto";
-import { buildBundle, buildServerBundle, transformModule } from "../../../build/build-gas.mjs";
+import { buildBundle, buildServerBundle, transformModule, DOMAIN_MODULES, SERVER_MODULES } from "../../../build/build-gas.mjs";
 
 // Fuente ESM
 import { weekday, trimesterWindow, bridgesBetween } from "../calendar.js";
@@ -207,6 +207,23 @@ test("el bundle expone la API pública esperada", () => {
   }
 });
 
+// Lo que cazaría el primer `export const A = 1, B = 2` (o cualquier otro export que el bundler
+// perdiera) el día que ocurra: el conjunto de nombres del global tiene que ser EXACTAMENTE la unión
+// de los exports ESM de cada módulo. La comparación por valor de abajo no lo cubre: solo ejecuta
+// las funciones que conoce.
+test("PARIDAD: el bundle exporta exactamente los mismos nombres que los módulos ESM", async () => {
+  const Domain = loadBundle(buildBundle());
+  const esperados = new Set();
+  for (const m of DOMAIN_MODULES) for (const k of Object.keys(await import(`../${m}.js`))) esperados.add(k);
+  assert.deepEqual(Object.keys(Domain).sort(), [...esperados].sort());
+
+  const ctx = vm.createContext({});
+  vm.runInContext(buildServerBundle(), ctx);
+  const esperadosServer = new Set();
+  for (const m of SERVER_MODULES) for (const k of Object.keys(await import(`../../../server/src/${m}.js`))) esperadosServer.add(k);
+  assert.deepEqual(Object.keys(ctx.Server).sort(), [...esperadosServer].sort());
+});
+
 test("PARIDAD: el bundle produce resultados idénticos a la fuente ESM", () => {
   const Domain = loadBundle(buildBundle());
   // Comparación POR VALOR (JSON): los objetos del vm son de otro realm; deepStrictEqual fallaría por prototipos.
@@ -231,6 +248,13 @@ test("el bundler FALLA RUIDOSAMENTE ante sintaxis no soportada (nunca la ignora)
   assert.throws(() => transformModule("x", 'import { a as b } from "./c.js";'), /build-gas/);
   assert.throws(() => transformModule("x", 'const p = import("./d.js");\nexport const q = 1;'), /build-gas/);
   assert.throws(() => transformModule("x", 'const noExports = 1;'), /no exporta nada/);
+  // Dos formas ESM válidas que se transformaban MAL en silencio (2026-09-04): ahora fallan alto.
+  assert.throws(() => transformModule("x", 'export let n = 0;\nexport function inc() { n++; }'), /export let/);
+  assert.throws(() => transformModule("x", 'export const A = 1, B = 2;'), /una sola declaración/);
+  // …y lo que se parece pero es legítimo sigue pasando: comas dentro de paréntesis, corchetes o
+  // cadenas, y una línea de texto que empieza por «importante» dentro de un template literal.
+  assert.match(transformModule("x", 'export const f = (a, b = [1, 2]) => "a, b";'), /return \{ f \};/);
+  assert.match(transformModule("x", 'export const T = `\nimportante: nada\nexportar: tampoco\n`;'), /return \{ T \};/);
   // el caso soportado sí funciona
   const ok = transformModule("mini", 'import { z } from "./calendar.js";\nexport const w = z;');
   assert.match(ok, /var Mini = \(function/);

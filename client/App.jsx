@@ -30,9 +30,16 @@ function App() {
   const cambiosSinGuardarRef = React.useRef(0);
   const confirmaPerderCambios = () => cambiosSinGuardarRef.current === 0
     || window.confirm(`Tienes ${cambiosSinGuardarRef.current} cambios sin guardar en el cuadrante. ¿Salir y perderlos?`);
+  // La pestaña YA activa no se «abandona»: sin esta guarda, pulsar «Cuadrante» estando en el
+  // cuadrante preguntaba «¿Salir y perderlos?» sin salir, y al aceptar ponía el contador a 0 con la
+  // pantalla aún montada —así que el siguiente cambio de pestaña ya no preguntaba y las celdas se
+  // perdían en silencio. El contador lo pone a 0 el propio Calendar.jsx al desmontarse, que es el
+  // único momento en que de verdad se pierden.
+  const tabRef = React.useRef("home");
+  useEffect(() => { tabRef.current = tab; }, [tab]);
   const setTab = useCallback((t) => {
+    if (t === tabRef.current) return;
     if (!confirmaPerderCambios()) return;
-    cambiosSinGuardarRef.current = 0;
     setTabRaw(t);
   }, []);
   const [toast, setToast] = useState(null);
@@ -56,9 +63,18 @@ function App() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
+  // Quién tiene el mandato HOY según el servidor (`estadoCuadrante.responsableId`, releído del
+  // store). `undefined` hasta que alguna pantalla lo reciba: entonces manda el `rol` del token, que
+  // se firmó en el login y puede ser anterior al sorteo —el ganador se quedaba sin botones hasta
+  // volver a entrar, aunque el servidor ya le aceptara todo (V-16)—; un servidor anterior a este
+  // campo no lo manda y se sigue con el token, como antes.
+  const [responsableIdServidor, setResponsableIdServidor] = useState(undefined);
+  const actualizaResponsable = useCallback((id) => { if (id !== undefined) setResponsableIdServidor(id); }, []);
+
   const cerrarSesion = useCallback(() => {
     clearSession();
     setAuth(null);
+    setResponsableIdServidor(undefined);
     setResidentes([]);
     setResidentesIlegibles([]);
     setResidentesError(null);
@@ -98,6 +114,7 @@ function App() {
 
   const onLoggedIn = useCallback((r) => {
     sesionCaducadaRef.current = false;
+    setResponsableIdServidor(undefined);
     if (Array.isArray(r.residentes)) {
       residentesDeLoginRef.current = r.residentes;
       recibeResidentes(r.residentes);
@@ -129,11 +146,13 @@ function App() {
   const myResidente = residentes.find((r) => r.id === auth?.residente?.id) || null;
   const nivel = myResidente ? levelOn(periodsOfResident(myResidente), todayISO()) : null;
   const grupo = groupOf(nivel);
-  const isResponsable = auth?.residente?.rol === "responsable";
+  const isResponsable = responsableIdServidor !== undefined
+    ? responsableIdServidor !== null && responsableIdServidor === auth?.residente?.id
+    : auth?.residente?.rol === "responsable";
 
   const ctx = {
     api, auth, onLoggedIn, logout,
-    residentes, residentesIlegibles, residentesError, loadResidentes, myResidente, nivel, grupo, isResponsable,
+    residentes, residentesIlegibles, residentesError, loadResidentes, myResidente, nivel, grupo, isResponsable, actualizaResponsable,
     loading, setLoading, showToast, cambiosSinGuardarRef,
     tab, setTab, mes, setMes, anio, setAnio,
   };
