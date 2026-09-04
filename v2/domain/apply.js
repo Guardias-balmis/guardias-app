@@ -37,6 +37,37 @@ function borrablesDe(propuesta) {
 
 const clave = (a) => `${a.fecha}|${a.residenteId}`; // la misma ASIG_KEY que usa el servidor
 
+// Los marcadores que la tarjeta del generador promete conservar («las vacaciones, rotaciones y
+// bajas marcadas en la rejilla se conservan»). No son ausencias (V-19: la ausencia es la fila de
+// `bloqueos`), pero son celdas que alguien apuntó a mano y una guardia propuesta encima las pisaría.
+const MARCADORES_REJILLA = new Set(["V", "R", "B"]);
+
+/**
+ * Claves `fecha|residenteId` que la propuesta REPITE. La tabla es una rejilla por clave y
+ * `readLatest` se queda con la última fila: si el modelo devuelve para la misma persona y día una
+ * G y un 3P, el validador —que juzga la LISTA— ve un día correcto y lo que se escribe es otro
+ * (gana el 3P y el día se queda sin Mayor). Es un defecto de la RESPUESTA, como `fueraDelMes`.
+ */
+function duplicadasDe(propuesta) {
+  const porClave = new Map();
+  for (const a of propuesta) {
+    const k = clave(a);
+    if (!porClave.has(k)) porClave.set(k, []);
+    porClave.get(k).push(a);
+  }
+  return [...porClave.values()]
+    .filter((filas) => filas.length > 1)
+    .map((filas) => ({ fecha: filas[0].fecha, residenteId: filas[0].residenteId, codigos: filas.map((a) => a.codigo) }));
+}
+
+/** Filas de la propuesta que caen (misma clave) sobre una celda V/R/B de la rejilla. */
+function pisadosDe(propuesta, existentes) {
+  const marcadorPorClave = new Map(existentes.filter((a) => MARCADORES_REJILLA.has(a.codigo)).map((a) => [clave(a), a]));
+  return propuesta
+    .filter((a) => marcadorPorClave.has(clave(a)))
+    .map((a) => ({ propuesta: a, marcador: marcadorPorClave.get(clave(a)) }));
+}
+
 /**
  * @param {object} p
  *   - mes/anio: el mes que se está generando
@@ -63,6 +94,10 @@ const clave = (a) => `${a.fecha}|${a.residenteId}`; // la misma ASIG_KEY que usa
  *     cuadrante bueno se borra y lo que lo sustituye es invisible. Mismo criterio que
  *     `fueraDelMes`: es un defecto de la RESPUESTA, no una regla de negocio incumplida, y
  *     rechazarlo no deja al servicio sin cuadrante (la rejilla sigue estando ahí).
+ *   - duplicadas: claves `fecha|residenteId` que la propuesta trae más de una vez (ver
+ *     `duplicadasDe`): el validador juzgaría una lista y el Sheet guardaría otra.
+ *   - pisados: filas de la propuesta que caen sobre una celda V/R/B (ver `pisadosDe`): la rejilla
+ *     las conserva solo si nadie escribe encima con la misma clave.
  */
 export function monthReplacementPlan({ mes, anio, residentes = [], existentes = [], propuesta = [] }) {
   const delMes = new Set(datesOfMonth(anio, mes));
@@ -89,5 +124,63 @@ export function monthReplacementPlan({ mes, anio, residentes = [], existentes = 
     marcadores,
     fueraDelMes,
     desconocidos,
+    duplicadas: duplicadasDe(propuesta),
+    pisados: pisadosDe(propuesta, existentes),
+  };
+}
+
+// Lo que ocupa puesto en la rejilla (G/GF/GP/3P). Es el mismo conjunto que `validate.js:
+// OCUPA_PUESTO`, copiado y no importado A PROPÓSITO: `apply.js` va segundo en el bundle de Apps
+// Script (build/build-gas.mjs:DOMAIN_MODULES) y solo puede importar de `calendar.js`; importar
+// `validate.js` desde aquí invertiría el orden topológico y el bundle dejaría de cargar.
+const FIJABLES = new Set(["G", "GF", "GP", "3P"]);
+
+/**
+ * Plan para COMPLETAR el mes respetando lo que ya hay (decisión V-47): las guardias que ya están
+ * en la rejilla —las que cada residente puso de antemano porque ya las tenía comprometidas, o las
+ * que puso quien monta el cuadrante— son inamovibles, y la propuesta solo rellena lo que falta.
+ *
+ * Es el hermano de `monthReplacementPlan` con la regla contraria sobre lo existente: aquel BORRA
+ * toda guardia previa que la propuesta no pise (para que el mes quede exactamente como la
+ * propuesta); este NO borra ninguna. Existe porque el generador con IA se llevaba por delante lo
+ * que los residentes habían apuntado a mano antes de generar, y esa era justo la información que
+ * había que respetar.
+ *
+ * @returns {{cambios:object[], fijadas:object[], conflictos:object[], marcadores:object[],
+ *            fueraDelMes:object[], desconocidos:object[], borradas:object[]}}
+ *   - fijadas: las guardias (G/GF/GP/3P) que ya tiene el mes. Van al prompt como «ya fijadas» y a
+ *     la validación JUNTO con la propuesta: lo que se juzga es el mes resultante, no la propuesta
+ *     sola — si el modelo omite una fijada y pone a otro Mayor ese día, INV-1 lo ve.
+ *   - cambios: SOLO las filas de la propuesta que aportan algo: se descartan las que repiten una
+ *     fijada (misma clave y mismo código), que ya están escritas y así conservan su `origen`
+ *     (cedida/comprada) intacto. Nunca hay filas de borrado.
+ *   - conflictos: filas de la propuesta que pisan una fijada CON OTRO CÓDIGO. No se aplican
+ *     (mandaría la propuesta sobre lo que se pidió respetar); quien llama decide qué hacer, y el
+ *     router las convierte en un error de formato que vuelve al modelo en el reintento.
+ *   - marcadores, fueraDelMes, desconocidos, duplicadas, pisados, borradas: mismo significado que
+ *     en `monthReplacementPlan` (`borradas` siempre vacía aquí, se devuelve por simetría).
+ */
+export function monthCompletionPlan({ mes, anio, residentes = [], existentes = [], propuesta = [] }) {
+  const delMes = new Set(datesOfMonth(anio, mes));
+  const conocidos = new Set(residentes.map((r) => r.id));
+  const fueraDelMes = propuesta.filter((a) => !delMes.has(a.fecha));
+  const desconocidos = propuesta.filter((a) => !conocidos.has(a.residenteId));
+
+  const fijadas = existentes.filter((a) => FIJABLES.has(a.codigo));
+  const marcadores = existentes.filter((a) => !FIJABLES.has(a.codigo));
+  const fijadaPorClave = new Map(fijadas.map((a) => [clave(a), a]));
+
+  const cambios = [];
+  const conflictos = [];
+  for (const a of propuesta) {
+    const fijada = fijadaPorClave.get(clave(a));
+    if (!fijada) { cambios.push({ fecha: a.fecha, residenteId: a.residenteId, codigo: a.codigo }); continue; }
+    if (fijada.codigo !== a.codigo) conflictos.push({ propuesta: a, fijada });
+    // Misma clave y mismo código: ya está en la tabla, no hay nada que escribir.
+  }
+
+  return {
+    cambios, fijadas, conflictos, marcadores, fueraDelMes, desconocidos, borradas: [],
+    duplicadas: duplicadasDe(propuesta), pisados: pisadosDe(propuesta, existentes),
   };
 }

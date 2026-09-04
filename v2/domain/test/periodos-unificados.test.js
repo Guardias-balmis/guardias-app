@@ -144,3 +144,26 @@ test("con fechaFin nominal, unificar NO cambió nada — es lo que hace seguro e
   assert.equal(yearCloseHistoryStart([antes], 5, 2028), null);
   assert.equal(yearCloseHistoryStart([antes], 3, 2028), "2027-05-27");
 });
+
+// ── 2026-09-04: INV-8c cierra el año el MISMO mes que INV-3 (definición única en residents.js) ──
+import { closingPeriodOn } from "../residents.js";
+import { thirdPostHistoryStart as tphs2, validateThirdPost as vtp2 } from "../thirdpost.js";
+import { yearCloseHistoryStart as ychs3 } from "../equity.js";
+
+test("con la promoción retrasada por periodos editados, el tercer puesto y la equidad cierran el año el mismo mes", () => {
+  const b = {
+    id: "b", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2025-05-26" },
+      { year: 2, start: "2025-05-27", end: "2026-06-30" }, // R2 alargado por una baja (nota [a])
+      { year: 3, start: "2026-07-01", end: "2027-05-26" },
+      { year: 4, start: "2027-05-27", end: "2028-05-26" },
+    ],
+  };
+  const vol = [{ residenteId: "b", desde: "2026-04-01" }];
+  assert.equal(closingPeriodOn(b, 5, 2026), null, "en mayo no cierra nada");
+  assert.equal(tphs2(vol, [b], 5, 2026), "2026-04-01", "en mayo solo pide desde su alta como voluntario, no una ventana de cierre");
+  assert.deepEqual(closingPeriodOn(b, 6, 2026), { start: "2025-05-27", end: "2026-06-30" });
+  assert.equal(tphs2(vol, [b], 6, 2026), "2025-05-27");
+  assert.equal(ychs3([b], 6, 2026), "2025-05-27", "la misma ventana que el cierre anual de INV-3");
+});

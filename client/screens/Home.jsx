@@ -8,7 +8,7 @@ import { puedeMoverCiclo, puedeGenerarCuadrante, esAccesoDesarrolladorIA } from 
 import { violationText } from "./client/lib/violations.js";
 
 const { useState, useEffect } = React;
-const { Card, QuickCard, Btn } = window.UI;
+const { Card, QuickCard, Btn, Aviso } = window.UI;
 
 const MESES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const nombreDeMes = (anio, mes) => `${MESES[mes]} de ${anio}`;
@@ -126,14 +126,45 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
  * Los dos pasos (pulsar → confirmar) no son ceremonia: generar REEMPLAZA el cuadrante del mes, así
  * que un click de más sobre un mes ya montado a mano se lleva por delante el trabajo de una tarde.
  */
-function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, comprobando, verCuadrante }) {
-  const [confirmando, setConfirmando] = useState(false);
-  const [generando, setGenerando] = useState(false);
-  const [resultado, setResultado] = useState(null);
+// Fuera del componente a propósito: la tarjeta se desmonta al cambiar de pestaña, y una generación
+// en curso seguía en el servidor mientras la tarjeta volvía a montarse como si nada —botón
+// disponible otra vez, sin «Generando…» ni resultado— y el mes se escribía sin que nadie viera los
+// avisos (y con un segundo clic en «reemplazar» se reescribía). Se recuerda por mes.
+// La clave lleva también a la PERSONA: la memoria es del módulo y sobrevive a cerrar sesión, y sin
+// ella quien entrara después en la misma pestaña veía de entrada el resultado del anterior.
+const generacionEnCurso = new Map(); // "usuario|anio-mes" → promesa del resultado
+const ultimoResultado = new Map();   // "usuario|anio-mes" → último resultado enseñado
 
-  // Cambiar de mes descarta lo que se estuviera enseñando: un resultado de agosto bajo el rótulo
-  // de septiembre es peor que no enseñar nada.
-  useEffect(() => { setResultado(null); setConfirmando(false); }, [mes, anio]);
+function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, puedo, comprobando, estadoError, reintentar, verCuadrante, completarDisponible }) {
+  const claveMes = `${usuario || ""}|${anio}-${mes}`;
+  const [confirmando, setConfirmando] = useState(false);
+  const [generando, setGenerando] = useState(generacionEnCurso.has(claveMes));
+  const [resultado, setResultado] = useState(ultimoResultado.get(claveMes) || null);
+  // Decisión V-47: «completar» respeta las guardias que ya están en la rejilla (las que cada
+  // residente apuntó de antemano) y rellena el resto; «reemplazar» es lo de antes, el mes entero
+  // de nuevo. Completar es el defecto porque es el gesto que no destruye nada — pero SOLO si el
+  // servidor desplegado lo entiende (`estadoCuadrante.modosGeneracion`): el cliente sale a Pages
+  // con el merge y el servidor cuando alguien lo redespliega, y un servidor viejo ignoraría el modo
+  // y reemplazaría el mes, borrando justo lo que la pantalla prometía respetar.
+  // `modoElegido` es solo lo que la persona haya pulsado; el modo EFECTIVO se deriva, porque la
+  // tarjeta se monta antes de que `estadoCuadrante` responda y un `useState` inicial se quedaría
+  // congelado en «reemplazar» aunque el servidor sí supiera completar.
+  const [modoElegido, setModoElegido] = useState(null);
+  const modo = !completarDisponible ? "reemplazar" : (modoElegido || "completar");
+  const setModo = setModoElegido;
+
+  // Al montar y al cambiar de mes: se engancha a la generación en curso de ESE mes si la hay, y
+  // enseña su último resultado. Un resultado de agosto bajo el rótulo de septiembre sería peor que
+  // no enseñar nada — por eso todo va por `claveMes`.
+  useEffect(() => {
+    let vivo = true;
+    setConfirmando(false);
+    const enCurso = generacionEnCurso.get(claveMes);
+    setGenerando(Boolean(enCurso));
+    setResultado(ultimoResultado.get(claveMes) || null);
+    if (enCurso) enCurso.then((r) => { if (vivo) { setGenerando(false); setResultado(r); } });
+    return () => { vivo = false; };
+  }, [claveMes]);
 
   // Mientras no se sepa el estado del mes, la tarjeta NO se esconde: se enseña inerte diciendo
   // que está comprobando. Esconderla era indistinguible de «no tienes permiso», y con una
@@ -141,6 +172,19 @@ function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, compr
   // mira concluye que la aplicación está rota o que no le dejan (pasó de verdad, 2026-08-31).
   // Sigue sin ofrecerse el botón: no saber si el mes está publicado no es saber que no lo está.
   if (comprobando) {
+    // Un fallo al consultar el estado NO es «comprobando»: para el Responsable (cuyo permiso no
+    // depende de `sinResponsable`) la tarjeta se quedaba en «Comprobando…» para siempre, sin decir
+    // que había fallado ni ofrecer reintentar.
+    if (estadoError) {
+      return (
+        <Card title="🤖 Generar cuadrante de guardias">
+          <Aviso color={COLOR.red} bg={COLOR.redLight}>No se pudo comprobar el estado del mes: {estadoError}</Aviso>
+          <div style={{ marginTop: 8 }}>
+            <button onClick={reintentar} style={{ ...S.smallBtn, background: COLOR.blue, color: "#fff" }}>Reintentar</button>
+          </div>
+        </Card>
+      );
+    }
     return (
       <Card title="🤖 Generar cuadrante de guardias">
         <div style={{ fontSize: 12, color: COLOR.grayDark, lineHeight: 1.5 }}>
@@ -162,7 +206,13 @@ function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, compr
     setConfirmando(false);
     setGenerando(true);
     setResultado(null);
-    const r = await api.generarCuadranteIA(anio, mes);
+    ultimoResultado.delete(claveMes);
+    // `api.*` nunca lanza (callBackend normaliza a {ok:false}): la entrada del mapa siempre se quita.
+    const promesa = api.generarCuadranteIA(anio, mes, modo);
+    generacionEnCurso.set(claveMes, promesa);
+    const r = await promesa;
+    generacionEnCurso.delete(claveMes);
+    ultimoResultado.set(claveMes, r);
     setGenerando(false);
     setResultado(r);
   };
@@ -172,9 +222,30 @@ function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, compr
   return (
     <Card title="🤖 Generar cuadrante de guardias">
       <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
-        Le pide el cuadrante completo del mes a la IA con las preferencias y ausencias de todo el
-        equipo, y lo comprueba contra las reglas antes de guardarlo. Si no consigue uno que las
-        cumpla, no guarda nada.
+        Le pide el cuadrante del mes a la IA con las preferencias y ausencias de todo el equipo, y
+        lo comprueba contra las reglas antes de guardarlo. Si no consigue uno que las cumpla, no
+        guarda nada. Las guardias que ya estén puestas en la rejilla —las que cada residente apuntó
+        de antemano— se respetan tal cual si eliges «completar».
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+        {[
+          ["completar", "Completar lo que falta", "respeta las guardias que ya hay en la rejilla y rellena el resto", !completarDisponible],
+          ["reemplazar", "Reemplazar todo el mes", "sustituye todas las guardias del mes por las nuevas", false],
+        ].map(([valor, titulo, detalle, noDisponible]) => (
+          <label key={valor} style={{
+            display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, cursor: generando || noDisponible ? "default" : "pointer",
+            background: modo === valor ? COLOR.bluePale : COLOR.gray, border: `1.5px solid ${modo === valor ? COLOR.blue : COLOR.grayMid}`,
+            opacity: noDisponible ? 0.55 : 1,
+          }}>
+            <input type="radio" name="modo-generacion" value={valor} checked={modo === valor} disabled={generando || noDisponible}
+              onChange={() => setModo(valor)} style={{ marginTop: 2 }} />
+            <span style={{ fontSize: 13, color: COLOR.blueDark, lineHeight: 1.4 }}>
+              <b>{titulo}</b> — <span style={{ color: COLOR.grayDark }}>{detalle}</span>
+              {noDisponible && <span style={{ display: "block", color: COLOR.orange, fontSize: 12 }}>El servidor desplegado todavía no admite este modo: hasta que se redespliegue, solo se puede reemplazar.</span>}
+            </span>
+          </label>
+        ))}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
@@ -194,9 +265,15 @@ function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, compr
       {confirmando && (
         <div style={{ background: COLOR.gray, borderRadius: 8, padding: 10 }}>
           <div style={{ fontSize: 13, color: COLOR.blueDark, marginBottom: 8, lineHeight: 1.5 }}>
-            Se va a <b>reemplazar</b> el cuadrante de {nombreDeMes(anio, mes)}: las guardias que ya
-            tenga se sustituyen por las nuevas. Las vacaciones, rotaciones y bajas marcadas en la
-            rejilla se conservan.
+            {modo === "completar" ? (
+              <>Se va a <b>completar</b> el cuadrante de {nombreDeMes(anio, mes)}: las guardias que
+              ya tenga se quedan como están y la IA solo rellena los huecos. Las vacaciones,
+              rotaciones y bajas marcadas en la rejilla se conservan.</>
+            ) : (
+              <>Se va a <b>reemplazar</b> el cuadrante de {nombreDeMes(anio, mes)}: las guardias que ya
+              tenga se sustituyen por las nuevas. Las vacaciones, rotaciones y bajas marcadas en la
+              rejilla se conservan.</>
+            )}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={generar} style={{ ...S.smallBtn, background: COLOR.blue, color: "#fff" }}>Sí, generar</button>
@@ -208,10 +285,14 @@ function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, compr
       {resultado && resultado.ok && (
         <div style={{ marginTop: 10, background: COLOR.greenLight, borderLeft: `4px solid ${COLOR.greenMid}`, borderRadius: 8, padding: "8px 10px" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: COLOR.blueDark }}>
-            ✅ Cuadrante de {nombreDeMes(anio, mes)} generado y guardado
+            {resultado.guardados === 0
+              ? `✅ El cuadrante de ${nombreDeMes(anio, mes)} ya estaba completo: no había nada que añadir`
+              : `✅ Cuadrante de ${nombreDeMes(anio, mes)} generado y guardado`}
           </div>
           <div style={{ fontSize: 11, color: COLOR.grayDark, marginTop: 2 }}>
             {resultado.intentos === 1 ? "A la primera" : `Tras ${resultado.intentos} intentos`}
+            {resultado.guardados > 0 ? ` · ${resultado.guardados} guardias nuevas` : ""}
+            {resultado.respetadas > 0 ? ` · se respetaron ${resultado.respetadas} que ya estaban puestas` : ""}
             {resultado.borradas > 0 ? ` · se reemplazaron ${resultado.borradas} guardias que ya había` : ""}
             {resultado.modelo ? ` · modelo: ${resultado.modelo}` : ""}
           </div>
@@ -224,9 +305,15 @@ function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, compr
       {resultado && !resultado.ok && (
         <div style={{ marginTop: 10, background: "#fff", borderLeft: `4px solid ${COLOR.red}`, borderRadius: 8, padding: "8px 10px" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: COLOR.red }}>
-            {resultado.revisionManual ? "⚠️ Hay que montar este mes a mano" : "No se pudo generar"}
+            {resultado.resultado === "FIJADAS_INVALIDAS" ? "⚠️ Las guardias que ya están en la rejilla incumplen reglas obligatorias"
+              : resultado.revisionManual ? "⚠️ Hay que montar este mes a mano" : "No se pudo generar"}
           </div>
           <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 4, lineHeight: 1.5 }}>{resultado.error}</div>
+          {resultado.resultado === "FIJADAS_INVALIDAS" && (
+            <button onClick={verCuadrante} style={{ ...S.smallBtn, background: "#fff", color: COLOR.blue, marginTop: 8 }}>
+              Corregirlas en el cuadrante →
+            </button>
+          )}
           {resultado.revisionManual && (
             <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 4, lineHeight: 1.5 }}>
               No se ha guardado nada: el cuadrante que había sigue como estaba. Puedes montarlo en
@@ -239,7 +326,9 @@ function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, compr
       {resultado && avisos.length > 0 && (
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: COLOR.grayDark }}>
-            {resultado.ok ? "Avisos (no impiden guardar, pero conviene mirarlos):" : "Lo que no ha conseguido cumplir:"}
+            {resultado.ok ? "Avisos (no impiden guardar, pero conviene mirarlos):"
+              : resultado.resultado === "FIJADAS_INVALIDAS" ? "Lo que incumplen las guardias que ya están puestas:"
+              : "Lo que no ha conseguido cumplir:"}
           </div>
           {avisos.slice(0, 8).map((v, i) => (
             <div key={i} style={{ fontSize: 11, color: COLOR.grayDark, background: COLOR.gray, borderRadius: 6, padding: "4px 8px" }}>
@@ -257,7 +346,7 @@ function GeneradorIA({ api, residentes, mes, anio, setMes, setAnio, puedo, compr
 
 function HomeScreen() {
   const app = window.useApp();
-  const { auth, residentes, myResidente, nivel, setTab, mes, anio, setMes, setAnio } = app;
+  const { auth, residentes, residentesIlegibles, residentesError, loadResidentes, myResidente, nivel, setTab, mes, anio, setMes, setAnio } = app;
 
   // Invitación al voluntariado del PRÓXIMO mandato de Responsable (decisión V-16). Se pide aparte
   // y sin bloquear la pantalla: si falla, Inicio se muestra igual sin la tarjeta. Solo aparece
@@ -269,11 +358,24 @@ function HomeScreen() {
   // botón sobre un mes PUBLICADO. `null` mientras carga o si la consulta falló — y `null` no
   // ofrece el botón, porque no saber si está publicado no es lo mismo que saber que no lo está.
   const [estadoMes, setEstadoMes] = useState(null);
+  // Lo que el servidor desplegado sabe hacer al generar (V-47). `false` hasta que lo diga: un
+  // servidor anterior a V-47 no manda `modosGeneracion`, y entonces solo se ofrece «reemplazar».
+  const [completarDisponible, setCompletarDisponible] = useState(false);
+  // El fallo de `estadoCuadrante`, aparte del «aún no sé»: sin distinguirlos, la tarjeta del
+  // generador decía «Comprobando…» para siempre. `reintento` vuelve a lanzar la consulta.
+  const [estadoError, setEstadoError] = useState(null);
+  const [reintento, setReintento] = useState(0);
   // Desplegable de "Equipo" (a pedido del autor, 2026-08-19): un nivel a la vez, no los cuatro a
   // la vez — clic de nuevo sobre el mismo nivel lo cierra.
   const [nivelAbierto, setNivelAbierto] = useState(null);
   // Del año de HOY, no del mes seleccionado (`mes`/`anio` navegan la rejilla, no el mandato): no
   // depende de esos dos, para no repetir esta consulta a cada click de ◀/▶.
+  //
+  // Ninguno de los dos efectos depende de `myResidente` (2026-09-04): las dos consultas van con la
+  // sesión, no con el residente, y tenerlo en las deps las disparaba DOS veces al abrir Inicio —una
+  // al montar con la lista de residentes aún vacía y otra al llegar la lista— o sea cuatro idas y
+  // vueltas a Apps Script donde bastan dos. Inicio solo se monta con sesión, así que no hay que
+  // esperar a nada para pedirlas.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -283,19 +385,23 @@ function HomeScreen() {
       if (r.ok) setProximoMandato(r.siguiente || null);
     })();
     return () => { cancelled = true; };
-  }, [myResidente?.id]);
+  }, []);
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setEstadoMes(null);
+      setEstadoError(null);
       const rEstado = await app.api.estadoCuadrante(anio, mes);
       if (cancelled) return;
       // Un fallo aquí solo esconde los botones que dependen del permiso: no se asume ninguno.
       setSinResponsable(rEstado.ok ? rEstado.sinResponsable === true : false);
       setEstadoMes(rEstado.ok ? rEstado.estado : null);
+      setEstadoError(rEstado.ok ? null : (rEstado.error || "sin respuesta del servidor"));
+      setCompletarDisponible(Boolean(rEstado.ok && Array.isArray(rEstado.modosGeneracion) && rEstado.modosGeneracion.includes("completar")));
+      if (rEstado.ok && app.actualizaResponsable) app.actualizaResponsable(rEstado.responsableId);
     })();
     return () => { cancelled = true; };
-  }, [myResidente?.id, mes, anio]);
+  }, [mes, anio, reintento]);
   const puedoRegistrarImaginaria = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
   // El acceso de desarrollador (V-46) solo destraba el PERMISO del ciclo, no el estado del mes:
   // sigue sin ofrecerse fuera de Borrador, para él igual que para cualquiera.
@@ -335,6 +441,24 @@ function HomeScreen() {
           </div>
         </div>
       </Card>
+
+      {residentesError && (
+        <window.UI.Aviso color={COLOR.red} bg={COLOR.redLight}>
+          No se pudo cargar el equipo ({residentesError}): sin la lista, la app no sabe tu nivel ni
+          tus permisos. Comprueba la conexión y reintenta.
+          <div style={{ marginTop: 8 }}>
+            <Btn onClick={() => loadResidentes()}>🔄 Reintentar</Btn>
+          </div>
+        </window.UI.Aviso>
+      )}
+
+      {residentesIlegibles.length > 0 && (
+        <window.UI.Aviso>
+          ⚠️ {residentesIlegibles.length === 1 ? "Hay un residente" : `Hay ${residentesIlegibles.length} residentes`} con
+          las fechas ilegibles en la hoja: <b>{residentesIlegibles.map((x) => x.residente.nombre || x.residente.id).join(", ")}</b>.
+          No {residentesIlegibles.length === 1 ? "aparece" : "aparecen"} en ninguna pantalla hasta corregirlas en ⚙️ → Residentes.
+        </window.UI.Aviso>
+      )}
 
       {puedoOfrecerme && (
         <Card title={`🙋 Responsable del contaje ${proximoMandato.anio}`}>
@@ -396,9 +520,15 @@ function HomeScreen() {
         })}
       </Card>
 
-      <GeneradorIA api={app.api} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
-        setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")}
-        comprobando={estadoMes === null && puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable })} />
+      {/* `comprobando` para CUALQUIER Mayor mientras no llegue `estadoCuadrante`: `sinResponsable` viaja
+          en esa misma respuesta, así que gatear la tarjeta inerte por `puedeMoverCiclo` la escondía
+          justo en el caso real de producción (sin Responsable) hasta que respondía Apps Script —
+          el síntoma del 2026-08-31 otra vez. Si al llegar resulta que hay Responsable y no es él,
+          `puedo` sigue en false y la tarjeta desaparece, como ahora. */}
+      <GeneradorIA api={app.api} usuario={app.auth && app.auth.residente && app.auth.residente.id} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
+        setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")} completarDisponible={completarDisponible}
+        estadoError={estadoError} reintentar={() => setReintento((n) => n + 1)}
+        comprobando={estadoMes === null && (app.isResponsable || app.grupo === "MAYOR")} />
 
       <Imaginaria api={app.api} residentes={residentes} showToast={app.showToast} puedoRegistrar={puedoRegistrarImaginaria} />
 

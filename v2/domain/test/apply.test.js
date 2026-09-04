@@ -158,3 +158,88 @@ test("un mes lleno que se regenera entero: todo lo previo que no reaparece se bo
   assert.equal(plan.borradas.length, 5);
   assert.equal(plan.cambios.length, 10);
 });
+
+// ── monthCompletionPlan (decisión V-47): lo que ya hay se respeta, la propuesta solo rellena ──
+import { monthCompletionPlan } from "../apply.js";
+
+test("completar un mes vacío: los cambios son la propuesta entera, sin fijadas ni borrados", () => {
+  const propuesta = [a("2026-08-01", "r1", "G"), a("2026-08-01", "r3", "G")];
+  const plan = monthCompletionPlan({ ...MES, existentes: [], propuesta });
+  assert.deepEqual(plan.cambios, propuesta);
+  assert.deepEqual(plan.fijadas, []);
+  assert.deepEqual(plan.conflictos, []);
+  assert.deepEqual(plan.borradas, []);
+});
+
+test("completar NUNCA borra: la guardia previa que la propuesta no repite sigue en el mes (es una fijada)", () => {
+  // El caso que motiva el modo: un residente puso su guardia del 15 antes de generar.
+  const existentes = [a("2026-08-15", "r2", "G")];
+  const propuesta = [a("2026-08-01", "r1", "G"), a("2026-08-02", "r3", "G")];
+  const plan = monthCompletionPlan({ ...MES, existentes, propuesta });
+  assert.deepEqual(plan.fijadas, existentes);
+  assert.deepEqual(plan.borradas, []);
+  assert.equal(borrados(plan).length, 0);
+  assert.equal(plan.cambios.length, 2);
+});
+
+test("una fijada repetida por la propuesta (misma clave y código) no se reescribe: conserva su origen", () => {
+  const existentes = [a("2026-08-15", "r2", "G", { origen: "CEDIDA" })];
+  const propuesta = [a("2026-08-15", "r2", "G"), a("2026-08-16", "r3", "G")];
+  const plan = monthCompletionPlan({ ...MES, existentes, propuesta });
+  assert.deepEqual(plan.cambios, [{ fecha: "2026-08-16", residenteId: "r3", codigo: "G" }]);
+  assert.deepEqual(plan.conflictos, []);
+});
+
+test("una fijada pisada con OTRO código es un conflicto: no entra en los cambios y se reporta", () => {
+  const existentes = [a("2026-08-15", "r2", "G")];
+  const propuesta = [a("2026-08-15", "r2", "GF")];
+  const plan = monthCompletionPlan({ ...MES, existentes, propuesta });
+  assert.deepEqual(plan.cambios, []);
+  assert.equal(plan.conflictos.length, 1);
+  assert.deepEqual(plan.conflictos[0].fijada, existentes[0]);
+  assert.deepEqual(plan.conflictos[0].propuesta, propuesta[0]);
+});
+
+test("los 3P que ya había son fijadas aunque la propuesta no traiga ningún 3P", () => {
+  const plan = monthCompletionPlan({ ...MES, existentes: [a("2026-08-03", "r4", "3P")], propuesta: [a("2026-08-04", "r1", "G")] });
+  assert.deepEqual(plan.fijadas.map((x) => x.codigo), ["3P"]);
+  assert.equal(borrados(plan).length, 0);
+});
+
+test("los marcadores V/R/B no son fijadas (nadie los respeta ni los borra); una guardia propuesta encima se REPORTA en `pisados`, porque por clave la sustituiría", () => {
+  const existentes = [a("2026-08-10", "r1", "V"), a("2026-08-11", "r1", "B")];
+  const plan = monthCompletionPlan({ ...MES, existentes, propuesta: [a("2026-08-10", "r1", "G")] });
+  assert.deepEqual(plan.fijadas, []);
+  assert.deepEqual(plan.marcadores, existentes);
+  assert.deepEqual(plan.cambios, [{ fecha: "2026-08-10", residenteId: "r1", codigo: "G" }]);
+  assert.deepEqual(plan.pisados, [{ propuesta: a("2026-08-10", "r1", "G"), marcador: existentes[0] }]);
+  // Y en reemplazar exactamente igual: la promesa de la tarjeta («se conservan») es de los dos modos.
+  const plan2 = monthReplacementPlan({ ...MES, existentes, propuesta: [a("2026-08-10", "r1", "G")] });
+  assert.equal(plan2.pisados.length, 1);
+  // Un 3P previo que la propuesta pisa no es un marcador V/R/B: no se reporta aquí.
+  assert.deepEqual(monthReplacementPlan({ ...MES, existentes: [a("2026-08-10", "r1", "3P")], propuesta: [a("2026-08-10", "r1", "G")] }).pisados, []);
+});
+
+test("una clave fecha|residente repetida en la propuesta se reporta en `duplicadas` (los dos planes): el validador juzgaría una lista y el Sheet guardaría otra", () => {
+  const propuesta = [a("2026-08-03", "r4", "G"), a("2026-08-03", "r1", "G"), a("2026-08-03", "r4", "3P")];
+  for (const plan of [monthReplacementPlan({ ...MES, existentes: [], propuesta }), monthCompletionPlan({ ...MES, existentes: [], propuesta })]) {
+    assert.deepEqual(plan.duplicadas, [{ fecha: "2026-08-03", residenteId: "r4", codigos: ["G", "3P"] }]);
+  }
+  assert.deepEqual(monthReplacementPlan({ ...MES, existentes: [], propuesta: propuesta.slice(0, 2) }).duplicadas, []);
+});
+
+test("completar mantiene el guardarraíl de V-31: fechas de otro mes e ids desconocidos se reportan", () => {
+  const plan = monthCompletionPlan({
+    ...MES, existentes: [],
+    propuesta: [a("2026-09-01", "r1", "G"), a("2026-08-01", "nadie", "G")],
+  });
+  assert.deepEqual(plan.fueraDelMes, [a("2026-09-01", "r1", "G")]);
+  assert.deepEqual(plan.desconocidos, [a("2026-08-01", "nadie", "G")]);
+});
+
+test("un mes ya completo devuelto tal cual por el modelo no produce ni un cambio", () => {
+  const existentes = [a("2026-08-01", "r1", "G"), a("2026-08-01", "r3", "G")];
+  const plan = monthCompletionPlan({ ...MES, existentes, propuesta: existentes.map((x) => ({ ...x })) });
+  assert.deepEqual(plan.cambios, []);
+  assert.equal(plan.fijadas.length, 2);
+});

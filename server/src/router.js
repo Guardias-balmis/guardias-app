@@ -30,10 +30,31 @@ const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA"]); // enum de mot
 // cualquier cadena y las erratas son MUDAS: una "g" minúscula no la reconoce ni `GUARDIA` (INV-1
 // da el día por descubierto) ni `tally` (no cuenta para nada), y nadie avisa.
 const ASIG_CODIGOS = new Set(["G", "GF", "GP", "3P", "V", "R", "B", ""]);
+// Modos de `generarCuadranteIA` (decisión V-47). COMPLETAR es el defecto: respeta las guardias que
+// ya hay en la rejilla y rellena el resto. REEMPLAZAR es el comportamiento original de V-45:
+// sustituye el mes entero. Lista blanca porque un modo mal escrito no puede degradar en silencio
+// a «reemplazar» —que borra— cuando quien pulsó quería conservar.
+const MODOS_GENERACION = new Set(["completar", "reemplazar"]);
+// Los niveles a los que se puede asignar guardia (los que el prompt lista), los códigos que ocupan
+// puesto en la rejilla y los marcadores apuntados a mano: mismos conjuntos que `residents.js:LEVELS`,
+// `validate.js:OCUPA_PUESTO` y `apply.js:MARCADORES_REJILLA`.
+const NIVELES_ASIGNABLES = new Set(["R1", "R2", "R3", "R4"]);
+const CODIGOS_GUARDIA = new Set(["G", "GF", "GP", "3P"]);
+const MARCADORES_REJILLA = new Set(["V", "R", "B"]);
+// Tope de violaciones que se persisten por fila de `generaciones`: una celda de Sheets admite
+// 50.000 caracteres y una respuesta hostil (500 ids inventados) daba ~96 KB de JSON.
+const BITACORA_MAX_VIOLACIONES = 50;
+// …y en caracteres: 50 violaciones con un `detalle` de 1.000 caracteres cada una (ids de 1.000
+// caracteres inventados por el modelo) seguirían pasando de 50.000. Margen sobre el límite de Sheets.
+const BITACORA_MAX_CHARS = 40000;
+const BITACORA_MAX_DETALLE = 300;
 // `origen` marca la guardia cedida o comprada, que INV-4 excluye de los seis ejes de INV-3.
 // `tally.js:15` lo evalúa por TRUTHINESS, así que una errata cualquiera —no solo un valor de otro
 // enum— saca la guardia del cómputo y de los totales de la pestaña publicada, en silencio.
 const ASIG_ORIGENES = new Set(["CEDIDA", "COMPRADA"]);
+// `puesto` (spec.md §2 Asignacion): hoy ningún cliente lo manda y ningún invariante lo lee —el
+// puesto se deriva del nivel—, pero la columna existe y el endpoint es público.
+const ASIG_PUESTOS = new Set(["MAYOR", "PEQUENO", "TERCERO"]);
 
 /**
  * @param {string} rawBody  cuerpo crudo de la petición (JSON en text/plain)
@@ -71,8 +92,8 @@ export function handleRequest(rawBody, deps) {
           // equidad, así que no hay riesgo de excepción; lo que se evita es que INV-5 dé un
           // veredicto a suerte sobre una fecha que no se puede leer, y lo que se gana es que
           // `Calendar.jsx` —que valida por aquí— diga qué fila hay que arreglar en vez de callarse.
-          const cuadrante = req.cuadrante || {};
-          const { usables, corruptas } = partitionBloqueos(deps, cuadrante.bloqueos || []);
+          const cuadrante = req.cuadrante && typeof req.cuadrante === "object" ? req.cuadrante : {};
+          const { usables, corruptas } = partitionBloqueos(deps, Array.isArray(cuadrante.bloqueos) ? cuadrante.bloqueos : []);
           const violaciones = [
             ...bloqueoCorruptoViolations(corruptas),
             ...deps.domain.validateMonth({ ...cuadrante, bloqueos: usables }),
@@ -163,6 +184,7 @@ export function handleRequest(rawBody, deps) {
 
       case "listAsignaciones":
         return authed(req, deps, () => {
+          if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
           const prefix = monthPrefix(req.anio, req.mes);
           const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
           return { ok: true, asignaciones: all.filter((a) => a.fecha.startsWith(prefix)) };
@@ -186,6 +208,7 @@ export function handleRequest(rawBody, deps) {
       case "guardarAsignaciones":
         return authed(req, deps, (session) => {
           if (!Array.isArray(req.cambios) || req.cambios.length === 0) return { ok: false, error: "cambios vacío" };
+          if (req.cambios.some((c) => !c || typeof c !== "object")) return { ok: false, error: "cambio inválido: cada cambio es un objeto {fecha, residenteId, codigo}" };
           let fechas;
           try {
             fechas = req.cambios.map((c) => deps.domain.parseISO(c.fecha));
@@ -199,26 +222,43 @@ export function handleRequest(rawBody, deps) {
           if (malCodigo) return { ok: false, error: `código de asignación inválido: ${JSON.stringify(malCodigo.codigo)} (válidos: ${[...ASIG_CODIGOS].filter(Boolean).join(", ")})` };
           const malOrigen = req.cambios.find((c) => c.origen !== undefined && c.origen !== "" && !ASIG_ORIGENES.has(c.origen));
           if (malOrigen) return { ok: false, error: `origen inválido: ${JSON.stringify(malOrigen.origen)} (válidos: ${[...ASIG_ORIGENES].join(", ")})` };
-          const meses = [...new Map(fechas.map((f) => [`${f.year}-${f.month}`, f])).values()]
-            .map((f) => ({ mes: f.month, anio: f.year, estado: currentCuadranteEstado(deps, f.month, f.year) }));
-          const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
-          if (publicado) return { ok: false, error: `el cuadrante de ${publicado.mes}/${publicado.anio} está PUBLICADO y no admite ediciones` };
+          // El residente tiene que existir (2026-09-04): una fila con un id que no es de nadie no la
+          // ve ninguna pantalla ni la puede borrar nadie, y se queda para siempre en una tabla
+          // append-only —el mismo motivo por el que el generador rechaza los ids inventados (V-31).
+          const conocidos = new Set(allResidentes(deps).map((r) => r.id));
+          const malResidente = req.cambios.find((c) => typeof c.residenteId !== "string" || !conocidos.has(c.residenteId));
+          if (malResidente) return { ok: false, error: `residenteId desconocido: ${JSON.stringify(malResidente.residenteId)}` };
+          const malPuesto = req.cambios.find((c) => c.puesto !== undefined && c.puesto !== "" && !ASIG_PUESTOS.has(c.puesto));
+          if (malPuesto) return { ok: false, error: `puesto inválido: ${JSON.stringify(malPuesto.puesto)} (válidos: ${[...ASIG_PUESTOS].join(", ")})` };
+          // El estado se lee y se escribe DENTRO del mismo lock que `marcarValidado`/`publicarCuadrante`
+          // (2026-09-04): leído fuera, una celda que esperaba al lock mientras otro validaba el mes
+          // veía BORRADOR, no escribía transición y se colaba en un mes ya VALIDADO — con lo que un
+          // mes validado podía tener guardias que nadie validó. Leído dentro ve VALIDADO y lo devuelve
+          // a BORRADOR, que es lo que `stateAfterEdit` siempre quiso decir.
+          return atomico(deps, () => {
+            const meses = [...new Map(fechas.map((f) => [`${f.year}-${f.month}`, f])).values()]
+              .map((f) => ({ mes: f.month, anio: f.year, estado: currentCuadranteEstado(deps, f.month, f.year) }));
+            const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
+            if (publicado) return { ok: false, error: `el cuadrante de ${publicado.mes}/${publicado.anio} está PUBLICADO y no admite ediciones` };
 
-          // Una sola escritura para todo el lote (appendRecords): un mes del generador son
-          // ~60-90 cambios y fila a fila era un lock y una relectura íntegra de la tabla por cada
-          // uno. Además así el lote es atómico y no puede quedar medio aplicado.
-          deps.store.appendRecords("asignaciones", req.cambios.map((c) => (
-            { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen }
-          )));
-          for (const m of meses) {
-            const siguiente = deps.domain.stateAfterEdit(m.estado);
-            if (siguiente !== m.estado) writeCuadranteEstado(deps, session, m.mes, m.anio, siguiente);
-          }
-          return { ok: true, guardados: req.cambios.length };
+            // Una sola escritura para todo el lote (appendRecords): un mes del generador son
+            // ~60-90 cambios y fila a fila era un lock y una relectura íntegra de la tabla por cada
+            // uno. Además así el lote es atómico y no puede quedar medio aplicado.
+            deps.store.appendRecords("asignaciones", req.cambios.map((c) => (
+              { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen }
+            )));
+            for (const m of meses) {
+              const siguiente = deps.domain.stateAfterEdit(m.estado);
+              if (siguiente !== m.estado) writeCuadranteEstado(deps, session, m.mes, m.anio, siguiente);
+            }
+            return { ok: true, guardados: req.cambios.length };
+          });
         });
 
       case "misPreferencias":
         return authed(req, deps, (session) => {
+          // Con `anio`/`mes` como texto la comparación estricta de abajo devolvía `null` en silencio.
+          if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
           const all = deps.store.readLatest("preferencias", PREF_KEY);
           const mine = all.find((p) => p.residenteId === session.sub && p.anio === req.anio && p.mes === req.mes);
           return { ok: true, prefs: mine || null };
@@ -250,11 +290,9 @@ export function handleRequest(rawBody, deps) {
         return authed(req, deps, (session) => {
           if (!req.prefs || typeof req.prefs !== "object") return { ok: false, error: "prefs inválido" };
           if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
-          const { maxGuardias, preferDobles, fechasEvitar, notas } = req.prefs;
-          deps.store.appendRecord("preferencias", {
-            residenteId: session.sub, anio: req.anio, mes: req.mes,
-            maxGuardias, preferDobles, fechasEvitar, notas,
-          });
+          const prefs = validPrefs(req.prefs, req.anio, req.mes, deps);
+          if (prefs.ok === false) return prefs;
+          deps.store.appendRecord("preferencias", { residenteId: session.sub, anio: req.anio, mes: req.mes, ...prefs });
           return { ok: true };
         });
 
@@ -282,40 +320,50 @@ export function handleRequest(rawBody, deps) {
             residenteId = req.residenteId;
           }
 
-          // P-13 (spec.md §8/§8.1, decisión 2026-08-07): simulación preventiva de cobertura.
-          // Solo VACACIONES/ROTACION pasan por aquí — BAJA es impredecible, no se "previene".
-          let riesgos = [];
-          if (req.motivo === "VACACIONES" || req.motivo === "ROTACION") {
-            const preview = deps.domain.previewBloqueoRisk(
-              { residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo },
-              { residentes: allResidentes(deps), bloqueosActivos: allBloqueos(deps), today: deps.today },
-            );
-            if (preview.bloquea) {
-              return {
-                ok: false,
-                error: "el bloqueo dejaría algún día sin nadie disponible de ese grupo dentro de los próximos 3 meses",
-                riesgos: preview.riesgos,
-              };
+          // Simulación y escritura bajo el mismo lock (2026-09-04): dos vacaciones pedidas a la vez por
+          // los dos únicos Pequeños pasaban ambas la simulación (cada una sin ver la otra) y quedaban
+          // las dos escritas aunque juntas dejaran días imposibles — justo lo que P-13 existe para parar.
+          return atomico(deps, () => {
+            // P-13 (spec.md §8/§8.1, decisión 2026-08-07): simulación preventiva de cobertura.
+            // Solo VACACIONES/ROTACION pasan por aquí — BAJA es impredecible, no se "previene".
+            let riesgos = [];
+            if (req.motivo === "VACACIONES" || req.motivo === "ROTACION") {
+              const preview = deps.domain.previewBloqueoRisk(
+                { residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo },
+                { residentes: allResidentes(deps), bloqueosActivos: allBloqueos(deps), today: deps.today },
+              );
+              if (preview.bloquea) {
+                return {
+                  ok: false,
+                  error: "el bloqueo dejaría algún día sin nadie disponible de ese grupo dentro de los próximos 3 meses",
+                  riesgos: preview.riesgos,
+                };
+              }
+              riesgos = preview.riesgos;
             }
-            riesgos = preview.riesgos;
-          }
 
-          const id = deps.store.appendRecord("bloqueos", {
-            residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo,
-            provincia: req.provincia, guardiasEnCentroExterno: req.guardiasEnCentroExterno, activo: true,
+            const id = deps.store.appendRecord("bloqueos", {
+              residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo,
+              provincia: req.provincia, guardiasEnCentroExterno: req.guardiasEnCentroExterno, activo: true,
+            });
+            return { ok: true, id, residenteId, riesgos };
           });
-          return { ok: true, id, residenteId, riesgos };
         });
 
       case "misBloqueos":
-        return authed(req, deps, (session) =>
-          ({ ok: true, bloqueos: activeBloqueosInMonth(deps, req.anio, req.mes).filter((b) => b.residenteId === session.sub) }));
+        return authed(req, deps, (session) => {
+          if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
+          return { ok: true, bloqueos: activeBloqueosInMonth(deps, req.anio, req.mes).filter((b) => b.residenteId === session.sub) };
+        });
 
       // A diferencia de misBloqueos (alcance propio, para Preferencias), esta acción
       // devuelve los bloqueos de TODO el equipo: el validador de CalendarScreen (INV-5/6/7)
       // necesita conocer los bloqueos de todos los residentes, no solo de quien valida.
       case "listBloqueos":
-        return authed(req, deps, () => ({ ok: true, bloqueos: activeBloqueosInMonth(deps, req.anio, req.mes) }));
+        return authed(req, deps, () => {
+          if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
+          return { ok: true, bloqueos: activeBloqueosInMonth(deps, req.anio, req.mes) };
+        });
 
       // Mismo papel que listAsignacionesRango, para bloqueos: los cierres de equidad de
       // INV-3 descuentan las BAJAS de TODO el trimestre (o del año de residencia), no solo
@@ -324,7 +372,11 @@ export function handleRequest(rawBody, deps) {
         return authed(req, deps, () => {
           const rango = validRango(req, deps);
           if (rango.ok === false) return rango;
-          return { ok: true, bloqueos: bloqueosInRange(deps, allBloqueos(deps), rango.desde, rango.hasta) };
+          // Solo las legibles (2026-09-04): esta acción alimenta los cierres de equidad, que hacen
+          // aritmética de fechas y lanzaban con una fila ilegible; la fila sigue visible —para poder
+          // cancelarla— en `listBloqueos`/`misBloqueos`, que es donde se enseña (V-22).
+          const { usables } = partitionBloqueos(deps, allBloqueos(deps));
+          return { ok: true, bloqueos: bloqueosInRange(deps, usables, rango.desde, rango.hasta) };
         });
 
       // FESTIVOS (S-4: datos de entrada, nunca derivados). Lectura por RANGO y abierta a cualquier
@@ -352,6 +404,7 @@ export function handleRequest(rawBody, deps) {
           let filas;
           try {
             filas = req.festivos.map((f) => {
+              if (!f || typeof f !== "object") throw new Error("cada festivo es un objeto {fecha, nombre, ambito}");
               deps.domain.parseISO(f.fecha);
               return { fecha: f.fecha, nombre: f.nombre || "", ambito: f.ambito || "", activo: true };
             });
@@ -367,6 +420,8 @@ export function handleRequest(rawBody, deps) {
         return authed(req, deps, () => {
           const actual = allFestivos(deps).find((f) => f.id === req.id);
           if (!actual) return { ok: false, error: "festivo no encontrado" };
+          // Ya anulado: no se apila otra fila igual (append-only, y un doble clic las duplicaba).
+          if (actual.activo !== true) return { ok: true };
           deps.store.appendRecord("festivos", { ...actual, activo: false });
           return { ok: true };
         });
@@ -384,6 +439,7 @@ export function handleRequest(rawBody, deps) {
             const denegado = requireCicloPermiso(deps, session, "cancelar la ausencia de otro residente");
             if (denegado) return denegado;
           }
+          if (bloqueo.activo !== true) return { ok: true }; // ya cancelado: nada que escribir
           deps.store.appendRecord("bloqueos", { ...bloqueo, activo: false });
           return { ok: true };
         });
@@ -410,6 +466,7 @@ export function handleRequest(rawBody, deps) {
           const residentes = allResidentes(deps);
           const elegibles = deps.domain.eligibleCandidates(residentes, periodoInicio);
           if (!elegibles.includes(session.sub)) return { ok: false, error: "no tienes nivel R3 en ese periodo" };
+          if (activeVolunteers(deps, periodoInicio).includes(session.sub)) return { ok: true }; // ya ofrecido: nada que escribir
           deps.store.appendRecord("voluntariosResponsable", { residenteId: session.sub, periodoInicio, activo: true });
           return { ok: true };
         });
@@ -419,6 +476,7 @@ export function handleRequest(rawBody, deps) {
           if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
           const { periodoInicio } = mandatoPeriod(req.anio);
           if (currentMandate(deps, periodoInicio)) return { ok: false, error: "el responsable de ese periodo ya está decidido" };
+          if (!activeVolunteers(deps, periodoInicio).includes(session.sub)) return { ok: true }; // no estaba ofrecido: nada que retirar
           deps.store.appendRecord("voluntariosResponsable", { residenteId: session.sub, periodoInicio, activo: false });
           return { ok: true };
         });
@@ -433,6 +491,13 @@ export function handleRequest(rawBody, deps) {
           if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
           const denegado = requireCicloPermiso(deps, session, "lanzar el sorteo del Responsable");
           if (denegado) return denegado;
+          // Como pronto, el del año que viene: el mandato «se decide antes de que empiece» (INV-14),
+          // no años antes. Un mandato es append-only e irrevocable, y con el año libre alguien podía
+          // dejar decididos 2029, 2030… con la plantilla de hoy, que para entonces no será la misma.
+          const anioHoy = Number(String(deps.today).slice(0, 4));
+          if (req.anio > anioHoy + 1) return { ok: false, error: `el mandato de ${req.anio} se decide como pronto en ${req.anio - 1}` };
+          // Comprobar-y-escribir bajo el lock: dos pulsaciones simultáneas escribían dos mandatos.
+          return atomico(deps, () => {
           const { periodoInicio, periodoFin } = mandatoPeriod(req.anio);
           if (currentMandate(deps, periodoInicio)) return { ok: false, error: "el responsable de ese periodo ya está decidido" };
           const residentes = allResidentes(deps);
@@ -454,6 +519,7 @@ export function handleRequest(rawBody, deps) {
 
           const id = deps.store.appendRecord("responsables", record);
           return { ok: true, mandato: { id, ...record } };
+          });
         });
 
       // TERCER PUESTO (INV-8, decisión V-18). Autoservicio puro, como el voluntariado del
@@ -520,15 +586,28 @@ export function handleRequest(rawBody, deps) {
         return authed(req, deps, () => {
           if (!EVENTO_TIPOS.has(req.tipo)) return { ok: false, error: "tipo de evento inválido (NAVIDAD o DESPEDIDA)" };
           try { deps.domain.parseISO(req.fecha); } catch (e) { return { ok: false, error: "fecha inválida: " + e.message }; }
-          const voluntarios = Array.isArray(req.voluntarios) ? req.voluntarios : [];
-          const id = deps.store.appendRecord("eventos", { tipo: req.tipo, fecha: req.fecha, voluntarios, designados: [], activo: true });
-          return { ok: true, id };
+          // Uno por tipo y curso (2026-09-04): con dos Navidades activas, `buildMonthContext` se
+          // quedaba con la última en silencio y la primera perdía el trato de INV-9/INV-10. Para
+          // corregir una fecha hay que anular la anterior y crear la nueva, no apilar.
+          const curso = deps.domain.academicYearOf(req.fecha);
+          // Sin duplicados ni basura: dos veces el mismo id dejaba el evento sin poder sortearse
+          // («candidatos vacío» al apartar al primero de una lista de dos iguales).
+          const voluntarios = [...new Set((Array.isArray(req.voluntarios) ? req.voluntarios : []).filter((v) => typeof v === "string" && v))];
+          // La unicidad se comprueba y se escribe bajo el mismo lock: si no, dos Navidades creadas a la
+          // vez pasaban las dos la comprobación.
+          return atomico(deps, () => {
+            const repetido = activeEventos(deps).find((e) => e.tipo === req.tipo && deps.domain.academicYearOf(e.fecha) === curso);
+            if (repetido) return { ok: false, error: `ya hay un evento ${req.tipo} activo en ese curso (el ${repetido.fecha}): anúlalo antes de crear otro` };
+            const id = deps.store.appendRecord("eventos", { tipo: req.tipo, fecha: req.fecha, voluntarios, designados: [], activo: true });
+            return { ok: true, id };
+          });
         });
 
       case "anularEvento":
         return authed(req, deps, () => {
           const actual = deps.store.readLatest("eventos", (r) => r.id).find((e) => e.id === req.id);
           if (!actual) return { ok: false, error: "evento no encontrado" };
+          if (actual.activo !== true) return { ok: true }; // ya anulado
           deps.store.appendRecord("eventos", { ...actual, activo: false });
           return { ok: true };
         });
@@ -569,7 +648,10 @@ export function handleRequest(rawBody, deps) {
       // puro sobre (candidatos, semilla), y la fila queda en `sorteos` para recomputarlo. Un
       // booleano «hubo sorteo» no prueba nada; esto sí.
       case "sortearEvento":
-        return authed(req, deps, () => {
+        // Comprobar («ya está sorteado») y escribir bajo el mismo lock: dos sorteos simultáneos del
+        // mismo evento pasaban ambos la guarda y quedaban dos filas de `sorteos` contradictorias, con
+        // uno de los dos viendo unos designados que no eran los que se escribieron.
+        return authed(req, deps, () => atomico(deps, () => {
           const evento = activeEventos(deps).find((e) => e.id === req.id);
           if (!evento) return { ok: false, error: "evento no encontrado" };
           if (evento.sorteoId) return { ok: false, error: "ese evento ya está sorteado" };
@@ -594,7 +676,7 @@ export function handleRequest(rawBody, deps) {
           });
           deps.store.appendRecord("eventos", { ...evento, designados, sorteoId });
           return { ok: true, designados, sorteoId, semilla };
-        });
+        }));
 
       // IMAGINARIA (INV-13, decisión V-20). Es una HERRAMIENTA, no un validador: dice a quién
       // llamar. La cola se DERIVA del historial de coberturas, nunca se almacena.
@@ -607,12 +689,16 @@ export function handleRequest(rawBody, deps) {
           const todas = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
           const desde = deps.domain.addDays(req.fecha, -1);
           const hasta = deps.domain.addDays(req.fecha, 1);
+          // Las ausencias del día (2026-09-04): sin ellas la cola proponía llamar a quien estaba de
+          // baja. Solo las legibles: una fila con fecha ilegible no puede decir si cubre ese día.
+          const { usables } = partitionBloqueos(deps, allBloqueos(deps));
           return {
             ok: true,
             cola: deps.domain.imaginariaQueue({
               residentes: allResidentes(deps),
               coberturas: activeImaginaria(deps),
               asignaciones: todas.filter((a) => a.fecha >= desde && a.fecha <= hasta),
+              bloqueos: bloqueosInRange(deps, usables, req.fecha, req.fecha),
               grupo: req.grupo, fechaIncidencia: req.fecha,
             }),
           };
@@ -643,6 +729,7 @@ export function handleRequest(rawBody, deps) {
           if (denegado) return denegado;
           const actual = deps.store.readLatest("imaginaria", (r) => r.id).find((c) => c.id === req.id);
           if (!actual) return { ok: false, error: "cobertura no encontrada" };
+          if (actual.activo !== true) return { ok: true }; // ya anulada
           deps.store.appendRecord("imaginaria", { ...actual, activo: false });
           return { ok: true };
         });
@@ -659,7 +746,19 @@ export function handleRequest(rawBody, deps) {
           // `sinResponsable` viaja aquí y no en una acción aparte porque el cliente ya llama a
           // estadoCuadrante al abrir el mes: es lo que le permite avisar de que nadie tiene el
           // mandato y habilitar el ciclo a un Mayor (decisión V-16) sin una petición de más.
-          return { ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio), sinResponsable: mandatoVigente(deps) === null };
+          // `modosGeneracion` (V-47): el cliente solo ofrece «completar» si el servidor desplegado lo
+          // entiende. Sin esto, un cliente nuevo contra un Apps Script aún sin redesplegar mandaría
+          // `modo: "completar"`, el servidor viejo lo ignoraría y REEMPLAZARÍA el mes — borrando justo
+          // las guardias que la pantalla prometía respetar. El cliente se publica en Pages con el
+          // merge; el servidor, cuando alguien lo redespliega a mano: no se puede dar por hecho el orden.
+          // `responsableId`: quién tiene HOY el mandato, releído del store. El `rol` del token se firmó
+          // en el login y el ganador del sorteo de esta tarde seguiría viéndose sin permiso hasta volver
+          // a entrar, aunque el servidor (que relee el mandato, V-16) ya le aceptase todo.
+          const mandato = mandatoVigente(deps);
+          return {
+            ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio), sinResponsable: mandato === null,
+            responsableId: mandato ? mandato.residenteId : null, modosGeneracion: [...MODOS_GENERACION],
+          };
         });
 
       // BORRADOR->VALIDADO (Fase 6.2, decisión V-9/V-10): solo el Responsable en mandato, y
@@ -676,6 +775,10 @@ export function handleRequest(rawBody, deps) {
         return authed(req, deps, (session) => {
           const denegado = requireCicloPermiso(deps, session, "validar el cuadrante");
           if (denegado) return denegado;
+          // Bajo el lock de escritura (2026-09-04): entre leer el mes, validarlo y escribir VALIDADO
+          // otro residente podía guardar una celda, y el mes quedaba VALIDADO con una guardia que
+          // nadie validó (y `guardarAsignaciones`, que leyó BORRADOR, no lo revertía).
+          return atomico(deps, () => {
           const estadoActual = validCuadranteMesAnio(req, deps);
           if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
           if (estadoActual === "PUBLICADO") return { ok: false, error: "el cuadrante ya está publicado" };
@@ -694,6 +797,7 @@ export function handleRequest(rawBody, deps) {
           }
           writeCuadranteEstado(deps, session, req.mes, req.anio, "VALIDADO");
           return { ok: true, estado: "VALIDADO", violaciones };
+          });
         });
 
       // Fase 7.1 (decisión V-11a): publicar proyecta de verdad al Sheet legible en el MISMO paso
@@ -707,12 +811,14 @@ export function handleRequest(rawBody, deps) {
         return authed(req, deps, (session) => {
           const denegado = requireCicloPermiso(deps, session, "publicar el cuadrante");
           if (denegado) return denegado;
+          return atomico(deps, () => {
           const estadoActual = validCuadranteMesAnio(req, deps);
           if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
           if (!deps.domain.canPublish(estadoActual)) return { ok: false, error: "el cuadrante debe estar VALIDADO antes de publicarse" };
           const proyeccion = projectCuadranteToSheets(deps, req.mes, req.anio);
           writeCuadranteEstado(deps, session, req.mes, req.anio, "PUBLICADO");
           return { ok: true, estado: "PUBLICADO", proyeccion };
+          });
         });
 
       case "despublicarCuadrante":
@@ -752,7 +858,10 @@ function handleLogin(req, deps) {
   const v = verifyIdentity(req, deps);
   if (!v.ok) return { ok: false, error: v.reason };
 
-  const residente = allResidentes(deps).find((r) => (r.email || "").toLowerCase() === v.email);
+  const residentes = allResidentes(deps);
+  // `trim()` además de minúsculas: el Sheet se edita a mano y un espacio de más al final del email
+  // dejaba a esa persona sin poder entrar — y peor, el alta autoservicio le creaba un DUPLICADO.
+  const residente = residentes.find((r) => emailNormalizado(r.email) === v.email);
   if (!residente) {
     // El email SÍ quedó verificado con Google (aud/iss/email_verified/exp ya comprobados);
     // se emite un token de corta vida para que el cliente pueda completar el alta sin
@@ -761,7 +870,10 @@ function handleLogin(req, deps) {
     return { ok: false, error: "email no vinculado a ningún residente", pendingToken };
   }
 
-  return sessionFor(residente, deps);
+  // La lista viaja con la sesión (2026-09-04): ya está leída para resolver el email, y el cliente
+  // la pedía otra vez con `listResidentes` nada más entrar — una ida y vuelta entera a Apps
+  // Script entre el clic en Google y ver algo en Inicio. Es la misma lista que da `listResidentes`.
+  return { ...sessionFor(residente, deps), residentes };
 }
 
 /**
@@ -782,13 +894,44 @@ function handleAlta(req, deps) {
     email = v.email;
   }
 
-  if (!req.nombre || !req.fechaInicio || !req.fechaFin) return { ok: false, error: "nombre, fechaInicio y fechaFin son obligatorios" };
+  if (!req.nombre || !String(req.nombre).trim() || !req.fechaInicio || !req.fechaFin) return { ok: false, error: "nombre, fechaInicio y fechaFin son obligatorios" };
+  // Mismo `validRango` que `editarResidente` (V-22). Sin esto entraba cualquier cadena, y una
+  // fecha que no es ISO en `residentes` no falla aquí: falla DESPUÉS y en todas partes, porque
+  // `periodsOfResident` lanza y cada pantalla deriva el nivel de TODOS los residentes al pintar —
+  // un alta con "31/05/2026" dejaba Inicio y el cuadrante en blanco para el equipo entero.
+  const malRango = validRango({ desde: req.fechaInicio, hasta: req.fechaFin }, deps);
+  if (malRango.ok === false) return { ok: false, error: "fechas de residencia inválidas: " + malRango.error };
 
-  const yaExiste = allResidentes(deps).some((r) => (r.email || "").toLowerCase() === email);
-  if (yaExiste) return { ok: false, error: "ese email ya está vinculado a un residente" };
+  const nombre = String(req.nombre).trim();
+  // El nombre se vuelca también en las pestañas publicadas (`projection.js`), donde `setValues` sí
+  // interpreta como FÓRMULA cualquier celda que empiece por «=» (en las tablas de datos lo evita el
+  // apóstrofe de `sheets-schema.js`, pero la proyección escribe texto y fórmulas mezclados y no
+  // puede prefijarlo todo). Ningún nombre de persona empieza por «=».
+  if (nombre.startsWith("=")) return { ok: false, error: "el nombre no puede empezar por «=»" };
 
-  const id = deps.store.appendRecord("residentes", { nombre: req.nombre, email, fechaInicio: req.fechaInicio, fechaFin: req.fechaFin });
-  return sessionFor({ id, nombre: req.nombre }, deps);
+  // Comprobar-y-escribir bajo el lock: dos altas simultáneas del mismo email (dos pestañas, doble
+  // clic con red lenta) pasaban ambas la comprobación y dejaban dos residentes para siempre.
+  return atomico(deps, () => {
+    const yaExiste = allResidentes(deps).some((r) => emailNormalizado(r.email) === email);
+    if (yaExiste) return { ok: false, error: "ese email ya está vinculado a un residente" };
+
+    const id = deps.store.appendRecord("residentes", { nombre, email, fechaInicio: req.fechaInicio, fechaFin: req.fechaFin });
+    // Como en `handleLogin`: la lista completa (con el recién dado de alta) viaja con la sesión.
+    return { ...sessionFor({ id, nombre }, deps), residentes: allResidentes(deps) };
+  });
+}
+
+/**
+ * Comprobar-y-escribir bajo el lock (ver `sheets-store.js:transaction`). Tolera un store sin
+ * `transaction` (un doble antiguo en tests): entonces se ejecuta sin lock, como hasta ahora.
+ */
+function atomico(deps, fn) {
+  return typeof deps.store.transaction === "function" ? deps.store.transaction(fn) : fn();
+}
+
+/** Email tal y como se compara con el verificado por Google (verify-token.js ya lo pone en minúsculas). */
+function emailNormalizado(email) {
+  return String(email || "").trim().toLowerCase();
 }
 
 /** Prefijo "YYYY-MM" de una fecha ISO, para filtrar asignaciones de un mes concreto. */
@@ -820,6 +963,44 @@ function validRango(req, deps) {
   }
   if (req.desde > req.hasta) return { ok: false, error: "rango de fechas inválido" };
   return { desde: req.desde, hasta: req.hasta };
+}
+
+const PREFER_DOBLES = new Set(["", "VIERNES_DOMINGO", "JUEVES_SABADO"]); // Prefs.jsx:DOBLETE_LABEL
+const NOTAS_MAX = 500;
+
+/**
+ * Preferencias de un mes, validadas campo a campo (2026-09-04). Antes entraba cualquier cosa y,
+ * como la tabla es append-only y el prompt del generador la lee literal (`ai-prompt.js:
+ * seccionPreferencias`), un `maxGuardias: "abc"` acababa como «querría no pasar de abc guardias»
+ * delante del modelo, y una fecha de otro mes en `fechasEvitar` se le pedía evitar en un mes en el
+ * que no existe. Los campos ausentes se normalizan a su valor neutro (la pantalla manda siempre
+ * los cuatro, pero el endpoint es público). Devuelve el registro listo o el `{ok:false,error}`.
+ */
+function validPrefs(prefs, anio, mes, deps) {
+  const out = {};
+  const mg = prefs.maxGuardias;
+  if (mg === undefined || mg === null || mg === "") out.maxGuardias = undefined;
+  else if (typeof mg !== "number" || !Number.isInteger(mg) || mg < 0 || mg > 6) return { ok: false, error: "maxGuardias debe ser un número entero entre 0 y 6" };
+  else out.maxGuardias = mg;
+
+  const pd = prefs.preferDobles === undefined || prefs.preferDobles === null ? "" : prefs.preferDobles;
+  if (!PREFER_DOBLES.has(pd)) return { ok: false, error: `preferDobles inválido: ${JSON.stringify(prefs.preferDobles)} (válidos: VIERNES_DOMINGO, JUEVES_SABADO o vacío)` };
+  out.preferDobles = pd;
+
+  const fe = prefs.fechasEvitar === undefined || prefs.fechasEvitar === null ? [] : prefs.fechasEvitar;
+  if (!Array.isArray(fe)) return { ok: false, error: "fechasEvitar debe ser una lista de fechas" };
+  const prefix = monthPrefix(anio, mes);
+  for (const f of fe) {
+    try { deps.domain.parseISO(f); } catch (e) { return { ok: false, error: "fechasEvitar con fecha inválida: " + e.message }; }
+    if (!String(f).startsWith(prefix)) return { ok: false, error: `fechasEvitar: ${f} no es un día de ${mes}/${anio}` };
+  }
+  out.fechasEvitar = [...new Set(fe)].sort();
+
+  const notas = prefs.notas === undefined || prefs.notas === null ? "" : prefs.notas;
+  if (typeof notas !== "string") return { ok: false, error: "notas debe ser texto" };
+  if (notas.length > NOTAS_MAX) return { ok: false, error: `notas demasiado largas (máximo ${NOTAS_MAX} caracteres)` };
+  out.notas = notas.trim();
+  return out;
 }
 
 /** Estado actual de la tabla de festivos (última reinserción gana). */
@@ -1151,9 +1332,17 @@ function promptData(deps, mes, anio, snap) {
   const monthStart = `${prefix}-01`;
 
   const porNivel = { R4: [], R3: [], R2: [], R1: [] };
+  const finDeMes = `${prefix}-31`; // comparación de cadenas: cualquier día del mes es <= a esto
   for (const r of snap.residentes) {
     const nivel = deps.domain.levelOn(deps.domain.periodsOfResident(r), monthStart);
-    if (porNivel[nivel]) porNivel[nivel].push({ id: r.id, nombre: r.nombre });
+    if (!porNivel[nivel]) continue;
+    // Presencia parcial en el mes: quien termina (fechaFin) o empieza (fechaInicio) a mitad. El
+    // modelo no ve fechas de residencia, así que se le dice en la propia lista; el router rechaza
+    // como FORMATO cualquier guardia fuera de esos días (`noAsignablesEseDia`).
+    const entrada = { id: r.id, nombre: r.nombre };
+    if (typeof r.fechaFin === "string" && r.fechaFin >= monthStart && r.fechaFin <= finDeMes) entrada.hasta = r.fechaFin;
+    if (typeof r.fechaInicio === "string" && r.fechaInicio > monthStart && r.fechaInicio <= finDeMes) entrada.desde = r.fechaInicio;
+    porNivel[nivel].push(entrada);
   }
 
   // `snap.asignaciones` es la tabla ENTERA: no hace falta acotar el rango como hacía el cliente
@@ -1164,8 +1353,19 @@ function promptData(deps, mes, anio, snap) {
   acumuladosMap.forEach((v, k) => { acumulados[k] = v; });
 
   const curso = deps.domain.academicYearOf(monthStart);
+  // Los dos días pegados al mes: la norma 13 del prompt (descanso, INV-15 en `error`) no se puede
+  // cumplir sin saber quién tuvo la guardia del último día del mes anterior, y el validador SÍ la
+  // mira (`buildCuadranteCtx` mete ese borde en el histórico) — así que sin esto el primer intento
+  // caía casi siempre que alguien tenía el 31.
+  const diaAntes = deps.domain.addDays(monthStart, -1);
+  const siguiente = mes === 12 ? { mes: 1, anio: anio + 1 } : { mes: mes + 1, anio };
+  const diaDespues = `${monthPrefix(siguiente.anio, siguiente.mes)}-01`;
   return {
     mes, anio, porNivel, acumulados,
+    bordes: snap.asignaciones.filter((a) => CODIGOS_GUARDIA.has(a.codigo) && (a.fecha === diaAntes || a.fecha === diaDespues)),
+    // Las celdas V/R/B del mes: la tarjeta promete conservarlas, y una guardia propuesta con la
+    // misma clave las pisaría (el router la rechaza como FORMATO; esto es para que no la proponga).
+    marcadores: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix) && MARCADORES_REJILLA.has(a.codigo)),
     bloqueos: bloqueosInRange(deps, snap.bloqueos, monthStart, `${prefix}-31`),
     festivos: (snap.festivos || []).filter((f) => f.fecha.startsWith(prefix)),
     // Los puentes se DERIVAN de los festivos (§3.4), nunca se piden ni se escriben a mano.
@@ -1196,10 +1396,19 @@ function esAccesoDesarrolladorIA(deps, session) {
  * contexto → propuesta del modelo → VALIDACIÓN → escritura. La escritura es el último paso y solo
  * ocurre si el validador calla; si no calla en 3 intentos, no se escribe ni una fila y queda la
  * bitácora diciendo que ese mes hay que montarlo a mano.
+ *
+ * Dos modos (decisión V-47). `completar` (defecto): las guardias que ya hay en la rejilla —las
+ * que cada residente apuntó de antemano porque ya las tenía comprometidas— son inamovibles: van
+ * al prompt como «ya fijadas», el validador juzga el mes RESULTANTE (fijadas + propuesta), y al
+ * escribir no se borra nada. `reemplazar`: lo de V-45, el mes entero se sustituye. Antes solo
+ * existía el segundo, y el generador se llevaba por delante justo lo que había que respetar.
  */
 function handleGenerarIA(req, deps, session) {
   const denegado = requireCicloPermiso(deps, session, "generar el cuadrante con IA");
   if (denegado && !esAccesoDesarrolladorIA(deps, session)) return denegado;
+
+  const modo = req.modo === undefined ? "completar" : req.modo;
+  if (!MODOS_GENERACION.has(modo)) return { ok: false, error: `modo de generación inválido: ${JSON.stringify(req.modo)} (válidos: completar, reemplazar)` };
 
   const estadoActual = validCuadranteMesAnio(req, deps);
   if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
@@ -1229,21 +1438,53 @@ function handleGenerarIA(req, deps, session) {
   }
 
   const prefix = monthPrefix(req.anio, req.mes);
+  const monthStart = `${prefix}-01`;
   const existentes = snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
-  const prompt = buildGenerationPrompt(promptData(deps, req.mes, req.anio, snap));
-  const planDe = (propuesta) => deps.domain.monthReplacementPlan({
-    mes: req.mes, anio: req.anio, residentes: snap.residentes, existentes, propuesta,
+  const completar = modo === "completar";
+  // Los MISMOS residentes que ve el prompt (nivel R1–R4 el día 1). Con la tabla entera, el id de
+  // alguien FINALIZADO o aún no incorporado era «conocido» para el plan, no caía en FORMATO, e INV-1
+  // solo lo marcaba como aviso (V-21, pensado para la rejilla manual): la guardia de quien ya se fue
+  // se ESCRIBÍA. Para el generador es un defecto de la RESPUESTA: nadie fuera de su lista.
+  const asignablesDe = (snapX) => snapX.residentes.filter((r) => NIVELES_ASIGNABLES.has(deps.domain.levelOn(deps.domain.periodsOfResident(r), monthStart)));
+  // `snapX` porque el plan se recalcula con el snapshot fresco en el segundo juicio (bajo el lock):
+  // quien dejó de ser asignable mientras el modelo pensaba (periodos editados) cae en `desconocidos`.
+  const planDe = (propuesta, snapX = snap) => (completar ? deps.domain.monthCompletionPlan : deps.domain.monthReplacementPlan)({
+    mes: req.mes, anio: req.anio, residentes: asignablesDe(snapX), existentes, propuesta,
   });
+  // Y día a día: el nivel se mira el día 1 para la LISTA, pero quien termina la residencia a mitad
+  // de mes (o se incorpora después del día 1) no puede hacer guardia los días en que ya no está (o
+  // aún no está). INV-1 solo lo avisa (V-21, pensado para la rejilla manual); para el generador es
+  // un defecto de la respuesta y se rechaza — y el prompt le dice al modelo hasta/desde qué día cuenta.
+  const noAsignablesEseDia = (propuesta, snapX) => {
+    const porId = new Map(snapX.residentes.map((r) => [r.id, r]));
+    return propuesta.filter((a) => {
+      const r = porId.get(a.residenteId);
+      if (!r || typeof a.fecha !== "string" || !a.fecha.startsWith(prefix)) return false; // ids desconocidos y fechas de otro mes ya tienen su rechazo
+      return !NIVELES_ASIGNABLES.has(deps.domain.levelOn(deps.domain.periodsOfResident(r), a.fecha));
+    });
+  };
+  // Las fijadas se calculan UNA vez con la propuesta vacía: no dependen de lo que el modelo diga.
+  const fijadas = completar ? planDe([]).fijadas : [];
+  // En «reemplazar» también sobrevive algo: los 3P ya puestos, que `monthReplacementPlan` solo borra
+  // si la propuesta trae 3P (V-38). Si el modelo no sabe que están, pone a esa persona el día
+  // anterior o el siguiente y el mes escrito incumple INV-15 (descanso, regla legal) sin que el juez
+  // lo viera — porque juzgaba la propuesta sola, no lo que iba a quedar en la rejilla.
+  const conservadas = completar ? [] : existentes.filter((a) => a.codigo === "3P");
+  const prompt = buildGenerationPrompt({ ...promptData(deps, req.mes, req.anio, snap), fijadas: completar ? fijadas : conservadas });
+  const modelo = (deps.llm && deps.llm.modelo) || "(sin declarar)";
 
   // El juez: exactamente el mismo que usa `marcarValidado`, ni más estricto ni más laxo. Un
   // generador más exigente que el validador pediría un mes que ninguna persona podría montar a
-  // mano tampoco, y la app se quedaría sin cuadrante por exceso de celo.
-  const validar = (propuesta) => {
-    const plan = planDe(propuesta);
+  // mano tampoco, y la app se quedaría sin cuadrante por exceso de celo. Parametrizado por el
+  // snapshot porque se vuelve a juzgar, con uno fresco, justo antes de escribir (ver abajo).
+  const validarCon = (snapX) => (propuesta) => {
+    const plan = planDe(propuesta, snapX);
     // El guardarraíl de V-31, expresado como violaciones para que viaje al reintento: una fecha de
     // otro mes o un id inventado no incumplen ningún invariante (`validateMonth` ni los mira, sus
     // índices solo tienen días del mes y `desconocidos` es aviso) y sin embargo se ESCRIBIRÍAN —
-    // en otro mes, o como filas que nadie puede ver ni corregir desde la rejilla.
+    // en otro mes, o como filas que nadie puede ver ni corregir desde la rejilla. En modo completar
+    // entra también pisar una fijada con otro código: se pidió respetarla, y «respetar» no admite
+    // que el modelo la reescriba a su gusto.
     const rechazos = [
       ...plan.fueraDelMes.map((a) => ({
         invariante: "FORMATO", severidad: "error",
@@ -1251,51 +1492,165 @@ function handleGenerarIA(req, deps, session) {
       })),
       ...plan.desconocidos.map((a) => ({
         invariante: "FORMATO", severidad: "error", residenteId: a.residenteId,
-        detalle: `el residenteId "${a.residenteId}" no es de ningún residente: usa exactamente los ids de la lista de arriba`,
+        detalle: `el residenteId "${a.residenteId}" no está en la lista de residentes activos de este mes: usa exactamente los ids de la lista de arriba`,
+      })),
+      ...noAsignablesEseDia(propuesta, snapX).map((a) => ({
+        invariante: "FORMATO", severidad: "error", residenteId: a.residenteId,
+        detalle: `el residente "${a.residenteId}" no está en activo el ${a.fecha} (mira su «solo desde/hasta» en la lista): no le pongas guardia ese día`,
+      })),
+      ...(plan.conflictos || []).map((c) => ({
+        invariante: "FORMATO", severidad: "error", residenteId: c.fijada.residenteId,
+        detalle: `la guardia ya fijada de "${c.fijada.residenteId}" el ${c.fijada.fecha} es ${c.fijada.codigo} y tu respuesta la cambia a ${c.propuesta.codigo}: las guardias fijadas se mantienen tal cual`,
+      })),
+      // La tabla es una rejilla por clave y «la última fila gana»: con la misma persona y día dos
+      // veces (G y 3P) el validador juzgaba una lista y el Sheet guardaba otra — el día perdía su
+      // Mayor después de que el validador lo diera por bueno.
+      ...(plan.duplicadas || []).map((d) => ({
+        invariante: "FORMATO", severidad: "error", residenteId: d.residenteId,
+        detalle: `el ${d.fecha} el residenteId "${d.residenteId}" aparece ${d.codigos.length} veces (${d.codigos.join(", ")}): una sola asignación por residente y día`,
+      })),
+      // Una celda V/R/B la conserva la rejilla solo si nadie escribe encima con su clave: la tarjeta
+      // promete conservarlas en los dos modos, así que proponer guardia ahí es un defecto de la respuesta.
+      ...(plan.pisados || []).map((x) => ({
+        invariante: "FORMATO", severidad: "error", residenteId: x.marcador.residenteId,
+        detalle: `la celda de "${x.marcador.residenteId}" el ${x.marcador.fecha} está marcada ${x.marcador.codigo} en la rejilla: no propongas guardia a esa persona ese día`,
       })),
     ];
     if (rechazos.length > 0) return rechazos; // no vale la pena juzgar un mes que ni siquiera es este
+    // Se juzga siempre el mes RESULTANTE, lo que va a quedar escrito: en completar, lo fijado más lo
+    // que la propuesta añade (juzgar solo la propuesta daría por bueno un día en que el modelo,
+    // ignorando una fijada, pone a otro Mayor — y ese día tendría dos al escribirse); en reemplazar,
+    // la propuesta más las guardias que el plan NO va a borrar (los 3P que sobreviven por V-38:
+    // `plan.marcadores` son exactamente las filas no borrables para ESTA propuesta).
+    const aJuzgar = completar
+      ? [...plan.fijadas, ...plan.cambios]
+      : [...plan.marcadores.filter((a) => CODIGOS_GUARDIA.has(a.codigo)), ...propuesta];
     return [
-      ...deps.domain.validateMonth(buildCuadranteCtx(deps, req.mes, req.anio, snap, propuesta)),
-      ...deps.domain.validateThirdPost(buildThirdPostCtx(deps, req.mes, req.anio, snap, propuesta)),
+      ...deps.domain.validateMonth(buildCuadranteCtx(deps, req.mes, req.anio, snapX, aJuzgar)),
+      ...deps.domain.validateThirdPost(buildThirdPostCtx(deps, req.mes, req.anio, snapX, aJuzgar)),
     ];
   };
+  const validar = validarCon(snap);
 
-  const modelo = (deps.llm && deps.llm.modelo) || "(sin declarar)";
+  // Si lo ya fijado incumple POR SÍ SOLO una regla dura (dos días seguidos apuntados a mano, una
+  // guardia sobre la propia baja, un R1 en julio), ninguna propuesta puede arreglarlo —tocar una
+  // fijada es FORMATO— y los tres intentos se irían, a un minuto y una llamada al modelo cada uno,
+  // en culpar al modelo con un «hay que montar este mes a mano». Se corta antes de gastar ninguno y
+  // se dice la causa real. Los INV-1 de los días sin cubrir se excluyen porque son justo lo que el
+  // modelo va a rellenar; los de composición entre fijadas (dos del mismo grupo el mismo día) no.
+  if (completar && fijadas.length > 0) {
+    // INV-1 se descarta SOLO donde es un hueco (menos de dos fijadas ocupando puesto ese día): con dos
+    // o más, el error es de composición entre fijadas (dos Mayores el mismo día) y el modelo tampoco
+    // puede arreglarlo. Criterio estructural por `fecha`, nunca por el texto del mensaje (V-14).
+    const fijadasPorDia = new Map();
+    for (const f of fijadas) if (CODIGOS_GUARDIA.has(f.codigo)) fijadasPorDia.set(f.fecha, (fijadasPorDia.get(f.fecha) || 0) + 1);
+    // Y una fijada de alguien que no está en activo ese día (FINALIZADO, aún no incorporado, periodos
+    // editados después de apuntarla): el prompt exigiría repetirla y el plan la rechazaría como
+    // desconocida — un modelo obediente fallaría siempre.
+    const porId = new Map(snap.residentes.map((r) => [r.id, r]));
+    const fijadasAjenas = fijadas.filter((f) => {
+      const r = porId.get(f.residenteId);
+      return !r || !NIVELES_ASIGNABLES.has(deps.domain.levelOn(deps.domain.periodsOfResident(r), f.fecha));
+    }).map((f) => ({
+      invariante: "FORMATO", severidad: "error", residenteId: f.residenteId, fecha: f.fecha,
+      detalle: `la guardia ya fijada de "${f.residenteId}" el ${f.fecha} es de alguien que no está en activo ese día: quítala o corrige sus fechas antes de generar`,
+    }));
+    const previos = [
+      ...fijadasAjenas,
+      ...validar([]).filter((v) => v.severidad === "error" && (v.invariante !== "INV-1" || (fijadasPorDia.get(v.fecha) || 0) >= 2)),
+    ];
+    if (previos.length > 0) {
+      escribirBitacora(deps, session, req, modelo, 0, "FIJADAS_INVALIDAS", previos, modo);
+      return {
+        ok: false, resultado: "FIJADAS_INVALIDAS", modo, intentos: 0, revisionManual: false, violaciones: previos,
+        error: "las guardias que ya están en la rejilla incumplen por sí solas reglas obligatorias: corrígelas en el cuadrante antes de generar (no se ha llamado al modelo ni se ha escrito nada)",
+      };
+    }
+  }
+
   const r = generateSchedule({ prompt, llm: deps.llm.generar, validar });
 
   if (!r.ok) {
-    escribirBitacora(deps, session, req, modelo, r.intentos, r.resultado, r.violaciones);
+    escribirBitacora(deps, session, req, modelo, r.intentos, r.resultado, r.violaciones, modo);
     return {
-      ok: false, error: r.error, resultado: r.resultado,
+      ok: false, error: r.error, resultado: r.resultado, modo,
       revisionManual: r.resultado === "REVISION_MANUAL",
       intentos: r.intentos, violaciones: r.violaciones,
     };
   }
 
   // Mismo camino de escritura que el «Aplicar» de siempre (V-31): un solo lote append-only con la
-  // propuesta MÁS una fila de borrado por cada guardia previa que no se pisa por clave. No hay una
-  // segunda vía de escritura, así que la IA no puede saltarse ningún control que ya existía.
+  // propuesta MÁS —solo en modo reemplazar— una fila de borrado por cada guardia previa que no se
+  // pisa por clave. No hay una segunda vía de escritura, así que la IA no puede saltarse ningún
+  // control que ya existía. En modo completar el lote puede quedar VACÍO (el mes ya estaba
+  // completo y el modelo lo devolvió tal cual): `appendRecords` no escribe nada y se dice.
+  //
+  // Bajo el lock, y solo la escritura (2026-09-04): la generación tarda un minuto largo y no se
+  // puede tener el lock todo ese tiempo (bloquearía cualquier guardado del equipo hasta agotar
+  // los 30 s de espera). Lo que sí se hace es RELEER el mes dentro del lock: si alguien guardó
+  // una celda o cambió el estado mientras el modelo pensaba, la propuesta se validó contra un mes
+  // que ya no existe y no se escribe — se dice y se vuelve a intentar, que cuesta un minuto; una
+  // guardia nueva pisada en silencio no tiene arreglo que nadie vaya a notar.
   const plan = planDe(r.asignaciones);
-  deps.store.appendRecords("asignaciones", plan.cambios);
-  const siguiente = deps.domain.stateAfterEdit(estadoActual);
-  if (siguiente !== estadoActual) writeCuadranteEstado(deps, session, req.mes, req.anio, siguiente);
-  escribirBitacora(deps, session, req, modelo, r.intentos, "APLICADO", r.violaciones);
+  const huella = (lista) => lista.map((a) => `${a.fecha}|${a.residenteId}|${a.codigo}|${a.origen || ""}`).sort().join("\n");
+  const escrito = atomico(deps, () => {
+    const estadoAhora = currentCuadranteEstado(deps, req.mes, req.anio);
+    const snapAhora = monthSnapshot(deps);
+    const existentesAhora = snapAhora.asignaciones.filter((a) => a.fecha.startsWith(prefix));
+    if (estadoAhora !== estadoActual || huella(existentesAhora) !== huella(existentes)) return null;
+    // La huella solo cubre el mes: una BAJA registrada mientras el modelo pensaba (`crearBloqueo`
+    // está abierto a cualquiera para sí mismo) no la cambia, y la propuesta se juzgó contra unas
+    // ausencias que ya no son las de ahora — se habrían escrito guardias sobre una baja médica
+    // (INV-5, la regla legal). Lo mismo con un residente nuevo o unos periodos editados. Volver a
+    // juzgar cuesta milisegundos: solo se escribe si el mes resultante sigue sin errores AHORA.
+    if (snapAhora.bloqueosCorruptos.length > 0) return null;
+    if (validarCon(snapAhora)(r.asignaciones).some((v) => v.severidad === "error")) return null;
+    deps.store.appendRecords("asignaciones", plan.cambios);
+    const siguiente = plan.cambios.length > 0 ? deps.domain.stateAfterEdit(estadoActual) : estadoActual;
+    if (siguiente !== estadoActual) writeCuadranteEstado(deps, session, req.mes, req.anio, siguiente);
+    return { siguiente };
+  });
+  if (!escrito) {
+    escribirBitacora(deps, session, req, modelo, r.intentos, "CONFLICTO", r.violaciones, modo);
+    return {
+      ok: false, resultado: "CONFLICTO", modo, intentos: r.intentos, violaciones: r.violaciones, revisionManual: false,
+      error: `el cuadrante de ${req.mes}/${req.anio} cambió mientras se generaba (alguien guardó celdas, registró una ausencia o cambió su estado): no se ha escrito nada, vuelve a intentarlo`,
+    };
+  }
+  escribirBitacora(deps, session, req, modelo, r.intentos, "APLICADO", r.violaciones, modo);
 
   return {
-    ok: true, estado: siguiente, modelo, intentos: r.intentos,
-    guardados: plan.cambios.length, borradas: plan.borradas.length,
+    ok: true, estado: escrito.siguiente, modelo, intentos: r.intentos, modo,
+    guardados: plan.cambios.length, borradas: plan.borradas.length, respetadas: completar ? fijadas.length : plan.marcadores.filter((a) => CODIGOS_GUARDIA.has(a.codigo)).length,
     // Los avisos que quedan viajan de vuelta: no bloquean (V-14), pero quien acaba de guardar un
     // mes tiene derecho a ver que cojea en equidad antes de darlo por bueno.
     violaciones: r.violaciones,
   };
 }
 
-function escribirBitacora(deps, session, req, modelo, intentos, resultado, violaciones) {
-  deps.store.appendRecord("generaciones", {
-    mes: req.mes, anio: req.anio, fecha: deps.today, actorId: session.sub,
-    modelo, intentos, resultado, violaciones: violaciones || [],
+function escribirBitacora(deps, session, req, modelo, intentos, resultado, violaciones, modo) {
+  // Acotada y sin lanzar (2026-09-04). Acotada: 500 ids inventados daban 500 violaciones y ~96 KB
+  // de JSON, por encima de lo que admite una celda de Sheets, y `setValues` lanzaba. Sin lanzar: en
+  // el caso APLICADO el mes YA está escrito, y un fallo de la bitácora convertido en `ok:false`
+  // haría creer que no se guardó nada — y regenerar en «reemplazar» un mes recién generado. La
+  // bitácora es memoria de lo que pasó, nunca puede decidir si pasó.
+  const lista = Array.isArray(violaciones) ? violaciones : [];
+  const acorta = (v) => ({
+    ...v,
+    detalle: String((v && v.detalle) || "").slice(0, BITACORA_MAX_DETALLE),
+    ...(v && typeof v.residenteId === "string" ? { residenteId: v.residenteId.slice(0, 100) } : {}),
   });
+  const recorte = lista.slice(0, BITACORA_MAX_VIOLACIONES).map(acorta);
+  while (recorte.length > 0 && JSON.stringify(recorte).length > BITACORA_MAX_CHARS) recorte.pop();
+  if (recorte.length < lista.length) recorte.push({ invariante: "BITACORA", severidad: "aviso", detalle: `y ${lista.length - recorte.length} más (recortado)` });
+  try {
+    deps.store.appendRecord("generaciones", {
+      mes: req.mes, anio: req.anio, fecha: deps.today, actorId: session.sub,
+      modelo, intentos, resultado, violaciones: recorte, modo: String(modo || "").toUpperCase(),
+    });
+  } catch (e) {
+    // Se traga a propósito (ver arriba). Code.gs no expone un logger a través de `deps`.
+  }
 }
 
 /**
@@ -1309,8 +1664,11 @@ function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps), propuest
   const monthStart = `${prefix}-01`;
   const bloqueos = bloqueosInRange(deps, snap.bloqueos, monthStart, `${prefix}-31`);
   const asignacionesDelMes = propuesta || snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
-  const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
-  const historicas = desdeRotacion ? snap.asignaciones.filter((a) => a.fecha >= desdeRotacion && a.fecha < monthStart) : [];
+  // El histórico lleva SIEMPRE los dos días de fuera del mes (2026-09-04): INV-15 juzga el par de
+  // días consecutivos y cuenta con que «el histórico ya llega», pero aquí solo llegaba cuando había
+  // una rotación cercana (C-2). En el caso normal, una guardia el día 1 pegada a otra el último día
+  // del mes anterior pasaba `marcarValidado`, y el generador con IA la ESCRIBÍA aunque el prompt le
+  // pidiera lo contrario. Calendar.jsx ya lo hacía por su cuenta (`bordes`); el servidor es el juez.
   // Con margen hacia atrás: el vecino del día 1 cae en el mes anterior y decide si es puente
   // (§3.4). Se cogen los festivos desde el 1 del mes anterior —de más, y son inertes: isHoliday
   // compara fechas exactas y bridgesOfMonth solo mira día±1— en vez de restar un día, para no
@@ -1319,6 +1677,15 @@ function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps), propuest
   const mesAnterior = mes === 1 ? `${anio - 1}-12` : `${anio}-${String(mes - 1).padStart(2, "0")}`;
   const mesSiguiente = mes === 12 ? `${anio + 1}-01` : `${anio}-${String(mes + 1).padStart(2, "0")}`;
   const festivos = (snap.festivos || []).filter((f) => f.fecha >= `${mesAnterior}-01` && f.fecha <= `${mesSiguiente}-01`);
+  // El mismo margen para las asignaciones: el mes anterior entero (sobra, y es inerte: cada
+  // invariante mira solo los días del mes, salvo INV-15 que juzga el par con la víspera del día 1,
+  // e INV-7, que ya pedía este histórico por C-2) y el día 1 del siguiente. Sin la rotación cercana
+  // el histórico era `[]`, así que una guardia el día 1 pegada a la del último día del mes anterior
+  // pasaba `marcarValidado` y el generador con IA la ESCRIBÍA aunque el prompt le pidiera lo
+  // contrario. Calendar.jsx ya lo hacía por su cuenta (`bordes`); el servidor es el juez.
+  const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
+  const desdeHistorico = desdeRotacion && desdeRotacion < `${mesAnterior}-01` ? desdeRotacion : `${mesAnterior}-01`;
+  const historicas = snap.asignaciones.filter((a) => (a.fecha >= desdeHistorico && a.fecha < monthStart) || a.fecha === `${mesSiguiente}-01`);
   // Los eventos van SIN filtrar por mes: `buildMonthContext` se queda con los del año académico,
   // que es lo que empareja la Navidad de diciembre con la despedida del mayo siguiente. Las
   // excepciones también van sin filtrar: `twoR2Justified` ya comprueba tipo y rango él mismo.

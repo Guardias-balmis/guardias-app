@@ -199,3 +199,60 @@ test("descarta los campos que el modelo se invente, y deja solo los tres del sch
   assert.equal(r.ok, true);
   assert.deepEqual(Object.keys(r.asignaciones[0]).sort(), ["codigo", "fecha", "residenteId"]);
 });
+
+// ── guardias ya fijadas (decisión V-47) ──
+
+test("las guardias ya fijadas van al prompt como obligatorias, ordenadas por fecha, y hay una norma que las declara inamovibles", () => {
+  const p = buildGenerationPrompt({
+    ...DATOS,
+    fijadas: [{ fecha: "2026-08-20", residenteId: "r2a", codigo: "GF" }, { fecha: "2026-08-03", residenteId: "r4a", codigo: "G" }],
+  });
+  assert.match(p, /GUARDIAS YA FIJADAS EN LA REJILLA \(OBLIGATORIO/);
+  assert.ok(p.indexOf('2026-08-03 — id="r4a" — G') < p.indexOf('2026-08-20 — id="r2a" — GF'), "ordenadas por fecha");
+  assert.match(p, /14\. Las GUARDIAS YA FIJADAS/);
+});
+
+test("sin fijadas (o en modo reemplazar) el prompt lo dice, para que el modelo no las busque", () => {
+  assert.match(buildGenerationPrompt(DATOS), /GUARDIAS YA FIJADAS EN LA REJILLA: ninguna/);
+  assert.match(buildGenerationPrompt({ ...DATOS, fijadas: [] }), /GUARDIAS YA FIJADAS EN LA REJILLA: ninguna/);
+});
+
+test("una preferencia de 0 guardias (permitida con ausencia registrada) NO desaparece del prompt, y un fechasEvitar que no es lista no lanza", () => {
+  const p = buildGenerationPrompt({ ...DATOS, preferencias: [{ residenteId: "r2a", maxGuardias: 0 }, { residenteId: "r3a", fechasEvitar: "2026-08-01", maxGuardias: 5 }] });
+  assert.match(p, /id="r2a" — pide NO hacer ninguna guardia/);
+  assert.match(p, /id="r3a" — querría no pasar de 5/);
+});
+
+// ── bordes del mes y celdas marcadas (2026-09-04, revisión adversarial) ──
+
+test("las guardias de los bordes del mes van al prompt (la norma 13 no se puede cumplir sin saber quién tuvo el 31), y sin ellas se dice", () => {
+  const p = buildGenerationPrompt({
+    ...DATOS,
+    bordes: [{ fecha: "2026-09-01", residenteId: "r2a", codigo: "G" }, { fecha: "2026-07-31", residenteId: "r4a", codigo: "GP" }],
+  });
+  assert.match(p, /GUARDIAS EN LOS BORDES DEL MES \(NO son de este mes/);
+  assert.ok(p.indexOf('2026-07-31 — id="r4a" — GP') < p.indexOf('2026-09-01 — id="r2a" — G'), "ordenadas por fecha");
+  assert.match(p, /13\. DESCANSO OBLIGATORIO[\s\S]*GUARDIAS EN LOS BORDES DEL MES/);
+  assert.match(buildGenerationPrompt(DATOS), /GUARDIAS EN LOS BORDES DEL MES: ninguna/);
+});
+
+test("las celdas V/R/B ya marcadas en la rejilla se listan para que el modelo no proponga guardia encima; sin ninguna, la sección no aparece", () => {
+  const p = buildGenerationPrompt({ ...DATOS, marcadores: [{ fecha: "2026-08-12", residenteId: "r3a", codigo: "V" }] });
+  assert.match(p, /CELDAS YA MARCADAS EN LA REJILLA/);
+  assert.match(p, /2026-08-12 — id="r3a" — V/);
+  assert.doesNotMatch(buildGenerationPrompt(DATOS), /CELDAS YA MARCADAS/);
+});
+
+test("un residente que termina o empieza a mitad de mes lleva su «solo hasta/desde» en la lista", () => {
+  const p = buildGenerationPrompt({ ...DATOS, porNivel: { ...DATOS.porNivel, R2: [{ id: "r2a", nombre: "Caro Dos", hasta: "2026-08-15" }], R1: [{ id: "r1n", nombre: "Nico Uno", desde: "2026-08-20" }] } });
+  assert.match(p, /id="r2a" — Caro Dos \(.*\) — solo hasta el 2026-08-15, después NO/);
+  assert.match(p, /id="r1n" — Nico Uno \(.*\) — solo desde el 2026-08-20/);
+});
+
+test("el reintento acota las violaciones que devuelve al modelo (60 líneas por bloque, 300 caracteres por detalle) y resume el resto", () => {
+  const muchas = Array.from({ length: 500 }, (_, i) => ({ invariante: "FORMATO", severidad: "error", detalle: `${i} ` + "z".repeat(1000) }));
+  const r = buildRetryPrompt({ prompt: "P", propuesta: [], violaciones: muchas });
+  assert.ok(r.length < 30000, `mide ${r.length}`);
+  assert.match(r, /y 440 más del mismo tipo/);
+  assert.equal((r.match(/\[FORMATO\]/g) || []).length, 60);
+});

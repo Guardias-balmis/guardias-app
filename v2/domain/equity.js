@@ -18,7 +18,7 @@ import { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow, br
 import { tally } from "./tally.js";
 import { absences, DESCUENTA_DISPONIBILIDAD, AUSENTE_EN_PUENTE } from "./absences.js";
 import { accumulatedTally } from "./accumulate.js";
-import { periodsOfResident } from "./residents.js";
+import { periodsOfResident, closingPeriodOn } from "./residents.js";
 
 // Los seis ejes de INV-3 y cuáles se normalizan por disponibilidad. Se EXPORTAN porque el
 // generador (`schedule.js`) y el banco de equidad tienen que perseguir exactamente lo que este
@@ -88,7 +88,14 @@ export function validateResidencyYearClose(ctx) {
       dobletes: acc.dobletes + t.dobletes,
       puentesLibres: acc.puentesLibres + puentesLibresMes,
     };
-    const f = availabilityFraction(win, absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD }));
+    const bajas = absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD });
+    // Sin un solo día disponible en todo el año (baja de principio a fin: el embarazo largo que
+    // V-5 modela como BAJA) no hay nada que comparar: `availabilityFraction` devolvería 1 —su
+    // salida para el caso degenerado— y el cierre lo juzgaría como plenamente disponible con cero
+    // guardias, avisando en los seis ejes contra toda su cohorte. Mismo criterio que la cohorte
+    // de uno: se queda fuera de la comparación.
+    if (availableDays(win, bajas) <= 0) continue;
+    const f = availabilityFraction(win, bajas);
 
     const cohorte = cohortOf(r);
     if (!byCohort.has(cohorte)) byCohort.set(cohorte, []);
@@ -329,8 +336,8 @@ export function validateQuarterClose(ctx) {
  * una ventana que se extendía más allá de su último día.
  */
 function closingWindowThisMonth(r, mes, anio) {
-  const p = periodsOfResident(r).find((per) => inMonth(per.end, mes, anio));
-  return p ? { start: p.start, end: p.end } : null;
+  // La definición vive en residents.js desde 2026-09-04, compartida con thirdpost.js.
+  return closingPeriodOn(r, mes, anio);
 }
 
 /** Fracción de disponibilidad = (días de la ventana − días de baja) / días de la ventana. */

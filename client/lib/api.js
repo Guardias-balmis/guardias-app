@@ -77,12 +77,34 @@ export async function callBackend(execUrl, payload, { fetchImpl = fetch, esperar
 
 
 /**
+ * Un rechazo del servidor por la SESIÓN (no por los datos): `router.js:authed` responde
+ * «sesión expirada|firma|formato|payload» (session.js) cuando el token HMAC no sirve. Es la
+ * única clase de error que no se arregla reintentando ni corrigiendo nada en pantalla: hay que
+ * volver a entrar. Se distingue por la forma exacta del mensaje, no por buscar la palabra
+ * «sesión» en cualquier error, que aparece también en rechazos de negocio.
+ */
+const SESION_INVALIDA_RE = /^sesión (expirada|firma|formato|payload)$/;
+export function isSessionError(error) {
+  return SESION_INVALIDA_RE.test(String(error || ""));
+}
+
+/**
  * Fábrica de la API tipada. `getSession()` se invoca en cada llamada (no se cachea el
  * valor) para que un logout a mitad de sesión no reenvíe un token viejo.
+ *
+ * `onSessionInvalid(error)` (opcional) se dispara cuando el servidor rechaza el token de sesión.
+ * Existe porque la sesión dura 12 h (Code.gs) y antes, pasado ese plazo, la app seguía en pie
+ * con la pestaña abierta: cada pantalla enseñaba «Error cargando…: sesión expirada» y ninguna
+ * ofrecía volver a entrar — el residente tenía que adivinar que la salida era el botón de cerrar
+ * sesión. App.jsx lo usa para cerrarla y volver al login con un aviso.
  */
-export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
+export function makeApi(execUrl, { fetchImpl = fetch, getSession, onSessionInvalid } = {}) {
   const call = (payload) => callBackend(execUrl, payload, { fetchImpl });
-  const authed = (action, extra = {}) => call({ action, session: getSession(), ...extra });
+  const authed = async (action, extra = {}) => {
+    const r = await call({ action, session: getSession(), ...extra });
+    if (r && r.ok === false && onSessionInvalid && isSessionError(r.error)) onSessionInvalid(r.error);
+    return r;
+  };
 
   return {
     getNonce: () => call({ action: "getNonce" }),
@@ -150,8 +172,10 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession } = {}) {
      * fallo de transporte del `/exec` que motivó V-26 le afecte igual: repetirla escribe el mes
      * OTRA VEZ —con otro cuadrante, porque un modelo no es determinista— y gasta otra tanda de
      * llamadas de cuota. Ante la duda, fuera: es la regla que ya fija el comentario de esa lista.
+     * `modo` (decisión V-47): "completar" respeta las guardias que ya hay en la rejilla y rellena
+     * el resto; "reemplazar" es el comportamiento anterior, que sustituye el mes entero.
      */
-    generarCuadranteIA: (anio, mes) => authed("generarCuadranteIA", { anio, mes }),
+    generarCuadranteIA: (anio, mes, modo = "completar") => authed("generarCuadranteIA", { anio, mes, modo }),
     marcarValidado: (anio, mes) => authed("marcarValidado", { anio, mes }),
     publicarCuadrante: (anio, mes) => authed("publicarCuadrante", { anio, mes }),
     despublicarCuadrante: (anio, mes) => authed("despublicarCuadrante", { anio, mes }),

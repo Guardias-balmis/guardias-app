@@ -17,6 +17,7 @@ import { violationText } from "./client/lib/violations.js";
 // y medido resulta que uno de cada tres colocados a ciegas crea un error — con 4 al mes, el 74%
 // de los meses dejan de poder validarse. Sin esto, eso se descubre al pulsar Validar.
 import { chainedNeighbour } from "./client/lib/rest.js";
+import { partirBloqueosLegibles, violacionesBloqueoIlegible } from "./client/lib/bloqueos.js";
 
 const { useState, useEffect, useRef } = React;
 const { Card, Btn, Aviso } = window.UI;
@@ -81,12 +82,16 @@ function motivoNoAsignable(periodos, primerDia) {
  */
 function FilaRejilla({
   nombre, etiqueta, bg, color, titulo, total, dias, porFecha, pulsable, onCelda,
-  origenPorFecha, origenEditFecha, onPressStart, onPressEnd, onSeleccionaOrigen, festivos = [],
+  origenPorFecha, origenEditFecha, onPressStart, onPressEnd, onSeleccionaOrigen, festivos = [], propia = false,
 }) {
   return (
     <tr>
       <td style={{ ...S.td, textAlign: "center", fontWeight: 700, background: bg, color }} title={titulo}>{etiqueta}</td>
-      <td style={{ ...S.td, whiteSpace: "nowrap", fontWeight: 600, color: COLOR.blueDark }} title={titulo}>{nombre.split(" ")[0]}</td>
+      {/* La fila PROPIA se marca (decisión V-47): cada residente apunta aquí las guardias que ya
+          tiene comprometidas antes de que se genere el mes, y en una rejilla de quince filas la
+          suya tiene que encontrarse de un vistazo. */}
+      <td style={{ ...S.td, whiteSpace: "nowrap", fontWeight: propia ? 800 : 600, color: COLOR.blueDark, background: propia ? COLOR.bluePale : "transparent" }}
+        title={propia ? `${nombre} (tú)` : titulo}>{propia ? "★ " : ""}{nombre.split(" ")[0]}</td>
       <td style={{ ...S.td, textAlign: "center", fontWeight: 700, color: COLOR.blue }}>{total}</td>
       {dias.map((fecha) => {
         const codigo = porFecha[fecha] || "";
@@ -136,7 +141,7 @@ function nombreMesDe(anio, mes) {
 
 function CalendarScreen() {
   const app = window.useApp();
-  const { anio, mes, setAnio, setMes, residentes, showToast, isResponsable, grupo } = app;
+  const { anio, mes, setAnio, setMes, residentes, showToast, isResponsable, grupo, myResidente } = app;
 
   const [asignaciones, setAsignaciones] = useState({}); // {[residenteId]: {[fecha]: codigo}}
   const [origenes, setOrigenes] = useState({});         // {[residenteId]: {[fecha]: "CEDIDA"|"COMPRADA"}} (INV-4)
@@ -156,6 +161,11 @@ function CalendarScreen() {
   // "parte de una pulsación larga", para que ese click no cicle el código además de haber
   // abierto el selector — sin esto, soltar tras mantener presionado also dispara `onClick`.
   const longPressFiredRef = useRef(false);
+  // Foto de lo PERSISTIDO (lo cargado, y lo guardado con éxito): `aplica` compara contra ella para
+  // que ciclar o deshacer una celda hasta su valor guardado no deje un «cambio» pendiente. Sin esto,
+  // un clic accidental + Deshacer en un mes VALIDADO dejaba «Guardar (1)», escribía una fila vacía
+  // para una celda que nunca existió y devolvía el mes a BORRADOR sin que nada hubiera cambiado.
+  const baseRef = useRef({ asignaciones: {}, origenes: {} });
   const [guardando, setGuardando] = useState(false);
   const [validando, setValidando] = useState(false);
   const [violaciones, setViolaciones] = useState(null); // null = aún no validado
@@ -178,6 +188,9 @@ function CalendarScreen() {
   // parecería editable por error. Mientras estadoError esté activo se bloquea la edición igual
   // que si estuviera PUBLICADO, y se muestra un aviso con reintento (mismo patrón que el resto).
   const [estadoError, setEstadoError] = useState(false);
+  // Si la carga de las asignaciones falla, la rejilla NO se queda con las del mes anterior ni
+  // editable: parecería un mes vacío y lo que se escribiera encima se sumaría a lo que ya hay.
+  const [cargaError, setCargaError] = useState(false);
   // Sin Responsable designado para el periodo, el ciclo lo puede mover cualquier Mayor
   // (decisión V-16, mismo criterio que el servidor en requireCicloPermiso): la app no se queda
   // bloqueada porque nadie haya lanzado el sorteo. Lo dice `estadoCuadrante`, no el token.
@@ -188,7 +201,7 @@ function CalendarScreen() {
   // Mayor. Aquí solo decide qué botones se ven; quien manda es requireCicloPermiso en el router.
   const soyMayor = grupo === "MAYOR";
   const puedeMoverCiclo = reglaCiclo({ isResponsable, grupo, sinResponsable });
-  const bloqueadoPorPublicado = !canEdit(estado) || estadoError;
+  const bloqueadoPorPublicado = !canEdit(estado) || estadoError || cargaError;
 
   useEffect(() => {
     let cancelled = false;
@@ -200,13 +213,18 @@ function CalendarScreen() {
       const diasDelMes = datesOfMonth(anio, mes);
       const antesDelMes = addDays(diasDelMes[0], -1);
       const trasElMes = addDays(diasDelMes[diasDelMes.length - 1], 1);
-      const [r, rEstado, rBordes, rFestivos] = await Promise.all([
-        app.api.listAsignaciones(anio, mes),
-        app.api.estadoCuadrante(anio, mes),
+      // UNA petición de asignaciones, no dos (2026-09-04): el rango [víspera, día siguiente] ya
+      // contiene el mes entero, así que pedir además `listAsignaciones(anio, mes)` era la misma
+      // tabla leída dos veces en Apps Script por cada cambio de mes. Se separa aquí: el mes para
+      // la rejilla, los dos días de fuera para el aviso de descanso.
+      const [rRango, rEstado, rFestivos] = await Promise.all([
         app.api.listAsignacionesRango(antesDelMes, trasElMes),
+        app.api.estadoCuadrante(anio, mes),
         app.api.listFestivosRango(antesDelMes, trasElMes),
       ]);
       if (cancelled) return;
+      const r = rRango.ok ? { ok: true, asignaciones: rRango.asignaciones.filter((a) => a.fecha !== antesDelMes && a.fecha !== trasElMes) } : rRango;
+      const rBordes = rRango;
       if (r.ok) {
         const idx = {};
         const idxOrigen = {};
@@ -220,7 +238,13 @@ function CalendarScreen() {
         }
         setAsignaciones(idx);
         setOrigenes(idxOrigen);
+        baseRef.current = { asignaciones: idx, origenes: idxOrigen };
+        setCargaError(false);
       } else {
+        setAsignaciones({});
+        setOrigenes({});
+        baseRef.current = { asignaciones: {}, origenes: {} };
+        setCargaError(true);
         showToast("Error cargando cuadrante: " + r.error, "err");
       }
       // Un fallo aquí NO tumba la pantalla ni bloquea la edición: el aviso es orientativo y quien
@@ -233,7 +257,7 @@ function CalendarScreen() {
       setFestivos(rFestivos.ok ? rFestivos.festivos : []);
       setFestivosError(!rFestivos.ok);
       setEstadoError(!rEstado.ok);
-      if (rEstado.ok) { setEstado(rEstado.estado); setSinResponsable(rEstado.sinResponsable === true); } // en error se conserva el último estado conocido; estadoError ya bloquea la edición
+      if (rEstado.ok) { setEstado(rEstado.estado); setSinResponsable(rEstado.sinResponsable === true); if (app.actualizaResponsable) app.actualizaResponsable(rEstado.responsableId); } // en error se conserva el último estado conocido; estadoError ya bloquea la edición
       else showToast("Error comprobando el estado del cuadrante: " + rEstado.error, "err");
       setPendientes({});
       undoStackRef.current = [];
@@ -247,10 +271,15 @@ function CalendarScreen() {
     return () => { cancelled = true; };
   }, [anio, mes, retryTick]);
 
+  // Cambiar de mes con celdas sin guardar las perdía en silencio: se pregunta antes.
+  const confirmaPerder = () => Object.keys(pendientes).length === 0
+    || window.confirm(`Tienes ${Object.keys(pendientes).length} cambios sin guardar en este mes. ¿Cambiar de mes y perderlos?`);
   const prevMonth = () => {
+    if (!confirmaPerder()) return;
     if (mes === 1) { setMes(12); setAnio(anio - 1); } else setMes(mes - 1);
   };
   const nextMonth = () => {
+    if (!confirmaPerder()) return;
     if (mes === 12) { setMes(1); setAnio(anio + 1); } else setMes(mes + 1);
   };
 
@@ -304,7 +333,16 @@ function CalendarScreen() {
     setAvisoDescanso(vecina ? { residenteId, fecha, vecina } : null);
     setAsignaciones((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: codigo } }));
     setOrigenes((prev) => ({ ...prev, [residenteId]: { ...(prev[residenteId] || {}), [fecha]: origen } }));
-    setPendientes((prev) => ({ ...prev, [`${residenteId}|${fecha}`]: { fecha, residenteId, codigo, origen } }));
+    const clave = `${residenteId}|${fecha}`;
+    const baseCodigo = (baseRef.current.asignaciones[residenteId] || {})[fecha] || "";
+    const baseOrigen = (baseRef.current.origenes[residenteId] || {})[fecha] || "";
+    setPendientes((prev) => {
+      if (codigo === baseCodigo && origen === baseOrigen) { // igual que lo guardado: no hay cambio que mandar
+        const { [clave]: _quitada, ...resto } = prev;
+        return resto;
+      }
+      return { ...prev, [clave]: { fecha, residenteId, codigo, origen } };
+    });
     setViolaciones(null);
     setEquidadPorConfirmar(null);
     setCierresError(null);
@@ -367,6 +405,9 @@ function CalendarScreen() {
 
   // `fecha === null` es solo "cerrar sin cambiar" (blur del <select> al perder foco sin elegir).
   const seleccionaOrigen = (fecha, origen) => {
+    // Si tras la pulsación larga no llegó ningún click (pasa en táctil), la marca se quedaba
+    // puesta y se comía el SIGUIENTE click de cualquier celda.
+    longPressFiredRef.current = false;
     if (fecha === null) { setOrigenEditando(null); return; }
     const [residenteId] = origenEditando.split("|");
     const codigoActual = (asignaciones[residenteId] || {})[fecha] || "";
@@ -375,6 +416,12 @@ function CalendarScreen() {
   };
 
   const cambios = Object.values(pendientes);
+  // Aviso a la app de que hay celdas sin guardar: cambiar de pestaña o cerrar sesión desmonta
+  // esta pantalla y las perdería; App.jsx pregunta antes si este contador no está a cero.
+  useEffect(() => {
+    if (app.cambiosSinGuardarRef) app.cambiosSinGuardarRef.current = cambios.length;
+    return () => { if (app.cambiosSinGuardarRef) app.cambiosSinGuardarRef.current = 0; };
+  }, [cambios.length]);
 
   const guardar = async () => {
     if (cambios.length === 0) { showToast("No hay cambios que guardar"); return; }
@@ -383,6 +430,7 @@ function CalendarScreen() {
     setGuardando(false);
     if (r.ok) {
       setPendientes({});
+      baseRef.current = { asignaciones, origenes }; // lo que hay en pantalla es ahora lo persistido
       // Editar un mes VALIDADO lo revierte a BORRADOR en el servidor (Fase 6.2) — se refleja
       // aquí sin otra petición, con la misma regla de dominio que aplicó el servidor.
       setEstado(stateAfterEdit(estado));
@@ -392,17 +440,42 @@ function CalendarScreen() {
     }
   };
 
+  // Envoltorio de `validarInterno`: una excepción a mitad (una fecha ilegible en `bloqueos` con la
+  // que los cierres de equidad hacen aritmética, un fallo inesperado) dejaba `validando=true` para
+  // siempre —todos los botones deshabilitados— sin decir nada. Se dice y se suelta el botón.
   const validar = async (forzar = false) => {
     setValidando(true);
+    try {
+      await validarInterno(forzar);
+    } catch (e) {
+      console.error("[Calendar] validar", e);
+      setViolaciones(null);
+      showToast("No se pudo validar: " + String((e && e.message) || e), "err");
+    } finally {
+      setValidando(false);
+    }
+  };
+
+  const validarInterno = async (forzar) => {
     setEquidadPorConfirmar(null);
     setCierresError(null);
+    setTercerPuestoError(null); // de una pasada anterior: si no, el cartel viejo sobrevive a una validación limpia
     // INV-5/6/7 dependen de los bloqueos de TODO el equipo (vacaciones/rotación/baja), no
     // solo de quien pulsa Validar — listBloqueos (a diferencia de misBloqueos) los trae
     // todos. Desde la decisión V-8, solo BAJA bloquea la asignación (INV-5); VACACIONES y
     // ROTACION siguen alimentando INV-6/7 sin bloquear.
-    const rBloqueos = await app.api.listBloqueos(anio, mes);
-    if (!rBloqueos.ok) { setValidando(false); setViolaciones(null); showToast("Error cargando bloqueos para validar: " + rBloqueos.error, "err"); return; }
-    const bloqueos = rBloqueos.bloqueos;
+    // Las tres lecturas que no dependen entre sí van A LA VEZ (2026-09-04): en serie eran tres
+    // idas y vueltas a Apps Script encadenadas, dos o tres segundos cada una, antes de ver nada.
+    const [rBloqueos, rFestivos, rExcepciones] = await Promise.all([
+      app.api.listBloqueos(anio, mes),
+      app.api.listFestivosRango(addDays(monthWindow.start, -1), addDays(monthWindow.end, 1)),
+      app.api.listExcepciones(),
+    ]);
+    if (!rBloqueos.ok) { setViolaciones(null); showToast("Error cargando bloqueos para validar: " + rBloqueos.error, "err"); return; }
+    // Las ausencias con fecha ilegible se apartan como hace el servidor (V-22) y se reportan como
+    // error INV-5 que las nombra: `listBloqueos` las devuelve a propósito para poder cancelarlas, y
+    // pasadas tal cual a INV-7 hacían lanzar la validación entera.
+    const { usables: bloqueos, corruptas: bloqueosIlegibles } = partirBloqueosLegibles(rBloqueos.bloqueos);
 
     // Contrato C-2 (spec.md §5): INV-7 evalúa la rotación cercana solo en el mes en que
     // TERMINA, pero necesita las guardias del residente de TODO el periodo — que puede
@@ -413,7 +486,7 @@ function CalendarScreen() {
     let historicas = [];
     if (desdeRotacion) {
       const rHist = await app.api.listAsignacionesRango(desdeRotacion, addDays(monthStart, -1));
-      if (!rHist.ok) { setValidando(false); setViolaciones(null); showToast("Error cargando histórico de rotación: " + rHist.error, "err"); return; }
+      if (!rHist.ok) { setViolaciones(null); showToast("Error cargando histórico de rotación: " + rHist.error, "err"); return; }
       historicas = rHist.asignaciones;
     }
 
@@ -421,7 +494,6 @@ function CalendarScreen() {
     // vecinos del día 1 y del último día del mes deciden si son puente y caen fuera del mes.
     // Un fallo de red NO se degrada a "no hay festivos" en silencio: se dice, y se sigue —
     // INV-12 es aviso, así que no poder comprobarlo no puede impedir validar (V-14).
-    const rFestivos = await app.api.listFestivosRango(addDays(monthWindow.start, -1), addDays(monthWindow.end, 1));
     if (!rFestivos.ok) showToast("No se pudieron cargar los festivos: " + rFestivos.error + " — INV-12 no se ha comprobado", "err");
     const festivos = rFestivos.ok ? rFestivos.festivos : [];
 
@@ -429,10 +501,14 @@ function CalendarScreen() {
     // igual que uno sin justificar — el servidor sí las ve en marcarValidado, así que el aviso
     // desaparecería al validar de verdad. Es aviso, nunca bloquea (V-14), así que un fallo de red
     // no impide seguir: solo deja este chequeo local sin la excepción.
-    const rExcepciones = await app.api.listExcepciones();
     const excepciones = rExcepciones.ok ? rExcepciones.excepciones : [];
 
-    const asignacionesDelMes = residentes.flatMap((r) => asignacionesDe(r.id).map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo })));
+    // Sin las celdas vaciadas en esta sesión (`codigo: ""`): son un borrado pendiente, no una
+    // asignación, y como asignación vacía hacían saltar en falso el INV-2 de quien no tenía
+    // ninguna otra celda ese mes.
+    const asignacionesDelMes = residentes.flatMap((r) => asignacionesDe(r.id)
+      .filter((a) => a.codigo)
+      .map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo })));
 
     // Los dos días de fuera del mes (ya cargados al abrir el mes) entran en el histórico: INV-15
     // juzga el PAR, y su comentario da por hecho que el invocador aporta ese contexto — pero
@@ -465,7 +541,7 @@ function CalendarScreen() {
       showToast("No se pudo comprobar el tercer puesto (INV-8): " + r3P.error, "err");
     }
 
-    const v = [...validateMonth(ctx), ...(rCierres.ok ? rCierres.violaciones : []), ...(r3P.ok ? r3P.violaciones : [])];
+    const v = [...violacionesBloqueoIlegible(bloqueosIlegibles), ...validateMonth(ctx), ...(rCierres.ok ? rCierres.violaciones : []), ...(r3P.ok ? r3P.violaciones : [])];
     setViolaciones(v);
 
     // Decisión de Fase 6.2 (V-9/V-10): BORRADOR->VALIDADO es automático en cuanto el
@@ -484,19 +560,27 @@ function CalendarScreen() {
     // sin mirar antes de que el mes pase a VALIDADO.
     if (canValidate(v) && puedeMoverCiclo && estado !== "PUBLICADO" && cambios.length === 0 && (avisosEquidad.length > 0 || !rCierres.ok || !r3P.ok) && !forzar) {
       if (avisosEquidad.length > 0) setEquidadPorConfirmar(avisosEquidad.length);
-      setValidando(false);
+      return;
+    }
+
+    // Con celdas sin guardar no se marca VALIDADO (ver arriba), pero antes tampoco se decía: la
+    // pantalla enseñaba «Sin violaciones» y el mes seguía en Borrador sin explicación.
+    if (canValidate(v) && puedeMoverCiclo && estado !== "PUBLICADO" && cambios.length > 0) {
+      showToast(`Sin errores. Guarda los ${cambios.length} cambios pendientes para marcar el mes como VALIDADO`);
       return;
     }
 
     if (canValidate(v) && puedeMoverCiclo && estado !== "PUBLICADO" && cambios.length === 0) {
       const rVal = await app.api.marcarValidado(anio, mes);
       if (rVal.ok) { setEstado(rVal.estado); showToast("Cuadrante VALIDADO ✓"); }
-      // Si el servidor lo rechaza (discrepancia con lo que ve el cliente) no se pisa la vista
-      // de violaciones, que ya se mostró arriba con el resultado local — pero SÍ se dice: sin
-      // el aviso, el cuadrante se quedaba en BORRADOR sin que nadie supiera por qué.
-      else showToast("El servidor no validó el cuadrante: " + rVal.error, "err");
+      else {
+        // Si el servidor lo rechaza (discrepancia con lo que ve el cliente) se DICE, y si manda
+        // sus violaciones se enseñan ESAS: son el motivo real, y dejar en pantalla el «Sin
+        // violaciones» local mientras el mes sigue en Borrador no explicaba nada.
+        showToast("El servidor no validó el cuadrante: " + rVal.error, "err");
+        if (Array.isArray(rVal.violaciones) && rVal.violaciones.length > 0) setViolaciones(rVal.violaciones);
+      }
     }
-    setValidando(false);
   };
 
   const publicar = async () => {
@@ -543,6 +627,16 @@ function CalendarScreen() {
         </Aviso>
       )}
 
+      {cargaError && (
+        <Aviso color={COLOR.red} bg={COLOR.redLight}>
+          No se pudieron cargar las guardias de este mes — la rejilla se muestra vacía y bloqueada
+          para no escribir encima de lo que no se ve.
+          <div style={{ marginTop: 8 }}>
+            <Btn onClick={() => setRetryTick((t) => t + 1)}>🔄 Reintentar</Btn>
+          </div>
+        </Aviso>
+      )}
+
       {bordesError && (
         <Aviso>
           No se pudieron leer las guardias de los días vecinos a este mes: el aviso de descanso no
@@ -565,7 +659,7 @@ function CalendarScreen() {
           el {diaCorto(avisoDescanso.fecha)}, dos días seguidos. Tras una guardia corresponde el descanso del día
           siguiente (INV-15), así que el mes no se podrá validar hasta quitar una de las dos.
           <div style={{ marginTop: 8 }}>
-            <Btn onClick={() => { aplica(avisoDescanso.residenteId, avisoDescanso.fecha, ""); }}>
+            <Btn onClick={() => { aplica(avisoDescanso.residenteId, avisoDescanso.fecha, ""); }} disabled={busy || bloqueadoPorPublicado}>
               ↩️ Deshacer esta celda
             </Btn>
           </div>
@@ -604,6 +698,15 @@ function CalendarScreen() {
             Este cuadrante está publicado: no se puede editar{puedeMoverCiclo ? " — usa Despublicar para corregirlo." : "."}
           </div>
         )}
+        {/* Decisión V-47: las guardias que un residente ya tiene comprometidas se apuntan aquí,
+            en su propia fila, ANTES de generar; el generador con IA («completar») las respeta.
+            Solo en Borrador: en Validado/Publicado el mes ya no se va a generar. */}
+        {!bloqueadoPorPublicado && estado === "BORRADOR" && myResidente && (
+          <div style={{ fontSize: 12, color: COLOR.blueDark, background: COLOR.bluePale, borderRadius: 6, padding: "6px 10px", marginBottom: 10, lineHeight: 1.5 }}>
+            📌 ¿Ya tienes guardias acordadas para este mes? Márcalas en tu fila (★) y guarda: el
+            generador con IA las respeta y rellena solo el resto.
+          </div>
+        )}
 
         {/* Contenedor con esquinas redondeadas (a pedido del autor, "más grande y vistosa"): el
             `overflow: hidden` es lo que recorta las esquinas de la propia `<table>`, que no
@@ -637,6 +740,7 @@ function CalendarScreen() {
                 <FilaRejilla
                   key={r.id}
                   nombre={r.nombre} etiqueta={nivel} bg={ANO_COLORS[nivel]} color={ANO_TEXT[nivel]}
+                  propia={Boolean(myResidente) && r.id === myResidente.id}
                   total={tally(asignacionesDe(r.id), monthWindow).total}
                   dias={dias} porFecha={asignaciones[r.id] || {}} festivos={festivos}
                   pulsable={() => !bloqueadoPorPublicado}

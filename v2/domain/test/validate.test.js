@@ -1059,3 +1059,41 @@ test("INV-10 de punta a punta: desde las filas de la tabla, el aviso sale de ver
   assert.equal(i10[0].severidad, "aviso"); // V-4: los eventos del servicio nunca bloquean
   assert.match(i10[0].detalle, /debe cubrirse con 2 R2/);
 });
+
+// ── 2026-09-04: INV-6 cuenta residentes, INV-2 exime la presencia parcial ──
+import { validateMonth as vm2, buildMonthContext as bmc2 } from "../validate.js";
+
+test("INV-6: unas vacaciones dentro de una rotación son UNA persona ausente, no dos", () => {
+  const residentes = [
+    { id: "r3a", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" },
+    { id: "r3b", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" },
+    { id: "r3c", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" },
+  ];
+  const bloqueos = [
+    { residenteId: "r3a", desde: "2026-10-01", hasta: "2026-10-31", motivo: "ROTACION", provincia: "Madrid", activo: true },
+    { residenteId: "r3a", desde: "2026-10-05", hasta: "2026-10-10", motivo: "VACACIONES", activo: true },
+    { residenteId: "r3b", desde: "2026-10-01", hasta: "2026-10-31", motivo: "ROTACION", provincia: "Madrid", activo: true },
+  ];
+  const v = vm2(bmc2({ mes: 10, anio: 2026, residentes, asignacionesDelMes: [], bloqueos })).filter((x) => x.invariante === "INV-6");
+  assert.deepEqual(v, [], "dos ausentes de la promoción no son «más de 2»");
+  // Con un tercero de verdad sí, y sin ids repetidos en el texto.
+  const v3 = vm2(bmc2({ mes: 10, anio: 2026, residentes, asignacionesDelMes: [], bloqueos: [...bloqueos, { residenteId: "r3c", desde: "2026-10-05", hasta: "2026-10-06", motivo: "VACACIONES", activo: true }] })).filter((x) => x.invariante === "INV-6");
+  assert.equal(v3.length, 1);
+  assert.match(v3[0].detalle, /\(r3a, r3b, r3c\)|\(r3b, r3a, r3c\)/);
+  assert.doesNotMatch(v3[0].detalle, /r3a, r3a/);
+});
+
+test("INV-2: quien no está todo el mes (R1 que entra el 27 de mayo, R4 que termina el 10) no recibe el aviso del mínimo", () => {
+  const residentes = [
+    { id: "nuevo", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" },
+    { id: "fin", fechaInicio: "2022-05-27", fechaFin: "2026-05-10" },
+    { id: "entero", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" },
+  ];
+  const asignacionesDelMes = [
+    { residenteId: "nuevo", fecha: "2026-05-28", codigo: "G" },
+    { residenteId: "fin", fecha: "2026-05-02", codigo: "G" },
+    { residenteId: "entero", fecha: "2026-05-03", codigo: "G" },
+  ];
+  const inv2 = vm2(bmc2({ mes: 5, anio: 2026, residentes, asignacionesDelMes, bloqueos: [] })).filter((x) => x.invariante === "INV-2");
+  assert.deepEqual(inv2.map((x) => x.residenteId), ["entero"], "solo quien estuvo el mes entero recibe el mínimo");
+});

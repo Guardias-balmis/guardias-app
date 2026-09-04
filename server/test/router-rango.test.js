@@ -82,6 +82,9 @@ test("listAsignacionesRango filtra por fecha (inclusive) cruzando meses y años"
 test("listAsignacionesRango devuelve asignaciones de TODOS los residentes, no solo de quien consulta", () => {
   const deps = makeDeps();
   const session = loggedIn(deps);
+  // Un segundo residente REAL: desde 2026-09-04 `guardarAsignaciones` rechaza un residenteId que no
+  // sea de nadie (una fila que ninguna pantalla puede ver ni borrar, en una tabla append-only).
+  deps.store.appendRecord("residentes", { id: "otro-residente", nombre: "Otro", email: "otro@gmail.com", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" });
   call({ action: "guardarAsignaciones", session, cambios: [
     { fecha: "2026-06-01", residenteId: "uuid-ana", codigo: "G" },
     { fecha: "2026-06-02", residenteId: "otro-residente", codigo: "GP" },

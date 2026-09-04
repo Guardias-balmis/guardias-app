@@ -74,7 +74,11 @@ export const TABLES = {
   // cada fila, y es también la «marca para revisión manual»: un `resultado=REVISION_MANUAL` dice
   // que ese mes hubo que montarlo a mano porque el modelo no supo. Append-only y sin `activo`: aquí
   // no hay nada que cancelar, solo cosas que pasaron.
-  generaciones: { name: "generaciones", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("fecha", "date"), col("actorId"), col("modelo"), col("intentos", "number"), col("resultado"), col("violaciones", "json")] },
+  // `modo` (decisión V-47): COMPLETAR (respetó las guardias que ya había) o REEMPLAZAR (sustituyó
+  // el mes). Va la ÚLTIMA a propósito: las hojas `generaciones` ya creadas conservan su cabecera
+  // de 9 columnas, y `rowsToRecords` mapea por posición, así que una columna añadida al final se
+  // lee bien en las filas nuevas y sale `undefined` (no basura) en las viejas.
+  generaciones: { name: "generaciones", columns: [col("id"), col("mes", "number"), col("anio", "number"), col("fecha", "date"), col("actorId"), col("modelo"), col("intentos", "number"), col("resultado"), col("violaciones", "json"), col("modo")] },
   // Excepcion (spec.md §2, decisión V-29): degrada una violación DURA→AVISO donde la normativa lo
   // permite. Hoy el único consumidor es `validate.js:twoR2Justified` (INV-9, tipo "2xR2"): un
   // 2×R2 dentro de [desde,hasta] deja de avisar si hay una excepción documentada que lo cubra.
@@ -98,7 +102,17 @@ export function recordToRow(table, record) {
 /** [cabecera, ...filas] → registros. Ignora la cabecera y mapea por posición de columna. */
 export function rowsToRecords(table, values) {
   if (!values || values.length <= 1) return [];
-  return values.slice(1).map((row) => {
+  return values.slice(1)
+    // Una fila con el contenido borrado a mano (Supr en vez de «eliminar fila») llega como celdas
+    // vacías y se convertía en un registro `{}` sin id que tumbaba validar, generar, las ausencias
+    // y la imaginaria para todo el equipo con un «Fecha ISO inválida: undefined» que no decía de
+    // qué fila hablaba — y sin salida desde la app, porque sin id no hay nada que editar ni
+    // cancelar. Ninguna tabla admite un registro sin id, así que una fila sin ninguna celda no es
+    // un registro ni un borrado lógico (esos llevan id y `activo=false` o `codigo=""`). Se miran
+    // SOLO las columnas de la tabla: `Code.gs:read` trae hasta `getLastColumn()`, y una nota suelta
+    // en una columna a la derecha de la tabla no convierte en registro una fila por lo demás vacía.
+    .filter((row) => Array.isArray(row) && row.slice(0, table.columns.length).some((c) => c !== "" && c !== null && c !== undefined))
+    .map((row) => {
     const rec = {};
     table.columns.forEach((c, i) => {
       const v = deserialize(row[i], c.type);
@@ -109,7 +123,7 @@ export function rowsToRecords(table, values) {
 }
 
 function serialize(value, type) {
-  if (value === undefined || value === null) return "";
+  if (value === undefined || value === null || value === "") return "";
   switch (type) {
     case "number": return String(value);
     case "bool": return value ? "TRUE" : "FALSE";
@@ -118,7 +132,14 @@ function serialize(value, type) {
     // convierte la celda a tipo Fecha interno; el apóstrofe fuerza texto plano (invisible
     // tras guardar, por UI o por API) para que la celda se quede como el string que mandamos.
     case "date": return `'${value}`;
-    default: return String(value);
+    // Y TODO texto va igual (2026-09-04): `setValues` interpreta como FÓRMULA cualquier string
+    // que empiece por «=» y autoconvierte lo que le parezca número, fecha o booleano — una nota
+    // «15/7» volvía como «Thu Jul 15 2027 00:00:00 GMT…», «TRUE» como «true», y un nombre
+    // «=HYPERLINK(...)» quedaba como celda-fórmula en una tabla que no se borra nunca. El
+    // apóstrofe lo consume Sheets y la celda queda como el texto exacto; el fake de los tests lo
+    // deja literal, y `deserialize` lo despoja en los dos casos. Precio asumido: un texto que
+    // EMPIECE por apóstrofe pierde ese primer apóstrofe al releerse.
+    default: return `'${String(value)}`;
   }
 }
 
@@ -136,7 +157,7 @@ function deserialize(cell, type) {
     // navegador). Si no, es el string con apóstrofe (el `ss` falso de los tests no simula
     // el despojo de Sheets, así que llega literal).
     case "date": return cell instanceof Date ? isoFromLocalDate(cell) : String(cell).replace(/^'/, "");
-    default: return String(cell);
+    default: return String(cell).replace(/^'/, "");
   }
 }
 

@@ -5,20 +5,29 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Guardias · Dr. Balmis</title>
 <!-- El handshake con cdnjs (DNS + TCP + TLS) se adelanta al parseo del <head> en vez de pagarse
-     al llegar al primer <script>. De ahí salen las tres bibliotecas, y Babel Standalone son
-     ~2,3 MB: es la descarga más pesada del arranque con diferencia. Mismo truco que ya se usaba
-     con fonts.googleapis.com, aplicado al origen que de verdad manda en el tiempo de carga. -->
+     al llegar al primer <script>. De ahí salen React y ReactDOM, y —solo cuando hace falta—
+     Babel Standalone (~2,3 MB, la descarga más pesada del arranque con diferencia). Mismo truco
+     que ya se usaba con fonts.googleapis.com, aplicado al origen que de verdad manda en el
+     tiempo de carga. -->
 <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<!-- Babel Standalone YA NO va aquí (2026-09-04): lo inyecta client/loader.js solo si algún .jsx
+     no está en su caché de transpilado (primera visita o despliegue nuevo). Antes era un <script>
+     bloqueante de 2,3 MB que había que descargar Y compilar antes de pintar un solo píxel, en
+     cada visita. La versión exacta vive en loader.js (BABEL_URL), junto a la clave de la caché. -->
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- Nunito Sans (a pedido del autor, 2026-08-18: "más vistosa y amigable" que la pila de fuentes
      del sistema). Si la CDN de Google Fonts no carga, `body` cae a la misma pila de antes —
-     nunca se queda sin tipografía. -->
-<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,400;0,6..12,600;0,6..12,700;0,6..12,800&display=swap" rel="stylesheet">
+     nunca se queda sin tipografía.
+     Se carga SIN bloquear el pintado (2026-09-04): `media="print"` hace que el navegador la pida
+     con prioridad baja y no espere a ella para pintar; al llegar, `onload` la aplica a todo. Con
+     `display=swap` el texto sale con la pila del sistema y cambia a Nunito Sans al momento. El
+     <noscript> conserva la carga normal si no hay JS (que tampoco tendría app, pero por si acaso). -->
+<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,400;0,6..12,600;0,6..12,700;0,6..12,800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,400;0,6..12,600;0,6..12,700;0,6..12,800&display=swap" rel="stylesheet"></noscript>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   body{font-family:'Nunito Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#F0F4F8;min-height:100vh;color:#1a1a2e}
@@ -70,8 +79,9 @@
   Sin build (ADR-001 R11 / plan.md decisión C-1). Los .jsx se transpilan EN EL NAVEGADOR
   (Babel.transform) y se registran en window.UI.* / window.Screens.* — no pueden
   importarse entre sí (Babel no resuelve ese grafo), así que la composición cruzada usa
-  esos namespaces globales. La carga la orquesta client/loader.js: fetch + Babel.transform
-  + import() en SECUENCIA (no el escaneo automático de Babel Standalone — verificado que
+  esos namespaces globales. La carga la orquesta client/loader.js: fetch en paralelo +
+  Babel.transform (o la caché en localStorage del transpilado, si el fuente no cambió) +
+  import() en SECUENCIA (no el escaneo automático de Babel Standalone — verificado que
   con 8 ficheros pierde alguno en silencio). El orden de JSX_FILES en loader.js es el que
   importa; este único <script> es la única entrada.
 -->
