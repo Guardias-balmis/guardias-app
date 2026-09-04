@@ -15,7 +15,7 @@ import { absences } from "../../v2/domain/absences.js";
 import { imaginariaQueue } from "../../v2/domain/imaginaria.js";
 import { groupOnDate, levelOn, periodsOfResident } from "../../v2/domain/residents.js";
 import { drawResponsible } from "../../v2/domain/responsible.js";
-import { parseISO, addDays } from "../../v2/domain/calendar.js";
+import { parseISO, addDays, academicYearOf } from "../../v2/domain/calendar.js";
 import { validateMonth, buildMonthContext, rotationHistoryStart } from "../../v2/domain/validate.js";
 import { canValidate, canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
 import {
@@ -67,7 +67,7 @@ function makeDeps({ today = "2026-12-01" } = {}) {
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
     domain: {
       absences, imaginariaQueue, groupOnDate, levelOn, periodsOfResident, drawResponsible,
-      parseISO, addDays, validateMonth, buildMonthContext, rotationHistoryStart,
+      parseISO, addDays, academicYearOf, validateMonth, buildMonthContext, rotationHistoryStart,
       canValidate, canEdit, stateAfterEdit,
       // marcarValidado comprueba el mes, los dos cierres de INV-3 y el tercer puesto: si falta
       // una sola de estas, la acción cae por TypeError. Es lo que este arnés sirve para detectar.

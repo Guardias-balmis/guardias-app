@@ -263,7 +263,11 @@ export function validateMonth(ctx) {
       const tieneVoB = absences(bloqueos, { residenteId: r.id, motivos: EXIME_DEL_MINIMO, desde: days[0], hasta: days[days.length - 1] }).length > 0;
       const nivelMedio = levelOnDay(r.id, days[Math.floor(days.length / 2)]);
       const r1Verano = nivelMedio === "R1" && (mes === 6 || mes === 7 || mes === 8);
-      if (!esFebrero && !tieneVoB && !r1Verano) {
+      // Presencia PARCIAL (2026-09-04): el R1 que se incorpora el 27 de mayo, o quien termina la
+      // residencia a mitad de mes, no puede llegar a 4 en los días que estuvo — la normativa ya
+      // dice «salvo excepciones», y este es un aviso falso predecible cada mayo.
+      const presenteTodoElMes = groupOf(levelOnDay(r.id, days[0])) !== null && groupOf(levelOnDay(r.id, days[days.length - 1])) !== null;
+      if (!esFebrero && !tieneVoB && !r1Verano && presenteTodoElMes) {
         // El mensaje sí distingue el caso que la normativa contempla expresamente ("R pequeños:
         // 4 guardias, e incluso alguno podría tocar a solo 3"): la severidad ya no los separa,
         // pero quien lee el aviso necesita saber si es un desajuste o lo esperable.
@@ -403,12 +407,25 @@ function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, viol
   const emittedRun = new Map(); // cohorte → estaba en exceso el día anterior
 
   for (const fecha of days) {
+    // Se cuentan RESIDENTES, no filas (2026-09-04): unas vacaciones registradas dentro de una
+    // rotación —o la misma ausencia dada de alta dos veces— son dos filas de la misma persona, y
+    // contarlas por separado hacía saltar el aviso con solo dos ausentes y el mismo id repetido.
+    // Si alguien tiene ROTACION y VACACIONES el mismo día, manda la rotación (es la prioritaria en
+    // la atribución de abajo).
     const cohorts = new Map(); // cohorte → [{id, motivo}]
+    const vistos = new Map(); // residenteId → entrada ya añadida
     for (const b of absences(bloqueos, { motivos: AUSENCIA_SIMULTANEA, fecha })) {
       const c = cohortOfId.get(b.residenteId);
       if (c === undefined) continue;
+      const previa = vistos.get(b.residenteId);
+      if (previa) {
+        if (previa.motivo === "VACACIONES" && b.motivo === "ROTACION") { previa.motivo = "ROTACION"; previa.desde = b.desde; }
+        continue;
+      }
+      const entrada = { id: b.residenteId, motivo: b.motivo, desde: b.desde };
+      vistos.set(b.residenteId, entrada);
       if (!cohorts.has(c)) cohorts.set(c, []);
-      cohorts.get(c).push({ id: b.residenteId, motivo: b.motivo, desde: b.desde });
+      cohorts.get(c).push(entrada);
     }
     for (const [c, ausentes] of cohorts) {
       const excess = ausentes.length > 2;

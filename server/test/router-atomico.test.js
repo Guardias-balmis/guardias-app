@@ -177,3 +177,48 @@ test("listas con elementos que no son objetos se rechazan con un mensaje, no con
   const r3 = call({ action: "validar", session, cuadrante: "nada" }, deps);
   assert.equal(r3.ok, true, "un cuadrante que no es objeto se trata como vacío");
 });
+
+// ── 2026-09-04: INV-15 en el borde del mes también en el servidor; eventos únicos; imaginaria con ausencias ──
+
+test("marcarValidado ve el par que cruza el borde del mes (G el 31 y G el 1) aunque no haya rotación cercana", () => {
+  const deps = makeDeps({ violaciones: (ctx) => validateMonth(ctx) }); // el validador REAL
+  const session = loggedInAs(deps, "resp@gmail.com");
+  call({ action: "guardarAsignaciones", session, cambios: [
+    { fecha: "2027-07-31", residenteId: "resp-1", codigo: "G" },
+    { fecha: "2027-08-01", residenteId: "resp-1", codigo: "G" },
+  ] }, deps);
+  const r = call({ action: "marcarValidado", session, mes: 8, anio: 2027 }, deps);
+  assert.equal(r.ok, false);
+  assert.ok(r.violaciones.some((v) => v.invariante === "INV-15" && /2027-07-31 y 2027-08-01/.test(v.detalle)), "INV-15 en el borde");
+  const r7 = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  assert.ok(r7.violaciones.some((v) => v.invariante === "INV-15"), "y también validando el mes anterior");
+});
+
+test("crearEvento rechaza un segundo evento activo del mismo tipo en el mismo curso, y admite el mismo tipo en otro curso o tras anular", () => {
+  const deps = makeDeps();
+  const session = loggedInAs(deps, "otro@gmail.com");
+  const e1 = call({ action: "crearEvento", session, tipo: "NAVIDAD", fecha: "2027-12-20" }, deps);
+  assert.equal(e1.ok, true);
+  const dup = call({ action: "crearEvento", session, tipo: "NAVIDAD", fecha: "2027-12-22" }, deps);
+  assert.equal(dup.ok, false);
+  assert.match(dup.error, /ya hay un evento NAVIDAD activo en ese curso \(el 2027-12-20\)/);
+  assert.equal(call({ action: "crearEvento", session, tipo: "DESPEDIDA", fecha: "2028-05-20" }, deps).ok, true, "otro tipo, mismo curso");
+  assert.equal(call({ action: "crearEvento", session, tipo: "NAVIDAD", fecha: "2028-12-18" }, deps).ok, true, "mismo tipo, curso siguiente");
+  call({ action: "anularEvento", session, id: e1.id }, deps);
+  assert.equal(call({ action: "crearEvento", session, tipo: "NAVIDAD", fecha: "2027-12-22" }, deps).ok, true, "tras anular sí");
+});
+
+test("colaImaginaria aparta a quien está de baja ese día, y listBloqueosRango no devuelve filas ilegibles", async () => {
+  const deps = makeDeps();
+  deps.domain.imaginariaQueue = (await import("../../v2/domain/imaginaria.js")).imaginariaQueue;
+  const session = loggedInAs(deps, "otro@gmail.com");
+  call({ action: "crearBloqueo", session: loggedInAs(deps, "resp@gmail.com"), desde: "2027-07-01", hasta: "2027-07-31", motivo: "BAJA" }, deps);
+  deps.store.appendRecord("bloqueos", { id: "corrupta", residenteId: "otro-1", desde: "30/02/2027", hasta: "2027-07-20", motivo: "VACACIONES", activo: true });
+  const cola = call({ action: "colaImaginaria", session, grupo: "MAYOR", fecha: "2027-07-10" }, deps);
+  assert.equal(cola.ok, true);
+  assert.equal(cola.cola.find((x) => x.residenteId === "resp-1").apartadoPor, "está de baja");
+  const rango = call({ action: "listBloqueosRango", session, desde: "2027-07-01", hasta: "2027-07-31" }, deps);
+  assert.equal(rango.ok, true);
+  assert.equal(rango.bloqueos.some((b) => b.id === "corrupta"), false, "la fila ilegible no alimenta la aritmética de los cierres");
+  assert.equal(call({ action: "listBloqueos", session, anio: 2027, mes: 7 }, deps).bloqueos.some((b) => b.id === "corrupta"), true, "pero sigue visible para cancelarla");
+});

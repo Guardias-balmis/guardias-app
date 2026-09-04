@@ -604,3 +604,26 @@ test("INV-3 anual: una baja IDÉNTICA en toda la cohorte tampoco encoge el ±1",
   // Antes de V-37: f = 0,75 para los dos → 26,64 vs 27,97 → avisaba en `total`, `findes` y más.
   assert.deepEqual(inv3(v), []);
 });
+
+// ── 2026-09-04: quien dejó la residencia no «cierra» años que no cursó; sin disponibilidad no se compara ──
+import { validateResidencyYearClose as vryc2, buildYearCloseContext as bycc2, yearCloseHistoryStart as ychs2 } from "../equity.js";
+
+test("un residente que se fue en marzo (fechaFin en su R2) no cierra su año en mayo ni el siguiente: sin avisos de ceros contra su cohorte", () => {
+  const salio = { id: "salio", fechaInicio: "2024-05-27", fechaFin: "2026-03-15" };
+  const sigue = { id: "sigue", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
+  const historicas = Array.from({ length: 12 }, (_, i) => ({ residenteId: "sigue", fecha: `2025-${String(6 + (i % 6)).padStart(2, "0")}-${String(1 + i).padStart(2, "0")}`, codigo: "G" }));
+  for (const [mes, anio] of [[5, 2026], [5, 2027]]) {
+    const v = vryc2(bycc2({ mes, anio, residentes: [salio, sigue], historicas, asignacionesDelMes: [], bloqueos: [] }));
+    assert.deepEqual(v.filter((x) => x.invariante === "INV-3" && /salio/.test(x.detalle)), [], `${mes}/${anio}: nada que comparar con quien ya no está`);
+  }
+  assert.equal(ychs2([salio], 5, 2027), null, "tampoco pide histórico para alguien que se fue");
+});
+
+test("baja durante TODO el año de residencia: se excluye de la comparación en vez de juzgarse como plenamente disponible con cero guardias", () => {
+  const a = { id: "a", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
+  const baja = { id: "baja", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
+  const historicas = Array.from({ length: 12 }, (_, i) => ({ residenteId: "a", fecha: `2025-${String(6 + (i % 6)).padStart(2, "0")}-${String(1 + i).padStart(2, "0")}`, codigo: "G" }));
+  const bloqueos = [{ residenteId: "baja", desde: "2025-05-27", hasta: "2026-05-26", motivo: "BAJA", activo: true }];
+  const v = vryc2(bycc2({ mes: 5, anio: 2026, residentes: [a, baja], historicas, asignacionesDelMes: [], bloqueos }));
+  assert.deepEqual(v.filter((x) => x.invariante === "INV-3" && /baja/.test(x.detalle)), []);
+});

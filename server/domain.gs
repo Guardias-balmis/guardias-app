@@ -524,7 +524,32 @@ function validateTrainingPeriods(periods) {
   return errors;
 }
 
-  return { LEVELS, defaultTrainingPeriods, levelOn, periodOn, groupOf, isActiveOn, periodsOfResident, groupOnDate, validateTrainingPeriods };
+/**
+ * La ventana [inicio, cierre] del año de residencia que TERMINA dentro de `mes/anio`, o null si
+ * ese mes no cierra ninguno. ÚNICA definición (2026-09-04): `equity.js` la tenía sobre
+ * `periodsOfResident` y `thirdpost.js` sobre el aniversario nominal, así que con unos periodos
+ * editados (nota [a]) el mismo residente cerraba su año en un mes para INV-3 y en otro para INV-8
+ * — justo la incoherencia entre módulos que V-24 vino a quitar.
+ *
+ * Dos casos que NO cierran nada, a propósito:
+ *  - Quien dejó la residencia antes del fin nominal (`fechaFin` dentro de R2, digamos): sus
+ *    periodos R2/R3 derivados siguen «terminando» en mayo, pero ya no estaba — compararlo con su
+ *    cohorte daría ceros contra guardias reales en todos los ejes, dos mayos seguidos.
+ *  - Una ventana invertida (inicio > fin), que es lo que le queda a ese mismo residente como R4:
+ *    `tally` no contaría nada en ella y saldrían los mismos ceros.
+ */
+function closingPeriodOn(residente, mes, anio) {
+  const periodos = periodsOfResident(residente);
+  const finReal = periodos[periodos.length - 1].end;
+  const prefijo = `${anio}-${String(mes).padStart(2, "0")}`;
+  const p = periodos.find((per) => String(per.end).startsWith(prefijo));
+  if (!p) return null;
+  if (compareISO(p.end, finReal) > 0) return null;
+  if (compareISO(p.start, p.end) > 0) return null;
+  return { start: p.start, end: p.end };
+}
+
+  return { LEVELS, defaultTrainingPeriods, levelOn, periodOn, groupOf, isActiveOn, periodsOfResident, groupOnDate, validateTrainingPeriods, closingPeriodOn };
 })();
 
 // ── tally.js ──
@@ -755,6 +780,8 @@ var BlockPreview = (function () {
 
 const MESES_VENTANA_BLOQUEANTE = 3;
 const TECHO_INV2 = 6;
+// Días de un mes medio: la carga se mide POR MES, que es la unidad del techo de INV-2.
+const DIAS_MES_MEDIO = 30.44;
 const CONCENTRACION_MAX = 2;
 
 const err = (tipo, detalle, extra = {}) => ({ tipo, severidad: "error", detalle, ...extra });
@@ -862,13 +889,19 @@ function previewBloqueoRisk(nuevo, { residentes, bloqueosActivos, today }) {
       : aviso("IMPOSIBILIDAD", `${detalle} (fuera de la ventana de 3 meses: no bloquea, puede resolverse antes)`, { fecha: diaImposible }));
   }
 
-  // 2. Sobrecarga (espejo INV-2) — siempre aviso. Días del periodo que el grupo debe cubrir
-  // (uno por día) divididos entre los que quedarían disponibles en el peor día del periodo.
+  // 2. Sobrecarga (espejo INV-2) — siempre aviso. El grupo cubre UNA guardia por día, así que
+  // los días del periodo que caen en un mismo mes se reparten entre los disponibles del peor día:
+  // eso es lo que cada uno carga DE MÁS ese mes, y se compara con el techo mensual de INV-2. Un
+  // periodo más largo que un mes no carga más por mes —cada mes se reparten sus ~30 días—, de ahí
+  // el tope a los días de un mes. Antes se dividían los días del periodo ENTERO entre los
+  // disponibles y se comparaba eso con «6/mes» (corregido el 2026-09-04): una rotación de tres
+  // meses con seis Mayores libres daba «15,3 > 6» cuando la carga real es ~5 al mes, y cualquier
+  // ausencia de más de cinco semanas avisaba, la absorbiera el grupo o no.
   if (minDisponibles > 0) {
-    const promedio = dias.length / minDisponibles;
-    if (promedio > TECHO_INV2) {
+    const porMes = Math.min(dias.length, DIAS_MES_MEDIO) / minDisponibles;
+    if (porMes > TECHO_INV2) {
       riesgos.push(aviso("SOBRECARGA",
-        `${dias.length} día(s) del periodo repartidos entre ${minDisponibles} residente(s) disponible(s): ${promedio.toFixed(1)} de media, por encima del techo de ${TECHO_INV2}/mes`,
+        `Con ${minDisponibles} residente(s) disponible(s) en el peor día del periodo (${dias.length} día(s)), a cada uno le tocarían ${porMes.toFixed(1)} guardias en un mes, por encima del techo de ${TECHO_INV2}/mes`,
         { diasPeriodo: dias.length, disponibles: minDisponibles }));
     }
   }
@@ -928,6 +961,7 @@ var Imaginaria = (function () {
 
   const { addDays } = Calendar;
   const { groupOnDate, levelOn, periodsOfResident } = Residents;
+  const { absences } = Absences;
 
 const GUARDIA = new Set(["G", "GF", "GP"]); // el 3P no ocupa puesto obligatorio
 
@@ -956,15 +990,24 @@ function isEligibleForImaginaria(residente, grupo, fecha) {
  * comprometer el descanso previo a esa guardia), y a quien tenga guardia la propia noche de la
  * incidencia. Tampoco está en la normativa: práctica real del servicio (V-20).
  *
+ * Y se aparta a quien tenga una AUSENCIA registrada ese día (2026-09-04): a quien está de baja no
+ * se le puede exigir una guardia (el fundamento de INV-5), y quien está de vacaciones o rotando
+ * fuera no está en el hospital para cogerla. Sin esto la lista proponía llamar primero a quien
+ * llevaba un mes de baja, justo en el único momento en que la herramienta se usa (las ocho de la
+ * mañana con un puesto sin cubrir).
+ *
  * @param {object} p
  *   - residentes, coberturas: filas de `imaginaria` (solo las activas), asignaciones
+ *   - bloqueos: filas de `bloqueos` (las activas las filtra `absences`, V-19); opcional
  *   - grupo: "MAYOR" | "PEQUENO" — el del puesto que hay que cubrir
  *   - fechaIncidencia: ISO
  * @returns {{residenteId:string, ultimaCobertura:string|null, apartadoPor:string|null}[]}
  *   TODA la lista elegible, en orden, con el motivo de quien queda apartado — la pantalla
  *   enseña a quién llamar y también a quién no, que es lo que evita la llamada inútil.
  */
-function imaginariaQueue({ residentes = [], coberturas = [], asignaciones = [], grupo, fechaIncidencia }) {
+const AUSENCIA_LABEL = { BAJA: "está de baja", VACACIONES: "está de vacaciones", ROTACION: "está de rotación externa" };
+
+function imaginariaQueue({ residentes = [], coberturas = [], asignaciones = [], bloqueos = [], grupo, fechaIncidencia }) {
   const vispera = addDays(fechaIncidencia, -1);
   const siguiente = addDays(fechaIncidencia, 1);
 
@@ -976,17 +1019,22 @@ function imaginariaQueue({ residentes = [], coberturas = [], asignaciones = [], 
   }
 
   const guardiaEn = (id, fecha) => asignaciones.some((a) => a.residenteId === id && a.fecha === fecha && GUARDIA.has(a.codigo));
+  const ausenciaEn = (id) => absences(bloqueos, { residenteId: id, fecha: fechaIncidencia })[0] || null;
 
   return residentes
     .filter((r) => isEligibleForImaginaria(r, grupo, fechaIncidencia))
-    .map((r) => ({
-      residenteId: r.id,
-      ultimaCobertura: ultimaPorResidente.get(r.id) || null,
-      apartadoPor: guardiaEn(r.id, fechaIncidencia) ? "tiene guardia esa misma noche"
-        : guardiaEn(r.id, vispera) ? `tiene guardia el día anterior (${vispera})`
-          : guardiaEn(r.id, siguiente) ? `tiene guardia el día siguiente (${siguiente})`
-            : null,
-    }))
+    .map((r) => {
+      const ausencia = ausenciaEn(r.id);
+      return {
+        residenteId: r.id,
+        ultimaCobertura: ultimaPorResidente.get(r.id) || null,
+        apartadoPor: ausencia ? (AUSENCIA_LABEL[ausencia.motivo] || `tiene una ausencia registrada (${ausencia.motivo})`)
+          : guardiaEn(r.id, fechaIncidencia) ? "tiene guardia esa misma noche"
+            : guardiaEn(r.id, vispera) ? `tiene guardia el día anterior (${vispera})`
+              : guardiaEn(r.id, siguiente) ? `tiene guardia el día siguiente (${siguiente})`
+                : null,
+      };
+    })
     .sort((a, b) => {
       // Los apartados van al final, pero se devuelven: la pantalla dice por qué no se les llama.
       if (!a.apartadoPor !== !b.apartadoPor) return a.apartadoPor ? 1 : -1;
@@ -1076,7 +1124,7 @@ var Thirdpost = (function () {
 // INV-8 sigue exigiendo la confirmación explícita de la UI.
 
   const { weekday, compareISO, addDays, addMonths, addYears, datesOfMonth } = Calendar;
-  const { levelOn, periodsOfResident } = Residents;
+  const { levelOn, periodsOfResident, closingPeriodOn } = Residents;
 
 const aviso = (detalle, extra = {}) => ({ invariante: "INV-8", severidad: "aviso", detalle, ...extra });
 
@@ -1267,13 +1315,15 @@ function thirdPostHistoryStart(voluntarios3P = [], residentes = [], mes, anio) {
   return min;
 }
 
-/** Si el residente cierra un año de residencia dentro de [mes/anio], devuelve la ventana [inicio, cierre]. */
+/**
+ * Si el residente cierra un año de residencia dentro de [mes/anio], devuelve la ventana [inicio,
+ * cierre]. Es la misma definición que usa el cierre anual de INV-3 (`residents.js:closingPeriodOn`,
+ * 2026-09-04): antes se calculaba aquí sobre el aniversario NOMINAL, ignorando los periodos
+ * editados de la nota [a] y la `fechaFin` real, y un R2 con la promoción retrasada cerraba su año
+ * en mayo para INV-8c y en junio para INV-3.
+ */
 function closingWindowThisMonth(r, mes, anio) {
-  for (let k = 1; k <= 4; k++) {
-    const cierre = addDays(addYears(r.fechaInicio, k), -1);
-    if (inMonth(cierre, mes, anio)) return { start: addYears(r.fechaInicio, k - 1), end: cierre };
-  }
-  return null;
+  return closingPeriodOn(r, mes, anio);
 }
 
 function countThirdPostInWindow(id, historial3P, thisMonth3P, win) {
@@ -1306,7 +1356,7 @@ var Equity = (function () {
   const { tally } = Tally;
   const { absences, DESCUENTA_DISPONIBILIDAD, AUSENTE_EN_PUENTE } = Absences;
   const { accumulatedTally } = Accumulate;
-  const { periodsOfResident } = Residents;
+  const { periodsOfResident, closingPeriodOn } = Residents;
 
 // Los seis ejes de INV-3 y cuáles se normalizan por disponibilidad. Se EXPORTAN porque el
 // generador (`schedule.js`) y el banco de equidad tienen que perseguir exactamente lo que este
@@ -1376,7 +1426,14 @@ function validateResidencyYearClose(ctx) {
       dobletes: acc.dobletes + t.dobletes,
       puentesLibres: acc.puentesLibres + puentesLibresMes,
     };
-    const f = availabilityFraction(win, absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD }));
+    const bajas = absences(bloqueos, { residenteId: r.id, motivos: DESCUENTA_DISPONIBILIDAD });
+    // Sin un solo día disponible en todo el año (baja de principio a fin: el embarazo largo que
+    // V-5 modela como BAJA) no hay nada que comparar: `availabilityFraction` devolvería 1 —su
+    // salida para el caso degenerado— y el cierre lo juzgaría como plenamente disponible con cero
+    // guardias, avisando en los seis ejes contra toda su cohorte. Mismo criterio que la cohorte
+    // de uno: se queda fuera de la comparación.
+    if (availableDays(win, bajas) <= 0) continue;
+    const f = availabilityFraction(win, bajas);
 
     const cohorte = cohortOf(r);
     if (!byCohort.has(cohorte)) byCohort.set(cohorte, []);
@@ -1617,8 +1674,8 @@ function validateQuarterClose(ctx) {
  * una ventana que se extendía más allá de su último día.
  */
 function closingWindowThisMonth(r, mes, anio) {
-  const p = periodsOfResident(r).find((per) => inMonth(per.end, mes, anio));
-  return p ? { start: p.start, end: p.end } : null;
+  // La definición vive en residents.js desde 2026-09-04, compartida con thirdpost.js.
+  return closingPeriodOn(r, mes, anio);
 }
 
 /** Fracción de disponibilidad = (días de la ventana − días de baja) / días de la ventana. */
@@ -1987,7 +2044,11 @@ function validateMonth(ctx) {
       const tieneVoB = absences(bloqueos, { residenteId: r.id, motivos: EXIME_DEL_MINIMO, desde: days[0], hasta: days[days.length - 1] }).length > 0;
       const nivelMedio = levelOnDay(r.id, days[Math.floor(days.length / 2)]);
       const r1Verano = nivelMedio === "R1" && (mes === 6 || mes === 7 || mes === 8);
-      if (!esFebrero && !tieneVoB && !r1Verano) {
+      // Presencia PARCIAL (2026-09-04): el R1 que se incorpora el 27 de mayo, o quien termina la
+      // residencia a mitad de mes, no puede llegar a 4 en los días que estuvo — la normativa ya
+      // dice «salvo excepciones», y este es un aviso falso predecible cada mayo.
+      const presenteTodoElMes = groupOf(levelOnDay(r.id, days[0])) !== null && groupOf(levelOnDay(r.id, days[days.length - 1])) !== null;
+      if (!esFebrero && !tieneVoB && !r1Verano && presenteTodoElMes) {
         // El mensaje sí distingue el caso que la normativa contempla expresamente ("R pequeños:
         // 4 guardias, e incluso alguno podría tocar a solo 3"): la severidad ya no los separa,
         // pero quien lee el aviso necesita saber si es un desajuste o lo esperable.
@@ -2127,12 +2188,25 @@ function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, viol
   const emittedRun = new Map(); // cohorte → estaba en exceso el día anterior
 
   for (const fecha of days) {
+    // Se cuentan RESIDENTES, no filas (2026-09-04): unas vacaciones registradas dentro de una
+    // rotación —o la misma ausencia dada de alta dos veces— son dos filas de la misma persona, y
+    // contarlas por separado hacía saltar el aviso con solo dos ausentes y el mismo id repetido.
+    // Si alguien tiene ROTACION y VACACIONES el mismo día, manda la rotación (es la prioritaria en
+    // la atribución de abajo).
     const cohorts = new Map(); // cohorte → [{id, motivo}]
+    const vistos = new Map(); // residenteId → entrada ya añadida
     for (const b of absences(bloqueos, { motivos: AUSENCIA_SIMULTANEA, fecha })) {
       const c = cohortOfId.get(b.residenteId);
       if (c === undefined) continue;
+      const previa = vistos.get(b.residenteId);
+      if (previa) {
+        if (previa.motivo === "VACACIONES" && b.motivo === "ROTACION") { previa.motivo = "ROTACION"; previa.desde = b.desde; }
+        continue;
+      }
+      const entrada = { id: b.residenteId, motivo: b.motivo, desde: b.desde };
+      vistos.set(b.residenteId, entrada);
       if (!cohorts.has(c)) cohorts.set(c, []);
-      cohorts.get(c).push({ id: b.residenteId, motivo: b.motivo, desde: b.desde });
+      cohorts.get(c).push(entrada);
     }
     for (const [c, ausentes] of cohorts) {
       const excess = ausentes.length > 2;

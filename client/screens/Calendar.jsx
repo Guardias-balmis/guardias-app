@@ -17,6 +17,7 @@ import { violationText } from "./client/lib/violations.js";
 // y medido resulta que uno de cada tres colocados a ciegas crea un error — con 4 al mes, el 74%
 // de los meses dejan de poder validarse. Sin esto, eso se descubre al pulsar Validar.
 import { chainedNeighbour } from "./client/lib/rest.js";
+import { partirBloqueosLegibles, violacionesBloqueoIlegible } from "./client/lib/bloqueos.js";
 
 const { useState, useEffect, useRef } = React;
 const { Card, Btn, Aviso } = window.UI;
@@ -454,7 +455,10 @@ function CalendarScreen() {
       app.api.listExcepciones(),
     ]);
     if (!rBloqueos.ok) { setViolaciones(null); showToast("Error cargando bloqueos para validar: " + rBloqueos.error, "err"); return; }
-    const bloqueos = rBloqueos.bloqueos;
+    // Las ausencias con fecha ilegible se apartan como hace el servidor (V-22) y se reportan como
+    // error INV-5 que las nombra: `listBloqueos` las devuelve a propósito para poder cancelarlas, y
+    // pasadas tal cual a INV-7 hacían lanzar la validación entera.
+    const { usables: bloqueos, corruptas: bloqueosIlegibles } = partirBloqueosLegibles(rBloqueos.bloqueos);
 
     // Contrato C-2 (spec.md §5): INV-7 evalúa la rotación cercana solo en el mes en que
     // TERMINA, pero necesita las guardias del residente de TODO el periodo — que puede
@@ -520,7 +524,7 @@ function CalendarScreen() {
       showToast("No se pudo comprobar el tercer puesto (INV-8): " + r3P.error, "err");
     }
 
-    const v = [...validateMonth(ctx), ...(rCierres.ok ? rCierres.violaciones : []), ...(r3P.ok ? r3P.violaciones : [])];
+    const v = [...violacionesBloqueoIlegible(bloqueosIlegibles), ...validateMonth(ctx), ...(rCierres.ok ? rCierres.violaciones : []), ...(r3P.ok ? r3P.violaciones : [])];
     setViolaciones(v);
 
     // Decisión de Fase 6.2 (V-9/V-10): BORRADOR->VALIDADO es automático en cuanto el

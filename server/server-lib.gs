@@ -1229,7 +1229,11 @@ function handleRequest(rawBody, deps) {
         return authed(req, deps, () => {
           const rango = validRango(req, deps);
           if (rango.ok === false) return rango;
-          return { ok: true, bloqueos: bloqueosInRange(deps, allBloqueos(deps), rango.desde, rango.hasta) };
+          // Solo las legibles (2026-09-04): esta acción alimenta los cierres de equidad, que hacen
+          // aritmética de fechas y lanzaban con una fila ilegible; la fila sigue visible —para poder
+          // cancelarla— en `listBloqueos`/`misBloqueos`, que es donde se enseña (V-22).
+          const { usables } = partitionBloqueos(deps, allBloqueos(deps));
+          return { ok: true, bloqueos: bloqueosInRange(deps, usables, rango.desde, rango.hasta) };
         });
 
       // FESTIVOS (S-4: datos de entrada, nunca derivados). Lectura por RANGO y abierta a cualquier
@@ -1439,6 +1443,12 @@ function handleRequest(rawBody, deps) {
         return authed(req, deps, () => {
           if (!EVENTO_TIPOS.has(req.tipo)) return { ok: false, error: "tipo de evento inválido (NAVIDAD o DESPEDIDA)" };
           try { deps.domain.parseISO(req.fecha); } catch (e) { return { ok: false, error: "fecha inválida: " + e.message }; }
+          // Uno por tipo y curso (2026-09-04): con dos Navidades activas, `buildMonthContext` se
+          // quedaba con la última en silencio y la primera perdía el trato de INV-9/INV-10. Para
+          // corregir una fecha hay que anular la anterior y crear la nueva, no apilar.
+          const curso = deps.domain.academicYearOf(req.fecha);
+          const repetido = activeEventos(deps).find((e) => e.tipo === req.tipo && deps.domain.academicYearOf(e.fecha) === curso);
+          if (repetido) return { ok: false, error: `ya hay un evento ${req.tipo} activo en ese curso (el ${repetido.fecha}): anúlalo antes de crear otro` };
           // Sin duplicados ni basura: dos veces el mismo id dejaba el evento sin poder sortearse
           // («candidatos vacío» al apartar al primero de una lista de dos iguales).
           const voluntarios = [...new Set((Array.isArray(req.voluntarios) ? req.voluntarios : []).filter((v) => typeof v === "string" && v))];
@@ -1529,12 +1539,16 @@ function handleRequest(rawBody, deps) {
           const todas = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
           const desde = deps.domain.addDays(req.fecha, -1);
           const hasta = deps.domain.addDays(req.fecha, 1);
+          // Las ausencias del día (2026-09-04): sin ellas la cola proponía llamar a quien estaba de
+          // baja. Solo las legibles: una fila con fecha ilegible no puede decir si cubre ese día.
+          const { usables } = partitionBloqueos(deps, allBloqueos(deps));
           return {
             ok: true,
             cola: deps.domain.imaginariaQueue({
               residentes: allResidentes(deps),
               coberturas: activeImaginaria(deps),
               asignaciones: todas.filter((a) => a.fecha >= desde && a.fecha <= hasta),
+              bloqueos: bloqueosInRange(deps, usables, req.fecha, req.fecha),
               grupo: req.grupo, fechaIncidencia: req.fecha,
             }),
           };
@@ -2349,8 +2363,11 @@ function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps), propuest
   const monthStart = `${prefix}-01`;
   const bloqueos = bloqueosInRange(deps, snap.bloqueos, monthStart, `${prefix}-31`);
   const asignacionesDelMes = propuesta || snap.asignaciones.filter((a) => a.fecha.startsWith(prefix));
-  const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
-  const historicas = desdeRotacion ? snap.asignaciones.filter((a) => a.fecha >= desdeRotacion && a.fecha < monthStart) : [];
+  // El histórico lleva SIEMPRE los dos días de fuera del mes (2026-09-04): INV-15 juzga el par de
+  // días consecutivos y cuenta con que «el histórico ya llega», pero aquí solo llegaba cuando había
+  // una rotación cercana (C-2). En el caso normal, una guardia el día 1 pegada a otra el último día
+  // del mes anterior pasaba `marcarValidado`, y el generador con IA la ESCRIBÍA aunque el prompt le
+  // pidiera lo contrario. Calendar.jsx ya lo hacía por su cuenta (`bordes`); el servidor es el juez.
   // Con margen hacia atrás: el vecino del día 1 cae en el mes anterior y decide si es puente
   // (§3.4). Se cogen los festivos desde el 1 del mes anterior —de más, y son inertes: isHoliday
   // compara fechas exactas y bridgesOfMonth solo mira día±1— en vez de restar un día, para no
@@ -2359,6 +2376,15 @@ function buildCuadranteCtx(deps, mes, anio, snap = monthSnapshot(deps), propuest
   const mesAnterior = mes === 1 ? `${anio - 1}-12` : `${anio}-${String(mes - 1).padStart(2, "0")}`;
   const mesSiguiente = mes === 12 ? `${anio + 1}-01` : `${anio}-${String(mes + 1).padStart(2, "0")}`;
   const festivos = (snap.festivos || []).filter((f) => f.fecha >= `${mesAnterior}-01` && f.fecha <= `${mesSiguiente}-01`);
+  // El mismo margen para las asignaciones: el mes anterior entero (sobra, y es inerte: cada
+  // invariante mira solo los días del mes, salvo INV-15 que juzga el par con la víspera del día 1,
+  // e INV-7, que ya pedía este histórico por C-2) y el día 1 del siguiente. Sin la rotación cercana
+  // el histórico era `[]`, así que una guardia el día 1 pegada a la del último día del mes anterior
+  // pasaba `marcarValidado` y el generador con IA la ESCRIBÍA aunque el prompt le pidiera lo
+  // contrario. Calendar.jsx ya lo hacía por su cuenta (`bordes`); el servidor es el juez.
+  const desdeRotacion = deps.domain.rotationHistoryStart(bloqueos, monthStart);
+  const desdeHistorico = desdeRotacion && desdeRotacion < `${mesAnterior}-01` ? desdeRotacion : `${mesAnterior}-01`;
+  const historicas = snap.asignaciones.filter((a) => (a.fecha >= desdeHistorico && a.fecha < monthStart) || a.fecha === `${mesSiguiente}-01`);
   // Los eventos van SIN filtrar por mes: `buildMonthContext` se queda con los del año académico,
   // que es lo que empareja la Navidad de diciembre con la despedida del mayo siguiente. Las
   // excepciones también van sin filtrar: `twoR2Justified` ya comprueba tipo y rango él mismo.
