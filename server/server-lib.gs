@@ -2510,11 +2510,29 @@ function handleGenerarIA(req, deps, session) {
   // guardia sobre la propia baja, un R1 en julio), ninguna propuesta puede arreglarlo —tocar una
   // fijada es FORMATO— y los tres intentos se irían, a un minuto y una llamada al modelo cada uno,
   // en culpar al modelo con un «hay que montar este mes a mano». Se corta antes de gastar ninguno y
-  // se dice la causa real. INV-1 se excluye porque los días sin cubrir son justo lo que el modelo va
-  // a rellenar (un INV-1 de composición entre fijadas, dos Pequeños el mismo día, sigue costando los
-  // tres intentos: no se distingue por el texto del mensaje, a propósito).
+  // se dice la causa real. Los INV-1 de los días sin cubrir se excluyen porque son justo lo que el
+  // modelo va a rellenar; los de composición entre fijadas (dos del mismo grupo el mismo día) no.
   if (completar && fijadas.length > 0) {
-    const previos = validar([]).filter((v) => v.severidad === "error" && v.invariante !== "INV-1");
+    // INV-1 se descarta SOLO donde es un hueco (menos de dos fijadas ocupando puesto ese día): con dos
+    // o más, el error es de composición entre fijadas (dos Mayores el mismo día) y el modelo tampoco
+    // puede arreglarlo. Criterio estructural por `fecha`, nunca por el texto del mensaje (V-14).
+    const fijadasPorDia = new Map();
+    for (const f of fijadas) if (CODIGOS_GUARDIA.has(f.codigo)) fijadasPorDia.set(f.fecha, (fijadasPorDia.get(f.fecha) || 0) + 1);
+    // Y una fijada de alguien que no está en activo ese día (FINALIZADO, aún no incorporado, periodos
+    // editados después de apuntarla): el prompt exigiría repetirla y el plan la rechazaría como
+    // desconocida — un modelo obediente fallaría siempre.
+    const porId = new Map(snap.residentes.map((r) => [r.id, r]));
+    const fijadasAjenas = fijadas.filter((f) => {
+      const r = porId.get(f.residenteId);
+      return !r || !NIVELES_ASIGNABLES.has(deps.domain.levelOn(deps.domain.periodsOfResident(r), f.fecha));
+    }).map((f) => ({
+      invariante: "FORMATO", severidad: "error", residenteId: f.residenteId, fecha: f.fecha,
+      detalle: `la guardia ya fijada de "${f.residenteId}" el ${f.fecha} es de alguien que no está en activo ese día: quítala o corrige sus fechas antes de generar`,
+    }));
+    const previos = [
+      ...fijadasAjenas,
+      ...validar([]).filter((v) => v.severidad === "error" && (v.invariante !== "INV-1" || (fijadasPorDia.get(v.fecha) || 0) >= 2)),
+    ];
     if (previos.length > 0) {
       escribirBitacora(deps, session, req, modelo, 0, "FIJADAS_INVALIDAS", previos, modo);
       return {

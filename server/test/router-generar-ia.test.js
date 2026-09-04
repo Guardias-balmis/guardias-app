@@ -662,3 +662,32 @@ test("si un residente deja de ser asignable mientras el modelo pensaba (periodos
   assert.equal(r.resultado, "CONFLICTO");
   assert.equal(asignacionesDe(deps).length, 0);
 });
+
+test("el precheck de las fijadas distingue el INV-1 de un hueco (se rellena) del de composición entre fijadas (dos el mismo día: FIJADAS_INVALIDAS)", () => {
+  const INV1 = [{ invariante: "INV-1", severidad: "error", detalle: "Guardia del 2027-07-10 con dos Mayores", fecha: "2027-07-10" }];
+  // (a) dos fijadas el día 10: el error es entre ellas → se corta sin llamar al modelo.
+  const llmA = fakeLlm([ok(RESPUESTA_OK)]);
+  const depsA = makeDeps({ llm: llmA, violaciones: () => INV1, extraSheets: { asignaciones: [headerOf(TABLES.asignaciones), fila("2027-07-10", "resp-1", "G"), fila("2027-07-10", "otro-1", "G")] } });
+  const rA = generar(depsA, loggedInAs(depsA, "resp@gmail.com"), { modo: "completar" });
+  assert.equal(rA.resultado, "FIJADAS_INVALIDAS");
+  assert.equal(llmA.prompts.length, 0);
+  // (b) una sola fijada, otro día: el INV-1 del día 10 es un hueco → se intenta con el modelo.
+  const llmB = fakeLlm([ok(RESPUESTA_OK)]);
+  const depsB = makeDeps({ llm: llmB, violaciones: () => INV1, extraSheets: { asignaciones: [headerOf(TABLES.asignaciones), fila("2027-07-11", "resp-1", "G")] } });
+  const rB = generar(depsB, loggedInAs(depsB, "resp@gmail.com"), { modo: "completar" });
+  assert.equal(rB.resultado, "REVISION_MANUAL");
+  assert.equal(llmB.prompts.length, 3);
+});
+
+test("una fijada de alguien que no está en activo ese día (FINALIZADO) es FIJADAS_INVALIDAS, no tres intentos perdidos", () => {
+  const FIN = { id: "fin-1", nombre: "Fin Acabado", email: "fin@gmail.com", fechaInicio: "2020-05-25", fechaFin: "2024-05-26" };
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm, extraSheets: {
+    residentes: [headerOf(TABLES.residentes), ...[RESP, OTRO, FIN].map((r) => recordToRow(TABLES.residentes, r))],
+    asignaciones: [headerOf(TABLES.asignaciones), fila("2027-07-12", "fin-1", "G")],
+  } });
+  const r = generar(deps, loggedInAs(deps, "resp@gmail.com"), { modo: "completar" });
+  assert.equal(r.resultado, "FIJADAS_INVALIDAS");
+  assert.equal(llm.prompts.length, 0);
+  assert.ok(r.violaciones.some((v) => v.residenteId === "fin-1" && /no está en activo/.test(v.detalle)));
+});

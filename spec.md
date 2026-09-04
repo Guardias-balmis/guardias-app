@@ -51,11 +51,15 @@ Responsable { periodoInicio, periodoFin, residenteId, metodo: VOLUNTARIO|SORTEO,
 Generacion {                    # bitácora de un intento de generar el mes con IA (decisión V-45)
   id: UUID, mes: 1..12, anio, fecha: date, actorId
   modelo: string                # el id de modelo REALMENTE usado, no el del defecto del código
-  intentos: 1..3                # cuántas vueltas del ciclo propuesta→validación hicieron falta
-  resultado: APLICADO | REVISION_MANUAL | ERROR_MODELO | CONFLICTO
-  # CONFLICTO (2026-09-04): la propuesta era válida pero el mes cambió (alguien guardó celdas o
-  # movió su estado) mientras el modelo respondía; no se escribió nada y hay que volver a pedirla.
-  violaciones: json             # las que quedaban en el último intento (los avisos, si se aplicó)
+  intentos: 0..3                # cuántas vueltas del ciclo propuesta→validación hicieron falta (0: no se llamó al modelo)
+  resultado: APLICADO | REVISION_MANUAL | ERROR_MODELO | CONFLICTO | FIJADAS_INVALIDAS
+  # CONFLICTO (2026-09-04): la propuesta era válida pero el mes cambió (alguien guardó celdas,
+  # registró una ausencia o movió su estado) mientras el modelo respondía; se volvió a juzgar bajo
+  # el lock con los datos de ahora, no se escribió nada y hay que volver a pedirla.
+  # FIJADAS_INVALIDAS (2026-09-04, solo en COMPLETAR): las guardias ya puestas en la rejilla
+  # incumplen por sí solas una regla dura (o son de alguien que no está en activo ese día); no se
+  # llamó al modelo (intentos=0) y hay que corregirlas en el cuadrante antes de generar.
+  violaciones: json             # las que quedaban en el último intento (los avisos, si se aplicó); acotadas a 50 y 40.000 caracteres
   modo: COMPLETAR | REEMPLAZAR  # V-47: si respetó las guardias que ya había en la rejilla o sustituyó el mes
   # Append-only como todo lo demás. Es la ÚNICA constancia de que un mes lo propuso un modelo y de
   # que hubo un mes que no supo resolver: `asignaciones` guarda las filas, no quién las escribió.
