@@ -106,11 +106,26 @@ function consumeNonce_(n) {
 }
 
 // Verificación del ID token contra tokeninfo, con reintentos + backoff (endpoint de debugging).
+//
+// Solo se reintenta lo TRANSITORIO (5xx, o una excepción de red): un 4xx es la respuesta de Google
+// a un token caducado, mal formado o de otro cliente, no cambia por insistir, y reintentarlo tres
+// veces costaba 1,2 s de esperas y acababa en «tokeninfo no disponible», culpando a Google cuando
+// lo que toca es volver a iniciar sesión (2026-09-05). El cuerpo del 4xx se devuelve tal cual para
+// que `verifyTokeninfo` (server-lib.gs, con tests) lo rechace con su propio mensaje.
 function fetchTokeninfo_(idToken) {
   var url = "https://oauth2.googleapis.com/tokeninfo?id_token=" + encodeURIComponent(idToken);
   for (var i = 0; i < 3; i++) {
-    var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    if (res.getResponseCode() === 200) return JSON.parse(res.getContentText());
+    var res = null;
+    try { res = UrlFetchApp.fetch(url, { muteHttpExceptions: true }); } catch (e) { res = null; }
+    if (res) {
+      var code = res.getResponseCode();
+      if (code === 200) return JSON.parse(res.getContentText());
+      if (code >= 400 && code < 500) {
+        var cuerpo = null;
+        try { cuerpo = JSON.parse(res.getContentText()); } catch (e) { cuerpo = null; }
+        return (cuerpo && typeof cuerpo === "object") ? cuerpo : { error: "invalid_token", status: code };
+      }
+    }
     Utilities.sleep(200 * (i + 1));
   }
   throw new Error("tokeninfo no disponible");
