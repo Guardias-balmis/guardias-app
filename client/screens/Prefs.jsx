@@ -302,6 +302,14 @@ function PrefsScreen() {
   // siempre que no bloquean (si bloquearan, la llamada habría fallado con ok:false y nunca
   // habríamos llegado a onCreated), pero antes nadie los mostraba — se calculaban y se tiraban.
   const [riesgosUltimoBloqueo, setRiesgosUltimoBloqueo] = useState([]);
+  // `cancelando` deshabilita los botones de «Cancelar» mientras la petición está en vuelo: un doble
+  // toque (fácil en el móvil con la latencia de Apps Script) mandaba `cancelarBloqueo` dos veces y,
+  // con las dos recargas que dispara cada respuesta, seis idas y vueltas donde bastan tres.
+  // Declarado AQUÍ, con los demás hooks y ANTES del `return` temprano de «Cargando tu residente…»:
+  // declararlo después (2026-09-04, un día en producción) hacía que el render que llegaba con la
+  // lista de residentes tuviera un hook más que el anterior — error #310 de React y la app en
+  // blanco para quien recargaba y entraba en Preferencias antes de que respondiera Apps Script.
+  const [cancelando, setCancelando] = useState(null);
   const puedoRegistrarAjenas = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
 
   // El mes que está en pantalla, para tirar las respuestas de un mes anterior que lleguen tarde:
@@ -400,10 +408,6 @@ function PrefsScreen() {
     }
   };
 
-  // `cancelando` deshabilita los botones mientras la petición está en vuelo: un doble toque (fácil
-  // en el móvil con la latencia de Apps Script) mandaba `cancelarBloqueo` dos veces y, con las dos
-  // recargas que dispara cada respuesta, seis idas y vueltas donde bastan tres.
-  const [cancelando, setCancelando] = useState(null);
   const cancelarBloqueo = async (id) => {
     if (cancelando !== null) return;
     setCancelando(id);

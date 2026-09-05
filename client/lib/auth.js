@@ -116,11 +116,12 @@ export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage 
   let nonce = null;
   const opcionesBoton = { theme: "outline", size: "large", width: 320, text: "continue_with" };
 
-  // Cada nonce va ligado a SU callback, no a una variable compartida: el refresco periódico (cada 4
-  // min, o al volver a la pestaña) reasignaba el nonce mientras el selector de cuentas de Google
-  // seguía abierto con el anterior, y el ID token volvía acuñado con N1 pero el cliente mandaba N2 —
-  // «nonce reusado o desconocido», y un login que fallaba sin culpa de nadie. El servidor acepta
-  // cualquier nonce no consumido dentro de sus 5 minutos, así que N1 sigue valiendo.
+  // Cada nonce va ligado a SU callback, no a una variable compartida, para que el `nonce` que viaja
+  // en el cuerpo del login sea el mismo con el que Google acuñó ese ID token aunque el refresco
+  // periódico (cada 4 min, o al volver a la pestaña) haya pasado a otro mientras el selector de
+  // cuentas seguía abierto. Es coherencia, no un arreglo: el anti-replay real del servidor es
+  // `consumeNonce(claims.nonce)` sobre el nonce DEL TOKEN (verify-token.js) y hoy no compara el del
+  // cuerpo con nada — así que el desfase nunca hizo fallar un login (verificado 2026-09-05).
   const callbackPara = (nonceDeEsta) => async (response) => {
     const r = await api.login(response.credential, nonceDeEsta);
     if (r.ok) {
