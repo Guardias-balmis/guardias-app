@@ -528,7 +528,7 @@ function HomeScreen() {
       <GeneradorIA api={app.api} usuario={app.auth && app.auth.residente && app.auth.residente.id} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
         setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")} completarDisponible={completarDisponible}
         estadoError={estadoError} reintentar={() => setReintento((n) => n + 1)}
-        comprobando={estadoMes === null && (app.isResponsable || app.grupo === "MAYOR")} />
+        comprobando={estadoMes === null && (app.isResponsable || app.grupo === "MAYOR" || esAccesoDesarrolladorIA(myResidente?.email))} />
 
       <Imaginaria api={app.api} residentes={residentes} showToast={app.showToast} puedoRegistrar={puedoRegistrarImaginaria} />
 

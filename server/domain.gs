@@ -300,9 +300,22 @@ function duplicadasDe(propuesta) {
     if (!porClave.has(k)) porClave.set(k, []);
     porClave.get(k).push(a);
   }
+  // Solo cuando los códigos DIFIEREN: una fila repetida idéntica (el modelo lista una fijada dos
+  // veces, como se le pide repetirlas) es inocua al escribir y se descarta en `sinRepetidas`.
   return [...porClave.values()]
-    .filter((filas) => filas.length > 1)
+    .filter((filas) => new Set(filas.map((a) => a.codigo)).size > 1)
     .map((filas) => ({ fecha: filas[0].fecha, residenteId: filas[0].residenteId, codigos: filas.map((a) => a.codigo) }));
+}
+
+/** La propuesta sin filas repetidas idénticas (misma clave y mismo código): se escribe una vez. */
+function sinRepetidas(propuesta) {
+  const vistas = new Set();
+  return propuesta.filter((a) => {
+    const k = `${clave(a)}|${a.codigo}`;
+    if (vistas.has(k)) return false;
+    vistas.add(k);
+    return true;
+  });
 }
 
 /** Filas de la propuesta que caen (misma clave) sobre una celda V/R/B de la rejilla. */
@@ -359,14 +372,22 @@ function monthReplacementPlan({ mes, anio, residentes = [], existentes = [], pro
     if (propuestaKeys.has(clave(a))) continue; // la propuesta ya la pisa por clave: nada que borrar
     borradas.push(a);
   }
+  // Un 3P que este plan promete conservar (la propuesta no trae 3P, V-38) pero que la propuesta
+  // pisa por clave con otro código: escribirlo lo sustituiría en silencio —«última fila gana»— y el
+  // mes juzgado (3P + G a la vez) no sería el escrito. Mismo trato que las fijadas en completar.
+  const conservadaPorClave = new Map(marcadores.filter((a) => a.codigo === "3P").map((a) => [clave(a), a]));
+  const conflictos = propuesta
+    .filter((a) => conservadaPorClave.has(clave(a)) && conservadaPorClave.get(clave(a)).codigo !== a.codigo)
+    .map((a) => ({ propuesta: a, fijada: conservadaPorClave.get(clave(a)) }));
 
   return {
     cambios: [
-      ...propuesta.map((a) => ({ fecha: a.fecha, residenteId: a.residenteId, codigo: a.codigo })),
+      ...sinRepetidas(propuesta).map((a) => ({ fecha: a.fecha, residenteId: a.residenteId, codigo: a.codigo })),
       ...borradas.map((a) => ({ fecha: a.fecha, residenteId: a.residenteId, codigo: "" })),
     ],
     borradas,
     marcadores,
+    conflictos,
     fueraDelMes,
     desconocidos,
     duplicadas: duplicadasDe(propuesta),
@@ -417,7 +438,7 @@ function monthCompletionPlan({ mes, anio, residentes = [], existentes = [], prop
 
   const cambios = [];
   const conflictos = [];
-  for (const a of propuesta) {
+  for (const a of sinRepetidas(propuesta)) {
     const fijada = fijadaPorClave.get(clave(a));
     if (!fijada) { cambios.push({ fecha: a.fecha, residenteId: a.residenteId, codigo: a.codigo }); continue; }
     if (fijada.codigo !== a.codigo) conflictos.push({ propuesta: a, fijada });
@@ -2070,7 +2091,11 @@ function validateMonth(ctx) {
   // ── INV-2: 4..6 guardias computables/mes ──
   const monthWindow = { start: days[0], end: days[days.length - 1] };
   for (const r of residentes) {
-    const propias = asignaciones.filter((a) => a.residenteId === r.id);
+    // Solo las del MES: `asignaciones` trae también el histórico (el mes anterior entero desde que
+    // INV-15 mira el borde, 2026-09-04) y con él quien hizo guardias en junio y ninguna en julio
+    // dejaba de caer en este atajo y recibía «0 guardias < mínimo 4» — el caso normal de una
+    // rotación externa, que no exime del mínimo (V-8) pero tampoco es «actividad».
+    const propias = asignaciones.filter((a) => a.residenteId === r.id && dayset.has(a.fecha));
     if (propias.length === 0) continue; // residente sin actividad el mes: no se le exige mínimo
     const total = tally(propias, monthWindow).total;
     // Severidad AVISO en las dos direcciones (decisión V-14, ampliada a INV-2): la normativa

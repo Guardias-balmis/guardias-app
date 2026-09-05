@@ -691,3 +691,41 @@ test("una fijada de alguien que no está en activo ese día (FINALIZADO) es FIJA
   assert.equal(llm.prompts.length, 0);
   assert.ok(r.violaciones.some((v) => v.residenteId === "fin-1" && /no está en activo/.test(v.detalle)));
 });
+
+test("un R1 que se incorpora a mitad de mes cuenta como residente del mes: su guardia fijada no es de un «desconocido» y el prompt lo lista con «solo desde»", () => {
+  const NUEVO = { id: "new-1", nombre: "Nico Nuevo", email: "nico@gmail.com", fechaInicio: "2027-07-15", fechaFin: "2031-07-14" }; // PENDIENTE el día 1, R1 desde el 15
+  const llm = fakeLlm([ok(JSON.stringify({ asignaciones: [...PROPUESTA, { fecha: "2027-07-20", residenteId: "new-1", codigo: "G" }] }))]);
+  const deps = makeDeps({ llm, extraSheets: {
+    residentes: [headerOf(TABLES.residentes), ...[RESP, OTRO, NUEVO].map((r) => recordToRow(TABLES.residentes, r))],
+    asignaciones: [headerOf(TABLES.asignaciones), fila("2027-07-20", "new-1", "G")],
+  } });
+  const r = generar(deps, loggedInAs(deps, "resp@gmail.com"), { modo: "completar" });
+  assert.equal(r.ok, true, JSON.stringify(r.violaciones));
+  assert.equal(r.respetadas, 1);
+  assert.match(llm.prompts[0], /id="new-1" — Nico Nuevo \(.*\) — solo desde el 2027-07-15/);
+  assert.match(llm.prompts[0], /2027-07-20 — id="new-1" — G/, "y su fijada va en la lista");
+  // Pero una guardia suya ANTES de incorporarse sigue siendo FORMATO (día a día).
+  const llm2 = fakeLlm([ok(JSON.stringify({ asignaciones: [...PROPUESTA, { fecha: "2027-07-10", residenteId: "new-1", codigo: "G" }] }))]);
+  const deps2 = makeDeps({ llm: llm2, extraSheets: { residentes: [headerOf(TABLES.residentes), ...[RESP, OTRO, NUEVO].map((r) => recordToRow(TABLES.residentes, r))] } });
+  const r2 = generar(deps2, loggedInAs(deps2, "resp@gmail.com"), { modo: "reemplazar" });
+  assert.equal(r2.ok, false);
+  assert.ok(r2.violaciones.some((v) => v.invariante === "FORMATO" && /no está en activo el 2027-07-10/.test(v.detalle)));
+});
+
+test("reemplazar: una G propuesta sobre un 3P que se iba a conservar es FORMATO (antes se pisaba en silencio y se contaba como respetado)", () => {
+  const llm = fakeLlm([ok(JSON.stringify({ asignaciones: [{ fecha: "2027-07-01", residenteId: "resp-1", codigo: "G" }, { fecha: "2027-07-02", residenteId: "otro-1", codigo: "G" }] }))]);
+  const deps = makeDeps({ llm, extraSheets: { asignaciones: [headerOf(TABLES.asignaciones), fila("2027-07-01", "resp-1", "3P")] } });
+  const r = generar(deps, loggedInAs(deps, "resp@gmail.com"), { modo: "reemplazar" });
+  assert.equal(r.ok, false);
+  assert.ok(r.violaciones.some((v) => v.invariante === "FORMATO" && /es 3P y tu respuesta la cambia a G/.test(v.detalle)), JSON.stringify(r.violaciones));
+  assert.deepEqual(asignacionesDe(deps).map((a) => a.codigo), ["3P"], "el 3P sigue ahí");
+});
+
+test("una fila repetida idéntica en la propuesta no gasta un intento: se escribe una vez", () => {
+  const llm = fakeLlm([ok(JSON.stringify({ asignaciones: [...PROPUESTA, PROPUESTA[0]] }))]);
+  const deps = makeDeps({ llm });
+  const r = generar(deps, loggedInAs(deps, "resp@gmail.com"), { modo: "reemplazar" });
+  assert.equal(r.ok, true, JSON.stringify(r.violaciones));
+  assert.equal(r.intentos, 1);
+  assert.equal(asignacionesDe(deps).length, 2);
+});

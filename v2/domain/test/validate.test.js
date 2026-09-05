@@ -1097,3 +1097,14 @@ test("INV-2: quien no está todo el mes (R1 que entra el 27 de mayo, R4 que term
   const inv2 = vm2(bmc2({ mes: 5, anio: 2026, residentes, asignacionesDelMes, bloqueos: [] })).filter((x) => x.invariante === "INV-2");
   assert.deepEqual(inv2.map((x) => x.residenteId), ["entero"], "solo quien estuvo el mes entero recibe el mínimo");
 });
+
+test("INV-2: quien tuvo guardias el mes ANTERIOR y ninguna en el mes (rotación externa, p. ej.) no recibe «0 < mínimo 4» — la actividad se mide solo en el mes", () => {
+  const BRUNO = R("BRUNO", "2024-05-27", "2028-05-26");
+  // El histórico del mes anterior llega mezclado con las del mes (INV-15 mira el borde desde 2026-09-04).
+  const historicas = [asg("BRUNO", "2026-08-10", "G"), asg("BRUNO", "2026-08-20", "G")];
+  const ctx = buildMonthContext({ mes: 9, anio: 2026, residentes: [BRUNO], historicas, asignacionesDelMes: [], bloqueos: [] });
+  assert.equal(validateMonth(ctx).filter((x) => x.invariante === "INV-2" && /BRUNO/.test(x.detalle)).length, 0);
+  // Y con una sola guardia en el mes sí se le exige el mínimo, como siempre.
+  const ctx2 = buildMonthContext({ mes: 9, anio: 2026, residentes: [BRUNO], historicas, asignacionesDelMes: [asg("BRUNO", "2026-09-05", "G")], bloqueos: [] });
+  assert.equal(validateMonth(ctx2).filter((x) => x.invariante === "INV-2" && /BRUNO/.test(x.detalle)).length, 1);
+});

@@ -249,7 +249,11 @@ export function validateMonth(ctx) {
   // ── INV-2: 4..6 guardias computables/mes ──
   const monthWindow = { start: days[0], end: days[days.length - 1] };
   for (const r of residentes) {
-    const propias = asignaciones.filter((a) => a.residenteId === r.id);
+    // Solo las del MES: `asignaciones` trae también el histórico (el mes anterior entero desde que
+    // INV-15 mira el borde, 2026-09-04) y con él quien hizo guardias en junio y ninguna en julio
+    // dejaba de caer en este atajo y recibía «0 guardias < mínimo 4» — el caso normal de una
+    // rotación externa, que no exime del mínimo (V-8) pero tampoco es «actividad».
+    const propias = asignaciones.filter((a) => a.residenteId === r.id && dayset.has(a.fecha));
     if (propias.length === 0) continue; // residente sin actividad el mes: no se le exige mínimo
     const total = tally(propias, monthWindow).total;
     // Severidad AVISO en las dos direcciones (decisión V-14, ampliada a INV-2): la normativa

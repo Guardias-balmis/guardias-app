@@ -243,3 +243,21 @@ test("un mes ya completo devuelto tal cual por el modelo no produce ni un cambio
   assert.deepEqual(plan.cambios, []);
   assert.equal(plan.fijadas.length, 2);
 });
+
+test("reemplazar: una G propuesta sobre un 3P que el plan promete conservar (la propuesta no trae 3P) es un `conflicto`, no un pisado en silencio", () => {
+  const existentes = [a("2026-08-05", "r4", "3P")];
+  const plan = monthReplacementPlan({ ...MES, existentes, propuesta: [a("2026-08-05", "r4", "G"), a("2026-08-05", "r1", "G")] });
+  assert.deepEqual(plan.marcadores, existentes, "el 3P no es borrable: la propuesta no trae 3P");
+  assert.deepEqual(plan.conflictos, [{ propuesta: a("2026-08-05", "r4", "G"), fijada: existentes[0] }]);
+  // Si la propuesta SÍ trae 3P, el existente es borrable y pisarlo es reemplazarlo: ningún conflicto.
+  const plan2 = monthReplacementPlan({ ...MES, existentes, propuesta: [a("2026-08-05", "r4", "G"), a("2026-08-06", "r1", "3P")] });
+  assert.deepEqual(plan2.conflictos, []);
+});
+
+test("una fila repetida IDÉNTICA (misma clave y código) no es `duplicada`: se escribe una sola vez, en los dos planes", () => {
+  const propuesta = [a("2026-08-03", "r4", "G"), a("2026-08-03", "r1", "G"), a("2026-08-03", "r4", "G")];
+  for (const plan of [monthReplacementPlan({ ...MES, existentes: [], propuesta }), monthCompletionPlan({ ...MES, existentes: [], propuesta })]) {
+    assert.deepEqual(plan.duplicadas, []);
+    assert.equal(plan.cambios.filter((c) => c.residenteId === "r4").length, 1);
+  }
+});
