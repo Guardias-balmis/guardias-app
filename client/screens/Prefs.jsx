@@ -15,6 +15,12 @@ import { violationText } from "./client/lib/violations.js";
 const { useState, useEffect, useRef } = React;
 const { Card, SectionTitle, Btn, Aviso } = window.UI;
 
+/** Las fechas de `fechasEvitar` que pertenecen al mes en pantalla (las demás no se ven ni se mandan). */
+function fechasDelMes(lista, anio, mes) {
+  const prefijo = `${anio}-${String(mes).padStart(2, "0")}-`;
+  return (Array.isArray(lista) ? lista : []).filter((f) => typeof f === "string" && f.startsWith(prefijo));
+}
+
 const DEFAULT_PREFS = {
   maxGuardias: 5,
   preferDobles: "",
@@ -336,11 +342,17 @@ function PrefsScreen() {
     let cancelled = false;
     (async () => {
       app.setLoading(true);
+      // Al cambiar de mes se parte de cero ANTES de que responda el servidor: si no, un Guardar
+      // rápido mandaba las `fechasEvitar` del mes anterior con el mes nuevo.
+      setPrefs({ ...DEFAULT_PREFS });
       const [rPrefs, , rEstado] = await Promise.all([api.misPreferencias(anio, mes), cargarBloqueos(), api.estadoCuadrante(anio, mes)]);
       if (cancelled) return;
       // Un fallo aquí solo esconde el selector de ausencia ajena: no se asume el permiso.
       setSinResponsable(rEstado.ok ? rEstado.sinResponsable === true : false);
-      if (rPrefs.ok) setPrefs(rPrefs.prefs ? { ...DEFAULT_PREFS, ...rPrefs.prefs } : { ...DEFAULT_PREFS });
+      // Solo las fechas DEL MES: una fila legada con una fecha de otro mes (escrita por un servidor
+      // anterior a la validación) no se ve en la rejilla, no se puede quitar, y el servidor nuevo
+      // rechazaría cada Guardar por ella — sin salida desde la app.
+      if (rPrefs.ok) setPrefs(rPrefs.prefs ? { ...DEFAULT_PREFS, ...rPrefs.prefs, fechasEvitar: fechasDelMes(rPrefs.prefs.fechasEvitar, anio, mes) } : { ...DEFAULT_PREFS });
       else showToast("Error cargando preferencias: " + rPrefs.error, "err");
       app.setLoading(false);
     })();
@@ -397,7 +409,7 @@ function PrefsScreen() {
   const guardar = async () => {
     setSaving(true);
     setSaved(false);
-    const r = await api.guardarPreferencias(anio, mes, prefs);
+    const r = await api.guardarPreferencias(anio, mes, { ...prefs, fechasEvitar: fechasDelMes(prefs.fechasEvitar, anio, mes) });
     setSaving(false);
     if (r.ok) {
       showToast("Preferencias guardadas ✓");

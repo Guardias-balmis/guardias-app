@@ -148,6 +148,10 @@ export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage 
     gis.initialize({ client_id: clientId, nonce, callback: callbackPara(nonce) });
     // El botón se vuelve a pintar en cada inicialización: la configuración (nonce incluido) se
     // fija al renderizarlo, así que un botón viejo seguiría mandando el nonce viejo.
+    // El `renderButton` real de GIS AÑADE el widget al contenedor, no lo sustituye: sin vaciarlo,
+    // cada refresco del nonce (4 min, o al volver a la pestaña) apilaba un botón más.
+    if (buttonEl && typeof buttonEl.replaceChildren === "function") buttonEl.replaceChildren();
+    else if (buttonEl && "innerHTML" in buttonEl) buttonEl.innerHTML = "";
     gis.renderButton(buttonEl, opcionesBoton);
     return true;
   };

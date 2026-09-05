@@ -227,3 +227,17 @@ test("cada nonce va ligado a su callback: un login que empezó con N1 sigue mand
   await primera.callback({ credential: "token-acuñado-con-n-1" });
   assert.deepEqual(recibidos, ["n-1"], "el token lleva n-1 dentro: se manda n-1, no el nonce nuevo");
 });
+
+test("cada repintado del botón de Google vacía el contenedor antes (el renderButton real AÑADE, no sustituye)", async () => {
+  _resetNoncePrefetch();
+  let pedidos = 0;
+  const api = fakeApi({ getNonce: async () => ({ ok: true, nonce: `n-${++pedidos}` }) });
+  const gis = fakeGis();
+  // Contenedor que imita al DOM: renderButton apila un hijo; replaceChildren lo vacía.
+  const buttonEl = { children: [], replaceChildren() { this.children = []; } };
+  gis.renderButton = (el) => { el.children.push("boton"); };
+  const asa = await setupGoogleSignIn({ api, clientId: "cid", gis, buttonEl, storage: fakeStorage(), onSuccess() {}, onNeedsAlta() {}, onError() {} });
+  await asa.refrescar();
+  await asa.refrescar();
+  assert.equal(buttonEl.children.length, 1, "un solo botón tras dos refrescos");
+});

@@ -1908,6 +1908,21 @@ function emailNormalizado(email) {
   return String(email || "").trim().toLowerCase();
 }
 
+/**
+ * Nivel R1–R4 con el que un residente cuenta en el mes que empieza en `monthStart`: el del día 1,
+ * o el del último día si el día 1 aún no está (incorporación a mitad de mes). `null` si en ninguno
+ * de los dos tiene nivel asignable (PENDIENTE todo el mes, o FINALIZADO antes de empezar).
+ */
+function nivelEnElMes(deps, residente, monthStart) {
+  const periodos = deps.domain.periodsOfResident(residente);
+  const dia1 = deps.domain.levelOn(periodos, monthStart);
+  if (NIVELES_ASIGNABLES.has(dia1)) return dia1;
+  const [anio, mes] = monthStart.split("-").map(Number);
+  const siguiente = mes === 12 ? `${anio + 1}-01-01` : `${monthPrefix(anio, mes + 1)}-01`;
+  const ultimo = deps.domain.levelOn(periodos, deps.domain.addDays(siguiente, -1));
+  return NIVELES_ASIGNABLES.has(ultimo) ? ultimo : null;
+}
+
 /** Prefijo "YYYY-MM" de una fecha ISO, para filtrar asignaciones de un mes concreto. */
 function monthPrefix(anio, mes) {
   return `${anio}-${String(mes).padStart(2, "0")}`;
@@ -2308,8 +2323,11 @@ function promptData(deps, mes, anio, snap) {
   const porNivel = { R4: [], R3: [], R2: [], R1: [] };
   const finDeMes = `${prefix}-31`; // comparación de cadenas: cualquier día del mes es <= a esto
   for (const r of snap.residentes) {
-    const nivel = deps.domain.levelOn(deps.domain.periodsOfResident(r), monthStart);
-    if (!porNivel[nivel]) continue;
+    // Nivel el día 1 o, si ese día aún no está (se incorpora a mitad de mes), el del último día:
+    // el mismo criterio que `asignablesDe`, para que el prompt liste exactamente a quienes el plan
+    // reconoce. Sin esto, la fijada de un R1 recién incorporado era de un «desconocido».
+    const nivel = nivelEnElMes(deps, r, monthStart);
+    if (nivel === null) continue;
     // Presencia parcial en el mes: quien termina (fechaFin) o empieza (fechaInicio) a mitad. El
     // modelo no ve fechas de residencia, así que se le dice en la propia lista; el router rechaza
     // como FORMATO cualquier guardia fuera de esos días (`noAsignablesEseDia`).
@@ -2419,7 +2437,11 @@ function handleGenerarIA(req, deps, session) {
   // alguien FINALIZADO o aún no incorporado era «conocido» para el plan, no caía en FORMATO, e INV-1
   // solo lo marcaba como aviso (V-21, pensado para la rejilla manual): la guardia de quien ya se fue
   // se ESCRIBÍA. Para el generador es un defecto de la RESPUESTA: nadie fuera de su lista.
-  const asignablesDe = (snapX) => snapX.residentes.filter((r) => NIVELES_ASIGNABLES.has(deps.domain.levelOn(deps.domain.periodsOfResident(r), monthStart)));
+  // Asignable = con nivel R1–R4 el día 1 O el último día del mes: quien se incorpora a mitad (el R1
+  // del 27 de mayo) es PENDIENTE el día 1 y aun así tiene guardias ese mes — con el criterio «día 1»
+  // sus fijadas eran de un desconocido y un modelo obediente fallaba siempre. `noAsignablesEseDia`
+  // sigue rechazando, día a día, los días concretos en que no está. Mismo criterio que `promptData`.
+  const asignablesDe = (snapX) => snapX.residentes.filter((r) => nivelEnElMes(deps, r, monthStart) !== null);
   // `snapX` porque el plan se recalcula con el snapshot fresco en el segundo juicio (bajo el lock):
   // quien dejó de ser asignable mientras el modelo pensaba (periodos editados) cae en `desconocidos`.
   const planDe = (propuesta, snapX = snap) => (completar ? deps.domain.monthCompletionPlan : deps.domain.monthReplacementPlan)({

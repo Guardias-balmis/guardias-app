@@ -85,6 +85,10 @@
   con 8 ficheros pierde alguno en silencio). El orden de JSX_FILES en loader.js es el que
   importa; este único <script> es la única entrada.
 -->
-<script type="module" src="client/loader.js"></script>
+<!-- Con versión en la URL (2026-09-05): GitHub Pages sirve loader.js con max-age=600 y una recarga
+     normal solo revalida el documento, así que un index.html nuevo podía ejecutar el loader.js
+     VIEJO de la caché del navegador («No se pudo cargar el compilador (Babel)» hasta que caducara).
+     Súbela en cada cambio del loader. -->
+<script type="module" src="client/loader.js?v=20260905"></script>
 </body>
 </html>

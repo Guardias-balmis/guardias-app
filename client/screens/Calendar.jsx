@@ -693,7 +693,7 @@ function CalendarScreen() {
             ⚖️ No hay Responsable del contaje designado para este periodo. Hasta que se decida, cualquier R3 o R4 puede validar y publicar — decídelo en ⚙️ → Responsable.
           </div>
         )}
-        {!estadoError && bloqueadoPorPublicado && (
+        {!estadoError && !cargaError && bloqueadoPorPublicado && (
           <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10 }}>
             Este cuadrante está publicado: no se puede editar{puedeMoverCiclo ? " — usa Despublicar para corregirlo." : "."}
           </div>
