@@ -627,3 +627,164 @@ test("baja durante TODO el año de residencia: se excluye de la comparación en 
   const v = vryc2(bycc2({ mes: 5, anio: 2026, residentes: [a, baja], historicas, asignacionesDelMes: [], bloqueos }));
   assert.deepEqual(v.filter((x) => x.invariante === "INV-3" && /baja/.test(x.detalle)), []);
 });
+
+// ── V-48: compañeros de la misma cohorte que cerraron ese mismo año en un mes ANTERIOR ──────────
+// Antes solo se comparaban entre sí los que cerraban el MISMO mes, así que dos compañeros con
+// `fechaInicio` distinta dentro del mismo año natural (o con periodos editados, nota [a]) no se
+// comparaban nunca. Ahora quien cierra se compara, por parejas, con los de su cohorte que ya
+// cerraron ese año dentro de los doce meses anteriores; cada uno sobre su propio año completo.
+import { earlierClosedPeers } from "../equity.js";
+import { addDays as addDays48 } from "../calendar.js";
+
+// `n` guardias en el MISMO día de la semana, una por semana: si `desde` es martes, todo martes —
+// ni findes ni viernes, así que solo el eje `total` se mueve.
+const cadaSemana = (id, desde, n) => Array.from({ length: n }, (_, i) => g(id, addDays48(desde, 7 * i)));
+const deParejas = (v) => inv3(v).filter((x) => /cerró su año/.test(x.detalle));
+const E_MARZO = R("r3e", "2024-03-11", "2028-03-10"); // cohorte 2024; su R3 cierra el 2027-03-10
+const E_ENERO = R("r3e1", "2024-01-15", "2028-01-14"); // cohorte 2024; su R3 cierra el 2027-01-14
+
+test("V-48: quien cierra en mayo se compara con el compañero de cohorte que cerró ese mismo año en marzo, cada uno sobre su propio año", () => {
+  assert.deepEqual(earlierClosedPeers([A, E_MARZO], 5, 2027), [
+    { id: "r3e", cohorte: 2024, year: 3, win: { start: "2026-03-11", end: "2027-03-10" } },
+  ]);
+  assert.equal(yearCloseHistoryStart([A, E_MARZO], 5, 2027), "2026-03-11", "el histórico arranca en la ventana del que cerró antes");
+
+  const historicas = [...cadaSemana("r3a", "2026-06-02", 20), ...cadaSemana("r3e", "2026-03-17", 10)];
+  const v = validateResidencyYearClose(buildYearCloseContext({ mes: 5, anio: 2027, residentes: [A, E_MARZO], historicas }));
+  const parejas = deParejas(v);
+  assert.equal(parejas.length, 1, "solo el eje total se descuadra");
+  assert.match(parejas[0].detalle, /^Totales al cierre del año de residencia: r3a=20 vs r3e=10 \(diferencia > 1; r3e cerró su año el 2027-03-10\)$/);
+  assert.equal(parejas[0].fecha, "2027-05-26", "el aviso se fecha en el cierre de quien cierra AHORA, dentro del mes validado");
+  assert.equal(parejas[0].residenteId, "r3a");
+  assert.equal(parejas[0].severidad, "aviso");
+
+  const cuadrado = validateResidencyYearClose(buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, E_MARZO],
+    historicas: [...cadaSemana("r3a", "2026-06-02", 11), ...cadaSemana("r3e", "2026-03-17", 10)],
+  }));
+  assert.deepEqual(deParejas(cuadrado), [], "diferencia 1 sigue dentro de la norma");
+});
+
+test("V-48: en el mes en que cierra el PRIMERO de los dos no hay con quién comparar (el otro aún no ha cerrado)", () => {
+  assert.deepEqual(earlierClosedPeers([A, E_MARZO], 3, 2027), []);
+  assert.equal(yearCloseHistoryStart([A, E_MARZO], 3, 2027), "2026-03-11", "solo su propia ventana");
+  const historicas = [...cadaSemana("r3a", "2026-06-02", 20), ...cadaSemana("r3e", "2026-03-17", 2)];
+  const v = validateResidencyYearClose(buildYearCloseContext({ mes: 3, anio: 2027, residentes: [A, E_MARZO], historicas }));
+  assert.deepEqual(deParejas(v), []);
+});
+
+test("V-48: con tres cierres en meses distintos, el último se compara con los dos anteriores y ellos entre sí NO (cada pareja, una vez)", () => {
+  const residentes = [A, E_MARZO, E_ENERO];
+  assert.deepEqual(earlierClosedPeers(residentes, 5, 2027).map((e) => e.id).sort(), ["r3e", "r3e1"]);
+  assert.equal(yearCloseHistoryStart(residentes, 5, 2027), "2026-01-15");
+  // r3a=10, r3e1=10, r3e=20: si r3e1 y r3e se compararan entre sí habría DOS avisos de totales.
+  const historicas = [...cadaSemana("r3a", "2026-06-02", 10), ...cadaSemana("r3e", "2026-03-17", 20), ...cadaSemana("r3e1", "2026-01-20", 10)];
+  const v = validateResidencyYearClose(buildYearCloseContext({ mes: 5, anio: 2027, residentes, historicas }));
+  const parejas = deParejas(v);
+  assert.equal(parejas.length, 1);
+  assert.match(parejas[0].detalle, /r3e=20 vs r3a=10 .* r3e cerró su año el 2027-03-10/);
+  assert.equal(parejas[0].residenteId, "r3a", "se le atribuye a quien cierra ahora aunque el que tiene más sea el otro");
+  assert.equal(parejas[0].fecha, "2027-05-26");
+});
+
+test("V-48: ni otra cohorte ni otro año de residencia cuentan como «el mismo año», y un cierre de hace más de doce meses tampoco", () => {
+  // Cohorte 2023 cuyo R3 cierra dentro de los doce meses anteriores a mayo-2027: no es su cohorte.
+  const otraCohorte = R("r3c", "2023-09-01", "2027-08-31");
+  assert.deepEqual(earlierClosedPeers([A, otraCohorte], 5, 2027), []);
+  // Misma cohorte, pero lo que cerró en ese tramo fue su R2 alargado (nota [a]), no un R3.
+  const otroAnio = {
+    id: "r2d", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2025-05-26" },
+      { year: 2, start: "2025-05-27", end: "2026-08-31" },
+      { year: 3, start: "2026-09-01", end: "2027-08-31" },
+      { year: 4, start: "2027-09-01", end: "2028-05-26" },
+    ],
+  };
+  assert.deepEqual(earlierClosedPeers([A, otroAnio], 5, 2027), []);
+  // Misma cohorte y mismo año, pero cerrado el 2026-04-30: más de un año antes del mes → fuera.
+  const lejos = {
+    id: "r3lejos", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2024-12-31" },
+      { year: 2, start: "2025-01-01", end: "2025-08-31" },
+      { year: 3, start: "2025-09-01", end: "2026-04-30" },
+      { year: 4, start: "2026-05-01", end: "2028-05-26" },
+    ],
+  };
+  assert.deepEqual(earlierClosedPeers([A, lejos], 5, 2027), []);
+  assert.equal(yearCloseHistoryStart([A, lejos], 5, 2027), "2026-05-27", "y no estira el histórico");
+  // Un día más tarde (2026-05-01, justo doce meses antes) sí entra.
+  const borde = { ...lejos, id: "r3borde", periodos: lejos.periodos.map((p) => (p.year === 3 ? { ...p, end: "2026-05-01" } : p.year === 4 ? { ...p, start: "2026-05-02" } : p)) };
+  assert.deepEqual(earlierClosedPeers([A, borde], 5, 2027).map((e) => [e.id, e.win.end]), [["r3borde", "2026-05-01"]]);
+  assert.equal(yearCloseHistoryStart([A, borde], 5, 2027), "2025-09-01");
+});
+
+test("V-48: si este mes no cierra nadie, haber cerrado hace poco no pide histórico ni compara nada", () => {
+  assert.deepEqual(earlierClosedPeers([A, E_MARZO], 8, 2027), []);
+  assert.equal(yearCloseHistoryStart([A, E_MARZO], 8, 2027), null);
+  assert.equal(yearCloseFestivosRange([A, E_MARZO], 8, 2027), null);
+});
+
+test("V-48: el compañero que cerró antes se mide sobre SU ventana — puentes libres desde `festivos`, doblete con lookahead al mes validado, y sin disponibilidad no entra", () => {
+  // El puente del 7-dic-2026 cae dentro de la ventana de r3e (2026-03-11→2027-03-10).
+  const conGuardiaEnPuente = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, E_MARZO], festivos: FESTIVOS,
+    historicas: [g("r3e", "2026-12-07", "G")],
+  });
+  assert.equal(conGuardiaEnPuente.cerradosAntes.length, 1);
+  assert.equal(conGuardiaEnPuente.cerradosAntes[0].dims.puentesLibres, 0);
+  const libre = buildYearCloseContext({ mes: 5, anio: 2027, residentes: [A, E_MARZO], festivos: FESTIVOS, historicas: [] });
+  assert.equal(libre.cerradosAntes[0].dims.puentesLibres, 1);
+  assert.equal(libre.cerradosAntes[0].f, 1);
+  assert.equal(libre.cerradosAntes[0].cierre, "2027-03-10");
+
+  // Año 3 editado para cerrar el viernes 30-abr-2027: su doblete V-D se completa con el domingo
+  // 2 de mayo, que está en el mes validado (contrato C-1) y no en el histórico.
+  const viernes = {
+    id: "r3v", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2025-05-26" },
+      { year: 2, start: "2025-05-27", end: "2026-04-30" },
+      { year: 3, start: "2026-05-01", end: "2027-04-30" },
+      { year: 4, start: "2027-05-01", end: "2028-05-26" },
+    ],
+  };
+  const ctx = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, viernes],
+    historicas: [g("r3v", "2027-04-30", "G")], asignacionesDelMes: [g("r3v", "2027-05-02", "G")],
+  });
+  assert.deepEqual(ctx.cerradosAntes.map((e) => [e.id, e.dims.total, e.dims.dobletes]), [["r3v", 1, 1]], "el domingo no suma al total (está fuera de su año) pero sí cierra el doblete");
+
+  // Baja durante toda su ventana: mismo criterio que para quien cierra ahora, fuera.
+  const baja = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, E_MARZO], historicas: [],
+    bloqueos: [{ residenteId: "r3e", motivo: "BAJA", desde: "2026-03-11", hasta: "2027-03-10", activo: true }],
+  });
+  assert.deepEqual(baja.cerradosAntes, []);
+});
+
+test("V-48: el aviso de calendario sin cargar mira también los años que toca la ventana del que cerró antes", () => {
+  const borde = {
+    id: "r3borde", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2024-12-31" },
+      { year: 2, start: "2025-01-01", end: "2025-08-31" },
+      { year: 3, start: "2025-09-01", end: "2026-05-01" },
+      { year: 4, start: "2026-05-02", end: "2028-05-26" },
+    ],
+  };
+  const v = validateResidencyYearClose(buildYearCloseContext({ mes: 5, anio: 2027, residentes: [A, borde], festivos: FESTIVOS, historicas: [] }));
+  const sinCargar = inv3(v).filter((x) => /no hay ningún festivo cargado/.test(x.detalle));
+  assert.equal(sinCargar.length, 1);
+  assert.match(sinCargar[0].detalle, /de 2025,? .*ventana 2025-09-01→2027-05-26|de 2025.*2025-09-01→2027-05-26/);
+});
+
+test("V-48: un ctx armado a mano sin `cerradosAntes` se comporta exactamente como antes", () => {
+  const v = validateResidencyYearClose({
+    mes: 5, anio: 2027, residentes: [A, E_MARZO],
+    acumulados: { r3a: acc(20), r3e: acc(0) },
+    asignaciones: [],
+  });
+  assert.deepEqual(inv3(v), [], "r3e no cierra este mes y nadie ha medido su año: cohorte de uno, nada que comparar");
+});

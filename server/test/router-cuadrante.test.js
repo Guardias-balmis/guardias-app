@@ -455,6 +455,39 @@ test("marcarValidado: el eje de puentes libres se deriva de la tabla `festivos` 
   assert.match(puentes[0].detalle, /otro-1=3.*resp-1=1/);
 });
 
+// V-48: el cierre anual compara también con el compañero de cohorte que cerró ese mismo año meses
+// antes. El servidor no cambia: `yearCloseHistoryStart` estira solo el histórico que lee.
+test("marcarValidado: el cierre ANUAL compara con quien cerró ese mismo año en un mes anterior, leyendo su histórico completo (V-48)", () => {
+  // Misma cohorte (2024) que Rita y Óscar, pero empezó en marzo: su 4.º año va del 2027-03-11 al
+  // 2028-03-10, dos meses antes del cierre de los otros dos (2028-05-26).
+  const TERCERO = { id: "tercero-1", nombre: "Tomás", email: "tercero@gmail.com", fechaInicio: "2024-03-11", fechaFin: "2028-03-10" };
+  const deps = stubClean(makeDeps({}, {
+    residentes: [headerOf(TABLES.residentes), ...[RESP, OTRO, TERCERO].map((r) => recordToRow(TABLES.residentes, r))],
+  }));
+  const session = loggedInAs(deps, "resp@gmail.com");
+  // Sus tres guardias caen ANTES del aniversario de Rita y Óscar (2027-05-27): si el servidor
+  // leyera el histórico solo desde ahí, Tomás saldría con cero y no habría nada que avisar.
+  guardar(deps, session, [
+    { fecha: "2027-04-05", residenteId: "tercero-1", codigo: "G" },
+    { fecha: "2027-04-12", residenteId: "tercero-1", codigo: "G" },
+    { fecha: "2027-04-19", residenteId: "tercero-1", codigo: "G" },
+  ]);
+  const r = call({ action: "marcarValidado", session, mes: 5, anio: 2028 }, deps);
+  assert.equal(r.ok, true, "la equidad nunca bloquea (V-14)");
+  const parejas = r.violaciones.filter((v) => v.invariante === "INV-3" && /cerró su año el 2028-03-10/.test(v.detalle));
+  assert.equal(parejas.length, 2, "Tomás frente a Rita y frente a Óscar, solo en totales");
+  for (const v of parejas) {
+    assert.equal(v.severidad, "aviso");
+    assert.match(v.detalle, /^Totales al cierre del año de residencia: tercero-1=3 vs (resp-1|otro-1)=0/);
+    assert.equal(v.fecha, "2028-05-26", "fechado en el cierre de quien cierra ahora");
+  }
+  assert.deepEqual(parejas.map((v) => v.residenteId).sort(), ["otro-1", "resp-1"]);
+  // Y en el mes en que cerró Tomás (marzo-2028) aún no había con quién compararle.
+  const marzo = call({ action: "marcarValidado", session, mes: 3, anio: 2028 }, deps);
+  assert.equal(marzo.ok, true);
+  assert.equal(marzo.violaciones.filter((v) => v.invariante === "INV-3" && /cerró su año/.test(v.detalle)).length, 0);
+});
+
 test("marcarValidado: un mes que no cierra trimestre ni año no comprueba ningún cierre", () => {
   const deps = stubClean(makeDeps());
   const session = loggedInAs(deps, "resp@gmail.com");

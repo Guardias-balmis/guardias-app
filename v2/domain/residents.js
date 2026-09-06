@@ -134,7 +134,11 @@ export function validateTrainingPeriods(periods) {
  * editados (nota [a]) el mismo residente cerraba su año en un mes para INV-3 y en otro para INV-8
  * — justo la incoherencia entre módulos que V-24 vino a quitar.
  *
- * Dos casos que NO cierran nada, a propósito:
+ * Devuelve también `year` (1..4) desde V-48: el cierre anual de INV-3 compara a quien cierra con
+ * los de su cohorte que cerraron ESE MISMO año de residencia meses antes, y «el mismo año» es el
+ * índice del periodo, no el año natural en que acaba.
+ *
+ * Dos casos que NO cierran nada, a propósito (`esCierreReal`):
  *  - Quien dejó la residencia antes del fin nominal (`fechaFin` dentro de R2, digamos): sus
  *    periodos R2/R3 derivados siguen «terminando» en mayo, pero ya no estaba — compararlo con su
  *    cohorte daría ceros contra guardias reales en todos los ejes, dos mayos seguidos.
@@ -146,8 +150,25 @@ export function closingPeriodOn(residente, mes, anio) {
   const finReal = periodos[periodos.length - 1].end;
   const prefijo = `${anio}-${String(mes).padStart(2, "0")}`;
   const p = periodos.find((per) => String(per.end).startsWith(prefijo));
-  if (!p) return null;
-  if (compareISO(p.end, finReal) > 0) return null;
-  if (compareISO(p.start, p.end) > 0) return null;
-  return { start: p.start, end: p.end };
+  if (!p || !esCierreReal(p, finReal)) return null;
+  return { year: p.year, start: p.start, end: p.end };
+}
+
+/**
+ * Los años de residencia de este residente que CERRARON con fecha de cierre dentro de
+ * [desde, hasta] (inclusive), con el mismo criterio de «cierre real» que `closingPeriodOn`.
+ * Existe para V-48: `equity.js:earlierClosedPeers` busca con ella a los compañeros de cohorte
+ * que ya cerraron el año que otro cierra este mes. Si el criterio de qué es un cierre cambia,
+ * cambia aquí para los dos — no lo repitas en el invocador.
+ */
+export function closedPeriodsBetween(residente, desde, hasta) {
+  const periodos = periodsOfResident(residente);
+  const finReal = periodos[periodos.length - 1].end;
+  return periodos
+    .filter((p) => compareISO(p.end, desde) >= 0 && compareISO(p.end, hasta) <= 0 && esCierreReal(p, finReal))
+    .map((p) => ({ year: p.year, start: p.start, end: p.end }));
+}
+
+function esCierreReal(p, finReal) {
+  return compareISO(p.end, finReal) <= 0 && compareISO(p.start, p.end) <= 0;
 }

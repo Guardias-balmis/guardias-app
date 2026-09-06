@@ -82,6 +82,17 @@ sube solo (clasp empuja todo `server/`); pegando a mano, pega también `Code.gs`
 verificación E2E manual de abajo (login, y un login con un token caducado debe fallar rápido y con
 ese mensaje).
 
+## Despliegue del 2026-09-06 (V-48, INV-3 entre compañeros que cierran en meses distintos): solo `domain.gs`
+
+Cambio de dominio puro: `equity.js` (el cierre anual compara también con los compañeros de
+cohorte que cerraron ese mismo año meses antes) y `residents.js` (`closingPeriodOn` devuelve
+`year`, nueva `closedPeriodsBetween`). `server/src` no cambia, así que `server-lib.gs` sale
+byte a byte igual y `Code.gs` tampoco cambia: con `npm run deploy` sube solo; pegando a mano,
+basta con **`domain.gs`** (3611 líneas; `sha256` empieza por `aa65e7938ff3`). Comprobación
+después: validar un mes en el que cierre el año alguien cuya cohorte tenga a otro que cerró
+antes debe listar el aviso «… cerró su año el YYYY-MM-DD» — y en el cliente sale ya sin
+desplegar nada, porque `Calendar.jsx` importa el dominio directamente.
+
 ## Redesplegar tras un cambio de dominio (el caso de todos los días)
 
 Dos comandos, con roles distintos — confundirlos es exactamente el incidente del
