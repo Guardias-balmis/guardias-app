@@ -2596,7 +2596,12 @@ function handleGenerarIA(req, deps, session) {
   // guardia nueva pisada en silencio no tiene arreglo que nadie vaya a notar.
   const plan = planDe(r.asignaciones);
   const huella = (lista) => lista.map((a) => `${a.fecha}|${a.residenteId}|${a.codigo}|${a.origen || ""}`).sort().join("\n");
-  const escrito = atomico(deps, () => {
+  // Y si el lock no llega (otro escritor lo tiene más de 30 s: `waitLock` LANZA), la propuesta se
+  // pierde igual que en un conflicto y se dice como tal, con su fila en la bitácora — no como una
+  // excepción muda que `handleRequest` convierte en «Lock timeout…» sin `resultado`.
+  let escrito;
+  try {
+    escrito = atomico(deps, () => {
     const estadoAhora = currentCuadranteEstado(deps, req.mes, req.anio);
     const snapAhora = monthSnapshot(deps);
     const existentesAhora = snapAhora.asignaciones.filter((a) => a.fecha.startsWith(prefix));
@@ -2612,7 +2617,14 @@ function handleGenerarIA(req, deps, session) {
     const siguiente = plan.cambios.length > 0 ? deps.domain.stateAfterEdit(estadoActual) : estadoActual;
     if (siguiente !== estadoActual) writeCuadranteEstado(deps, session, req.mes, req.anio, siguiente);
     return { siguiente };
-  });
+    });
+  } catch (e) {
+    escribirBitacora(deps, session, req, modelo, r.intentos, "CONFLICTO", r.violaciones, modo);
+    return {
+      ok: false, resultado: "CONFLICTO", modo, intentos: r.intentos, violaciones: r.violaciones, revisionManual: false,
+      error: `no se pudo escribir el cuadrante de ${req.mes}/${req.anio} porque otra operación tenía la hoja ocupada (${(e && e.message) || e}): no se ha escrito nada, vuelve a intentarlo`,
+    };
+  }
   if (!escrito) {
     escribirBitacora(deps, session, req, modelo, r.intentos, "CONFLICTO", r.violaciones, modo);
     return {

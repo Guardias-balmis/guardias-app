@@ -120,7 +120,7 @@ function fetchTokeninfo_(idToken) {
     if (res) {
       var code = res.getResponseCode();
       if (code === 200) return JSON.parse(res.getContentText());
-      if (code >= 400 && code < 500) {
+      if (code >= 400 && code < 500 && code !== 429) { // 429 (cuota) SÍ es transitorio: sigue al reintento
         var cuerpo = null;
         try { cuerpo = JSON.parse(res.getContentText()); } catch (e) { cuerpo = null; }
         return (cuerpo && typeof cuerpo === "object") ? cuerpo : { error: "invalid_token", status: code };
