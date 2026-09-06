@@ -14,8 +14,9 @@
 1. **Con la cuenta del servicio** (la que será propietaria durable, no una personal), crea el
    Sheet de guardias y anota su **ID** (de la URL). Crea sus pestañas de datos con la fila de
    cabecera: `residentes`, `periodos`, `bloqueos`, `asignaciones`, `responsables`,
-   `voluntariosResponsable`, `sorteos`, `preferencias`, `cuadrantes` (las 9 tablas de
-   `server/src/sheets-schema.js` — cabeceras exactas ahí). **La cuenta que despliega debe
+   `voluntariosResponsable`, `sorteos`, `preferencias`, `cuadrantes`… (las tablas de
+   `server/src/sheets-schema.js`, hoy 14 — cabeceras exactas ahí; `Code.gs:append` crea sola la
+   pestaña que falte, así que una tabla nueva no exige tocar el Sheet a mano). **La cuenta que despliega debe
    ser la propietaria del Sheet** (riesgo DR-2 del ADR): si no, añádela como editor.
 
    No crees a mano ninguna otra pestaña: desde la Fase 7.1, "Publicar" en el cuadrante crea
@@ -71,6 +72,16 @@
    `.clasp.json` (tiene el Script ID de un proyecto real) y `.clasprc.json` (credenciales de
    `clasp login`) están en `.gitignore` a propósito — cada quien despliega configura el suyo.
 
+## Despliegue del 2026-09-05 (V-47 y la revisión adversarial): `Code.gs` SÍ cambia
+
+Esta vez hay que subir los **tres** ficheros, no solo los dos generados: `Code.gs` cambia en una
+sola función, `fetchTokeninfo_`, que deja de reintentar tres veces (1,2 s de esperas) ante un HTTP
+4xx de tokeninfo —un token caducado o inválido no es transitorio— y devuelve el cuerpo del error
+para que `verifyTokeninfo` lo explique («vuelve a pulsar el botón de Google»). Con `npm run deploy`
+sube solo (clasp empuja todo `server/`); pegando a mano, pega también `Code.gs`. Después, repetir la
+verificación E2E manual de abajo (login, y un login con un token caducado debe fallar rápido y con
+ese mensaje).
+
 ## Redesplegar tras un cambio de dominio (el caso de todos los días)
 
 Dos comandos, con roles distintos — confundirlos es exactamente el incidente del
@@ -97,7 +108,7 @@ después de un `npm run deploy` que lo modifique, repetir a mano la verificació
 - Login GIS → `POST` con el ID token → `{ok:true, session}`; reintento con el mismo nonce → falla.
 - `validar` con un cuadrante de prueba → devuelve las mismas violaciones que el cliente.
 - Matar el proceso a media `rebuildSheet` y confirmar que el siguiente intento se autorrepara.
-- **Fase 7.1, pendiente de verificar en vivo (código completo, sin Sheet real hasta hoy):**
+- **Fase 7.1 (verificada en vivo desde el cutover de 2026-07-24; se repite tras cada despliegue):**
   `publicarCuadrante` con un cuadrante de prueba → abrir la pestaña "YYYY-MM" creada y
   comprobar que las celdas de código y las fórmulas COUNTIF/SUMPRODUCT de cada fila calculan
   el total esperado (no solo que la operación no da error); abrir "Resumen" y comprobar que

@@ -17,6 +17,13 @@ const ISS_VALIDOS = new Set(["accounts.google.com", "https://accounts.google.com
 export function verifyTokeninfo(claims, { clientId, now, consumeNonce }) {
   if (!claims || typeof claims !== "object") return fail("respuesta vacía o inválida");
 
+  // 0. Un error de tokeninfo (HTTP 4xx: token caducado, mal formado o de otro cliente) llega como
+  //    `{error, error_description}` sin claims. Antes el adaptador lo reintentaba tres veces y
+  //    lanzaba «tokeninfo no disponible»; ahora se dice lo que toca hacer, sin culpar a Google.
+  if (typeof claims.error === "string" && claims.aud === undefined) {
+    return fail(`el acceso con Google no es válido o ha caducado (${claims.error_description || claims.error}): vuelve a pulsar el botón de Google`);
+  }
+
   // 1. Audiencia — el chequeo que tokeninfo NO hace por ti. Imprescindible.
   if (claims.aud !== clientId) return fail("aud incorrecta (token emitido para otra app)");
 

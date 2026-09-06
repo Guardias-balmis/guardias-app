@@ -729,3 +729,18 @@ test("una fila repetida idéntica en la propuesta no gasta un intento: se escrib
   assert.equal(r.intentos, 1);
   assert.equal(asignacionesDe(deps).length, 2);
 });
+
+test("si el lock expira en la escritura final (waitLock lanza), la generación responde CONFLICTO con bitácora en vez de una excepción muda", () => {
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const transaction = deps.store.transaction;
+  deps.store.transaction = () => { throw new Error("Lock timeout: another process was holding the lock for too long"); };
+  const r = generar(deps, session);
+  deps.store.transaction = transaction;
+  assert.equal(r.ok, false);
+  assert.equal(r.resultado, "CONFLICTO");
+  assert.match(r.error, /hoja ocupada.*Lock timeout/);
+  assert.equal(bitacora(deps).at(-1).resultado, "CONFLICTO");
+  assert.equal(asignacionesDe(deps).length, 0);
+});
