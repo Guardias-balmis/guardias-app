@@ -115,14 +115,13 @@ const tieneMax = (p) => typeof p.maxGuardias === "number" && Number.isFinite(p.m
 
 function seccionPreferencias(preferencias) {
   const utiles = (preferencias || []).filter(
-    (p) => (Array.isArray(p.fechasEvitar) && p.fechasEvitar.length) || tieneMax(p) || p.preferDobles || p.notas
+    (p) => (Array.isArray(p.fechasEvitar) && p.fechasEvitar.length) || tieneMax(p) || p.notas
   );
   if (utiles.length === 0) return "PREFERENCIAS PERSONALES DEL MES: ninguna registrada.";
   const lista = utiles.map((p) => {
     const partes = [];
     if (Array.isArray(p.fechasEvitar) && p.fechasEvitar.length) partes.push(`preferiría evitar ${p.fechasEvitar.join(", ")}`);
     if (tieneMax(p)) partes.push(p.maxGuardias === 0 ? "pide NO hacer ninguna guardia este mes (tiene una ausencia registrada)" : `querría no pasar de ${p.maxGuardias} guardias`);
-    if (p.preferDobles) partes.push(`doblete preferido: ${String(p.preferDobles).toLowerCase().replace(/_/g, "-")}`);
     if (p.notas) partes.push(`nota: "${p.notas}"`);
     return `  - id="${p.residenteId}" — ${partes.join("; ")}`;
   }).join("\n");

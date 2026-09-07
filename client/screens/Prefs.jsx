@@ -9,7 +9,7 @@
 import { COLOR, S } from "./client/lib/design-tokens.js";
 import { datesOfMonth, weekday, compareISO, addDays, toISO, addMonths } from "./v2/domain/calendar.js";
 import { rangoValido } from "./client/lib/fechas.js";
-import { puedeMoverCiclo } from "./client/lib/permisos.js";
+import { puedeMoverCiclo, esAccesoDesarrollador } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 
 const { useState, useEffect, useRef } = React;
@@ -23,20 +23,10 @@ function fechasDelMes(lista, anio, mes) {
 
 const DEFAULT_PREFS = {
   maxGuardias: 5,
-  preferDobles: "",
   fechasEvitar: [],
   notas: "",
 };
 const MOTIVO_LABEL = { VACACIONES: "Vacaciones", ROTACION: "Rotación externa", BAJA: "Baja" };
-// Preferencia de "doblete" de fin de semana (a petición del autor, 2026-08-08): informativa
-// para el generador, igual que fechasEvitar — el validador nunca la comprueba. "Doblete" en
-// sentido amplio es cualquier par de guardias separadas por un solo día de descanso, pero la
-// práctica real concentra el sacrificio en un patrón de fin de semana concreto para no perder
-// dos fines de semana distintos del mes; viernes-domingo y jueves-sábado son los dos que la
-// gente pide. OJO: esto NO toca `dobletes` de INV-3/tally.js, que sigue siendo específicamente
-// viernes-domingo — esa es la métrica de equidad que cita la normativa («fines de semana
-// dobles»), y esta preferencia no la redefine.
-const DOBLETE_LABEL = { "": "Sin preferencia", VIERNES_DOMINGO: "Viernes-domingo", JUEVES_SABADO: "Jueves-sábado" };
 // Etiquetas de los riesgos de P-13 (spec.md §8/§8.1, blockPreview.js) — el `tipo` que devuelve
 // el dominio es un identificador estable, no texto pensado para pantalla.
 const RIESGO_LABEL = {
@@ -116,7 +106,7 @@ function NuevoBloqueo({ anio, mes, onCreated, showToast, api, paraOtros, residen
     if (ajena) extra.residenteId = residenteId;
     const r = await api.crearBloqueo(desde, hasta, motivo, extra);
     setSaving(false);
-    if (r.ok) { showToast(ajena ? "Ausencia registrada ✓" : "Bloqueo añadido ✓"); onCreated(r.riesgos); }
+    if (r.ok) { showToast(ajena ? "Ausencia registrada ✓" : "Bloqueo añadido ✓"); onCreated(r.riesgos, r.marcasSinEscribir); }
     else showToast("Error añadiendo el bloqueo: " + r.error, "err");
   };
 
@@ -308,6 +298,10 @@ function PrefsScreen() {
   // siempre que no bloquean (si bloquearan, la llamada habría fallado con ok:false y nunca
   // habríamos llegado a onCreated), pero antes nadie los mostraba — se calculaban y se tiraban.
   const [riesgosUltimoBloqueo, setRiesgosUltimoBloqueo] = useState([]);
+  // Días que `crearBloqueo` NO pudo marcar solo en la rejilla (V-50): ya tenían un código puesto
+  // o el mes está publicado. Se avisa para que quien registró la ausencia sepa que esos días hay
+  // que revisarlos a mano — la marca automática nunca pisa una asignación real ni un mes cerrado.
+  const [diasSinMarcar, setDiasSinMarcar] = useState([]);
   // `cancelando` deshabilita los botones de «Cancelar» mientras la petición está en vuelo: un doble
   // toque (fácil en el móvil con la latencia de Apps Script) mandaba `cancelarBloqueo` dos veces y,
   // con las dos recargas que dispara cada respuesta, seis idas y vueltas donde bastan tres.
@@ -316,7 +310,7 @@ function PrefsScreen() {
   // lista de residentes tuviera un hook más que el anterior — error #310 de React y la app en
   // blanco para quien recargaba y entraba en Preferencias antes de que respondiera Apps Script.
   const [cancelando, setCancelando] = useState(null);
-  const puedoRegistrarAjenas = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
+  const puedoRegistrarAjenas = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador: esAccesoDesarrollador(myResidente?.email) });
 
   // El mes que está en pantalla, para tirar las respuestas de un mes anterior que lleguen tarde:
   // con dos flechas seguidas, los bloqueos de agosto podían pintarse sobre septiembre.
@@ -472,16 +466,6 @@ function PrefsScreen() {
             ? "(normativa: 4–6, salvo excepciones — con una ausencia registrada este mes podés pedir menos)"
             : "(normativa: 4–6)"}
         </div>
-        <div style={{ marginTop: 14 }}>
-          <label style={S.label}>Si me toca doblete de fin de semana, prefiero…</label>
-          <select value={prefs.preferDobles} onChange={(e) => set("preferDobles")(e.target.value)}
-            style={{ ...S.input, width: "100%", marginTop: 4, boxSizing: "border-box" }}>
-            {Object.entries(DOBLETE_LABEL).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-          </select>
-          <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 6, lineHeight: 1.4 }}>
-            Así concentra el sacrificio en un solo fin de semana del mes, en vez de perder dos.
-          </div>
-        </div>
       </Card>
 
       <Card title="🗓️ Vacaciones, rotación y baja" accent={COLOR.orange}>
@@ -545,6 +529,21 @@ function PrefsScreen() {
             </div>
           </div>
         )}
+        {diasSinMarcar.length > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            <Aviso>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <span>
+                  No se pudo poner la marca en la rejilla para {diasSinMarcar.length} día{diasSinMarcar.length === 1 ? "" : "s"} ({diasSinMarcar.map(fechaEs).join(", ")}):
+                  ya tenían un código puesto o el mes está publicado. Revisalos a mano si hace falta.
+                </span>
+                <button onClick={() => setDiasSinMarcar([])}
+                  style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0 }}
+                  aria-label="Cerrar aviso">×</button>
+              </div>
+            </Aviso>
+          </div>
+        )}
         {riesgosUltimoBloqueo.length > 0 && (
           <div style={{ marginBottom: 10 }}>
             <Aviso>
@@ -565,9 +564,10 @@ function PrefsScreen() {
         {showNuevoBloqueo ? (
           <NuevoBloqueo anio={anio} mes={mes} api={api} showToast={showToast}
             paraOtros={puedoRegistrarAjenas} residentes={app.residentes} miId={myResidente.id}
-            onCreated={(riesgos) => {
+            onCreated={(riesgos, sinMarcar) => {
               setShowNuevoBloqueo(false); cargarBloqueos(); cargarAjenas();
               setRiesgosUltimoBloqueo(riesgos || []);
+              setDiasSinMarcar(sinMarcar || []);
             }} />
         ) : (
           <Btn onClick={() => { setShowNuevoBloqueo(true); setRiesgosUltimoBloqueo([]); }} color={COLOR.orangeLight} textColor={COLOR.orange}>+ Añadir</Btn>

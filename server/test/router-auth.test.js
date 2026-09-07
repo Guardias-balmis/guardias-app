@@ -205,15 +205,14 @@ test("el alta rechaza un nombre en blanco y devuelve la lista con el recién dad
 
 // ── guardarPreferencias valida campo a campo (2026-09-04): la tabla es append-only y el prompt la lee literal ──
 
-test("guardarPreferencias rechaza maxGuardias no entero o fuera de 0-6, preferDobles fuera del enum, fechas de otro mes y notas gigantes", () => {
+test("guardarPreferencias rechaza maxGuardias no entero o fuera de 0-6, fechas de otro mes y notas gigantes", () => {
   const deps = makeDeps();
   const session = loginComo(deps, "ana@gmail.com").session;
-  const base = { maxGuardias: 5, preferDobles: "", fechasEvitar: [], notas: "" };
+  const base = { maxGuardias: 5, fechasEvitar: [], notas: "" };
   const casos = [
     [{ ...base, maxGuardias: "abc" }, /maxGuardias/],
     [{ ...base, maxGuardias: 7 }, /maxGuardias/],
     [{ ...base, maxGuardias: 4.5 }, /maxGuardias/],
-    [{ ...base, preferDobles: "LUNES_MARTES" }, /preferDobles/],
     [{ ...base, fechasEvitar: "2027-07-01" }, /fechasEvitar/],
     [{ ...base, fechasEvitar: ["2027-08-01"] }, /no es un día de 7\/2027/],
     [{ ...base, fechasEvitar: ["01/07/2027"] }, /fecha inválida/],
@@ -236,7 +235,6 @@ test("guardarPreferencias normaliza: campos ausentes a su valor neutro, fechas d
   const mia = call({ action: "misPreferencias", session, anio: 2027, mes: 7 }, deps).prefs;
   assert.deepEqual(mia.fechasEvitar, ["2027-07-03", "2027-07-20"]);
   assert.equal(mia.notas, "boda el 20");
-  assert.equal(mia.preferDobles ?? "", "", "una celda vacía vuelve como undefined del store: equivale a «sin preferencia»");
   assert.equal(mia.maxGuardias, undefined);
 });
 

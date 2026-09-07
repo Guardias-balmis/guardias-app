@@ -144,16 +144,30 @@ test("sin mandato vigente lo puede lanzar cualquier Mayor (V-16), no se bloquea 
 test("V-46: el acceso de desarrollador (email exacto) genera en Borrador aunque sea Pequeño", () => {
   const llm = fakeLlm([ok(RESPUESTA_OK)]);
   const deps = makeDeps({ llm, extraSheets: conDev });
+  deps.today = "2027-01-15"; // dentro de la fecha límite de V-49 (el default del fixture, 2027-06-16, ya la rebasa)
 
   const r = generar(deps, loggedInAs(deps, DEV.email));
-  assert.equal(r.ok, true, "el acceso de desarrollador destraba el permiso del ciclo solo para esta acción");
+  assert.equal(r.ok, true, "el acceso de desarrollador destraba el permiso del ciclo dentro de plazo");
 });
 
-test("V-46: el acceso de desarrollador NO destraba el resto del ciclo (marcarValidado sigue pidiendo Mayor/Responsable)", () => {
+test("V-49: el acceso de desarrollador SÍ destraba el resto del ciclo dentro de plazo (amplía V-46)", () => {
   const deps = makeDeps({ extraSheets: conDev });
+  deps.today = "2027-01-15"; // dentro de la fecha límite de V-49 (el default del fixture, 2027-06-16, ya la rebasa)
   const session = loggedInAs(deps, DEV.email);
 
-  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  // Cualquier acción que pase por requireCicloPermiso vale de sonda; se usa `crearBloqueo` sobre
+  // OTRO residente (motivo BAJA, para no depender de `previewBloqueoRisk`, ausente del fixture) en
+  // vez de `marcarValidado`, que aquí sí requiere mockear los cierres de equidad.
+  const r = call({ action: "crearBloqueo", session, residenteId: OTRO.id, motivo: "BAJA", desde: "2027-07-10", hasta: "2027-07-12" }, deps);
+  assert.equal(r.ok, true, "el desarrollador puede mover el ciclo entero mientras corrige errores en producción");
+});
+
+test("V-49: pasada la fecha límite, el acceso de desarrollador caduca solo y vuelve a exigir Mayor/Responsable", () => {
+  const deps = makeDeps({ extraSheets: conDev });
+  deps.today = "2027-04-01"; // un día después del límite fijado en router.js
+  const session = loggedInAs(deps, DEV.email);
+
+  const r = call({ action: "crearBloqueo", session, residenteId: OTRO.id, motivo: "BAJA", desde: "2027-07-10", hasta: "2027-07-12" }, deps);
   assert.equal(r.ok, false);
   assert.match(r.error, /solo el Responsable|solo un R3 o R4/);
 });
@@ -161,6 +175,7 @@ test("V-46: el acceso de desarrollador NO destraba el resto del ciclo (marcarVal
 test("V-46: el acceso de desarrollador sigue exigiendo Borrador (un VALIDADO se rechaza igual que a cualquiera)", () => {
   const llm = fakeLlm([ok(RESPUESTA_OK)]);
   const deps = makeDeps({ llm, extraSheets: conDev });
+  deps.today = "2027-01-15"; // dentro de la fecha límite de V-49 (el default del fixture, 2027-06-16, ya la rebasa)
   const session = loggedInAs(deps, DEV.email);
   deps.store.appendRecord("cuadrantes", { mes: 7, anio: 2027, estado: "VALIDADO", actorId: "resp-1", fecha: "2027-06-01" });
 
@@ -573,7 +588,12 @@ test("una BAJA registrada mientras el modelo pensaba: la propuesta se vuelve a j
     assert.equal(call({ action: "crearBloqueo", session: sessionOtro, motivo: "BAJA", desde: "2027-07-02", hasta: "2027-07-02" }, deps).ok, true);
     return ok(RESPUESTA_OK);
   }]);
-  // Primer juicio (en el ciclo del generador): limpio. Segundo (bajo el lock, con el snapshot fresco): INV-5.
+  // Primer juicio (en el ciclo del generador): limpio. Un segundo juicio explícito (bajo el lock,
+  // con el snapshot fresco) solo llegaría a correr si la huella de `asignaciones` no cambiara; pero
+  // desde V-50 `crearBloqueo` marca sola la celda vacía con una "B", así que la huella YA detecta
+  // el cambio y corta antes de necesitar ese segundo juicio — se queda en 1, no en 2. El resultado
+  // final es el mismo (CONFLICTO, nada de la propuesta escrito): la huella es un guardarraíl más
+  // tosco que el juicio semántico, pero cubre el mismo caso y de sobra.
   deps = makeDeps({ llm, violaciones: () => (++juicios >= 2 ? INV5 : []) });
   const session = loggedInAs(deps, "resp@gmail.com");
   sessionOtro = loggedInAs(deps, "otro@gmail.com");
@@ -581,8 +601,9 @@ test("una BAJA registrada mientras el modelo pensaba: la propuesta se vuelve a j
   assert.equal(r.ok, false);
   assert.equal(r.resultado, "CONFLICTO");
   assert.match(r.error, /registró una ausencia/);
-  assert.equal(juicios, 2, "se juzgó dos veces: al proponer y al escribir");
-  assert.equal(asignacionesDe(deps).length, 0, "no se escribió ni una guardia sobre la baja");
+  assert.equal(juicios, 1, "la huella corta antes del segundo juicio (V-50: la baja ya marcó la celda)");
+  assert.equal(asignacionesDe(deps).length, 1, "la única fila es la marca 'B' que la baja escribió sola (V-50); ninguna guardia de la propuesta");
+  assert.equal(asignacionesDe(deps)[0].codigo, "B");
   assert.equal(bitacora(deps).at(-1).resultado, "CONFLICTO");
 });
 

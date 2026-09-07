@@ -4,7 +4,7 @@ import { COLOR, ANOS, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js
 import { periodsOfResident, levelOn } from "./v2/domain/residents.js";
 import { todayISO } from "./client/lib/dates.js";
 import { S } from "./client/lib/design-tokens.js";
-import { puedeMoverCiclo, puedeGenerarCuadrante, esAccesoDesarrolladorIA } from "./client/lib/permisos.js";
+import { puedeMoverCiclo, puedeGenerarCuadrante, esAccesoDesarrollador } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 
 const { useState, useEffect } = React;
@@ -402,11 +402,11 @@ function HomeScreen() {
     })();
     return () => { cancelled = true; };
   }, [mes, anio, reintento]);
-  const puedoRegistrarImaginaria = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable });
-  // El acceso de desarrollador (V-46) solo destraba el PERMISO del ciclo, no el estado del mes:
-  // sigue sin ofrecerse fuera de Borrador, para él igual que para cualquiera.
-  const puedoGenerar = (puedeGenerarCuadrante({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, estado: estadoMes })
-    || (esAccesoDesarrolladorIA(myResidente?.email) && estadoMes === "BORRADOR"));
+  // El acceso de desarrollador (V-49) destraba el PERMISO del ciclo entero, no el estado del mes:
+  // sigue sin ofrecerse generar fuera de Borrador, para él igual que para cualquiera.
+  const accesoDesarrollador = esAccesoDesarrollador(myResidente?.email);
+  const puedoRegistrarImaginaria = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador });
+  const puedoGenerar = puedeGenerarCuadrante({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador, estado: estadoMes });
   const puedoOfrecerme = proximoMandato && !proximoMandato.mandato
     && proximoMandato.elegibles.includes(myResidente?.id) && !proximoMandato.meHeOfrecido;
   const hoy = new Date();
@@ -528,7 +528,7 @@ function HomeScreen() {
       <GeneradorIA api={app.api} usuario={app.auth && app.auth.residente && app.auth.residente.id} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
         setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")} completarDisponible={completarDisponible}
         estadoError={estadoError} reintentar={() => setReintento((n) => n + 1)}
-        comprobando={estadoMes === null && (app.isResponsable || app.grupo === "MAYOR" || esAccesoDesarrolladorIA(myResidente?.email))} />
+        comprobando={estadoMes === null && (app.isResponsable || app.grupo === "MAYOR" || accesoDesarrollador)} />
 
       <Imaginaria api={app.api} residentes={residentes} showToast={app.showToast} puedoRegistrar={puedoRegistrarImaginaria} />
 
