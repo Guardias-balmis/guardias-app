@@ -177,7 +177,9 @@ export function closedPeriodsBetween(residente, desde, hasta) {
     .map((p) => ({ year: p.year, start: p.start, end: p.end }));
 }
 
-const esISO = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+// Semántico, no solo de forma: un «2024-06-31» tecleado a mano tiene la forma correcta y no
+// existe, y `parseISO` lanza igual. Mismo idioma que `client/lib/fechas.js:fechaValida`.
+const esISO = (v) => { try { parseISO(v); return true; } catch { return false; } };
 
 function esCierreReal(p, finReal) {
   return compareISO(p.end, finReal) <= 0 && compareISO(p.start, p.end) <= 0;

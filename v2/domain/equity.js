@@ -21,7 +21,7 @@
 // nunca. Cada uno se mide sobre su propio año completo, y cada pareja se compara una sola vez:
 // en el mes en que cierra el último de los dos (`earlierClosedPeers`).
 
-import { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow, bridgesOfMonth, bridgesBetween } from "./calendar.js";
+import { compareISO, addDays, addYears, datesOfMonth, toISO, daysInMonth, trimesterWindow, bridgesOfMonth, bridgesBetween } from "./calendar.js";
 import { tally } from "./tally.js";
 import { absences, DESCUENTA_DISPONIBILIDAD, AUSENTE_EN_PUENTE } from "./absences.js";
 import { accumulatedTally } from "./accumulate.js";
@@ -71,9 +71,9 @@ const inRange = (f, a, b) => compareISO(f, a) >= 0 && compareISO(f, b) <= 0;
  *     array al que le falte ENTERO alguno de los años que cubre la ventana significa "ese
  *     calendario no está cargado" y sí avisa, porque si no ese eje compararía ceros y se leería
  *     como verificado (el fallo que V-13(e) dejó anotado).
- *   - cerradosAntes: [{id, cohorte, year, cierre, win, dims, avail, dias, f}] — compañeros que ya
+ *   - cerradosAntes: [{id, cohorte, year, cierre, win, dims, avail, dias, nominal, f}] — compañeros que ya
  *     cerraron ese mismo año de residencia en un mes anterior, con sus seis ejes YA medidos
- *     sobre su propia ventana (`dias` días, `avail` de ellos sin baja; los calcula
+ *     sobre su propia ventana (`dias` días, `nominal` sin contar el 29 de febrero, `avail` de ellos sin baja; los calcula
  *     `buildYearCloseContext` desde `historicas`; V-48). Quien cierra este mes se compara con
  *     cada uno de ellos por parejas; ellos entre sí no, porque esa pareja ya se comparó cuando
  *     cerró el segundo de los dos.
@@ -121,7 +121,7 @@ export function validateResidencyYearClose(ctx) {
     const cohorte = cohortOf(r);
     const clave = `${cohorte}|${win.year}`;
     if (!byCohort.has(clave)) byCohort.set(clave, []);
-    byCohort.get(clave).push({ id: r.id, cohorte, year: win.year, cierre: win.end, win, dims, avail, dias, f: avail / dias });
+    byCohort.get(clave).push({ id: r.id, cohorte, year: win.year, cierre: win.end, win, dims, avail, dias, nominal: diasNominales(win), f: avail / dias });
   }
 
   // Solo se compara dentro de una cohorte con al menos dos miembros: quien cierra su año siendo
@@ -171,12 +171,13 @@ export function validateResidencyYearClose(ctx) {
 
   // Comparación por dimensión dentro de cada cohorte.
   for (const grupo of comparables) {
+    const ref = referencia(grupo);
     for (const dim of DIMS) {
-      const par = excedeElUno(grupo.map(medida(dim, referencia(grupo))), PROPORCIONAL.has(dim));
+      const par = excedeElUno(grupo.map(medida(dim, ref)), PROPORCIONAL.has(dim));
       if (par) {
         const { maxEntry, minEntry } = par;
         violations.push(warn(
-          `${labelDim(dim)} al cierre del año de residencia: ${maxEntry.id}=${round(maxEntry.v)} vs ${minEntry.id}=${round(minEntry.v)} (diferencia > 1)`,
+          `${labelDim(dim)} al cierre del año de residencia: ${maxEntry.id}=${round(maxEntry.v)} vs ${minEntry.id}=${round(minEntry.v)} (diferencia > 1${escalaDe(grupo, ref)})`,
           { fecha: maxEntry.cierre, residenteId: maxEntry.id }
         ));
       }
@@ -188,9 +189,7 @@ export function validateResidencyYearClose(ctx) {
   // mes que se está validando; el compañero cerró en un mes ya validado y el texto lo dice.
   for (const [x, e] of parejas) {
     const ref = referencia([x, e]);
-    // Con ventanas de distinta longitud (la de la nota [a]) las cifras van reescaladas y el
-    // texto lo dice, para que quien lo lea no busque esos números en el Resumen.
-    const escala = x.dias === e.dias ? "" : `; años de ${x.dias} y ${e.dias} días, cifras a ritmo de ${ref} días`;
+    const escala = escalaDe([x, e], ref);
     for (const dim of DIMS) {
       const par = excedeElUno([x, e].map(medida(dim, ref)), PROPORCIONAL.has(dim));
       if (par) {
@@ -208,22 +207,48 @@ export function validateResidencyYearClose(ctx) {
 
 /**
  * La normalización por disponibilidad de los ejes PROPORCIONAL, escrita para ventanas que pueden
- * tener DISTINTA longitud (V-48b). Con la misma longitud W para todos es exactamente el `dims/f`
- * de la nota [a] (V-8) y la tolerancia `1/min(f)` de V-37: `dims·W/avail = dims/f`. Con longitudes
- * distintas —el año alargado por la nota [a], que es justo el caso que V-48 pone a comparar—
- * dividir por la fracción de la PROPIA ventana proyectaba a quien estuvo de baja sobre sus quince
- * meses y lo sacaba como sobrecargado frente a doce de su compañero (52 guardias en 12 meses
- * disponibles de 15 salían como 65 frente a 52), o sea, el aviso falso en el escenario para el
- * que se escribió la decisión. Se compara el RITMO por día disponible, reescalado a la ventana
- * más corta de las que se comparan para que las cifras sigan leyéndose como guardias.
- * `f` pasa a ser `avail/ref`, con lo que `excedeElUno` sigue midiendo la tolerancia en guardias
- * de verdad (`1/min(f) = ref/min(avail)`) sin saber nada de esto.
+ * tener DISTINTA longitud (V-48b). Con la misma longitud para todos es exactamente el `dims/f`
+ * de la nota [a] (V-8) y la tolerancia `1/min(f)` de V-37. Con longitudes distintas —el año
+ * alargado por la nota [a], que es justo el caso que V-48 pone a comparar— dividir por la
+ * fracción de la PROPIA ventana proyectaba a quien estuvo de baja sobre sus quince meses y lo
+ * sacaba como sobrecargado frente a doce de su compañero (52 guardias en 12 meses disponibles
+ * de 15 salían como 65 frente a 52), o sea, el aviso falso en el escenario para el que se
+ * escribió la decisión. Se compara el RITMO por día disponible, reescalado a la ventana más
+ * corta de las que se comparan para que las cifras sigan leyéndose como guardias.
+ *
+ * La longitud que se compara es la NOMINAL: los días de la ventana sin contar el 29 de febrero.
+ * Dos años de residencia de doce meses miden 365 o 366 días según pillen o no un bisiesto, y
+ * con el reescalado a días de calendario una diferencia cruda de exactamente una guardia —dentro
+ * de la norma— salía como 1 + n/366 y avisaba (hallado por la verificación del 2026-09-07). Un
+ * 29 de febrero no alarga el año de nadie; un periodo editado de quince meses, sí.
+ *
+ * `f` pasa a ser `(avail/dias) · (nominal/ref)`: la fracción disponible de la propia ventana,
+ * corregida por cuánto más larga es que la de referencia. Con ventanas de la misma longitud
+ * nominal el segundo factor es 1 y `f` es bit a bit el de antes; `excedeElUno` sigue midiendo la
+ * tolerancia en guardias de verdad (`1/min(f)`) sin saber nada de esto.
  */
-const referencia = (grupo) => Math.min(...grupo.map((x) => x.dias));
-const medida = (dim, ref) => (x) => ({
-  id: x.id, cierre: x.cierre, f: x.avail / ref,
-  v: PROPORCIONAL.has(dim) ? (x.dims[dim] * ref) / x.avail : x.dims[dim],
-});
+const referencia = (grupo) => Math.min(...grupo.map((x) => x.nominal));
+const medida = (dim, ref) => (x) => {
+  const f = (x.avail / x.dias) * (x.nominal / ref);
+  return { id: x.id, cierre: x.cierre, f, v: PROPORCIONAL.has(dim) ? x.dims[dim] / f : x.dims[dim] };
+};
+/** Días de la ventana sin contar los 29 de febrero que caigan dentro. */
+function diasNominales(win) {
+  let bisiestos = 0;
+  for (let y = Number(win.start.slice(0, 4)); y <= Number(win.end.slice(0, 4)); y++) {
+    if (daysInMonth(y, 2) === 29 && inRange(toISO(y, 2, 29), win.start, win.end)) bisiestos++;
+  }
+  return daysInclusive(win.start, win.end) - bisiestos;
+}
+/**
+ * Con ventanas de distinta longitud las cifras van reescaladas y el texto lo dice, para que
+ * quien lo lea no busque esos números en el Resumen. Vacío cuando todas miden lo mismo.
+ */
+function escalaDe(grupo, ref) {
+  const longitudes = [...new Set(grupo.map((x) => x.nominal))];
+  if (longitudes.length < 2) return "";
+  return `; años de ${longitudes.sort((a, b) => b - a).join(" y ")} días, cifras a ritmo de ${ref} días`;
+}
 
 /**
  * Primer día de histórico que hace falta para evaluar el cierre ANUAL en este mes: el
@@ -354,7 +379,7 @@ export function buildYearCloseContext({ mes, anio, residentes, historicas = [], 
       total: t.total, findes: t.finde, festivos: t.festivos, prefestivos: t.prefestivos, dobletes: t.dobletes,
       puentesLibres: bridgesBetween(e.win.start, e.win.end, festivos).filter((p) => residentIsFreeOnBridge(e.id, historicas, p, e.win, bloqueos)).length,
     };
-    cerradosAntes.push({ ...e, cierre: e.win.end, dims, avail, dias, f: avail / dias });
+    cerradosAntes.push({ ...e, cierre: e.win.end, dims, avail, dias, nominal: diasNominales(e.win), f: avail / dias });
   }
 
   return {
@@ -488,7 +513,9 @@ function closingWindowThisMonth(r, mes, anio) {
  * Exportada desde V-34: `schedule.js` divide por el MISMO `f` que este validador, o el generador
  * perseguiría un objetivo distinto del que el cierre le va a medir (regla 2 de V-32). Duplicarla
  * allí era la vía rápida y es justo lo que V-19 prohíbe: dos definiciones de la misma pregunta
- * que empiezan iguales y se separan sin que nadie lo note.
+ * que empiezan iguales y se separan sin que nadie lo note. Desde V-48 el juez añade sobre esta
+ * `f` el reescalado por longitud nominal de `medida`, que solo actúa entre ventanas de distinta
+ * longitud; el generador trabaja dentro de un mes y no lo necesita.
  */
 export function availabilityFraction(win, bajas) {
   const windowDays = daysInclusive(win.start, win.end);

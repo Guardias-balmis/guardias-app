@@ -456,7 +456,8 @@ test("marcarValidado: el eje de puentes libres se deriva de la tabla `festivos` 
 });
 
 // V-48: el cierre anual compara también con el compañero de cohorte que cerró ese mismo año meses
-// antes. El servidor no cambia: `yearCloseHistoryStart` estira solo el histórico que lee.
+// antes. Aquí el servidor no hace nada nuevo: `yearCloseHistoryStart` estira el histórico que lee
+// (el único cambio del router para V-48, el lookahead de C-1, tiene su test más abajo).
 test("marcarValidado: el cierre ANUAL compara con quien cerró ese mismo año en un mes anterior, leyendo su histórico completo (V-48)", () => {
   // Misma cohorte (2024) que Rita y Óscar, pero empezó en marzo: su 4.º año va del 2027-03-11 al
   // 2028-03-10, dos meses antes del cierre de los otros dos (2028-05-26).
