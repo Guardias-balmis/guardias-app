@@ -16,20 +16,10 @@ const { Card, SectionTitle, Btn, Aviso } = window.UI;
 
 const DEFAULT_PREFS = {
   maxGuardias: 5,
-  preferDobles: "",
   fechasEvitar: [],
   notas: "",
 };
 const MOTIVO_LABEL = { VACACIONES: "Vacaciones", ROTACION: "Rotación externa", BAJA: "Baja" };
-// Preferencia de "doblete" de fin de semana (a petición del autor, 2026-08-08): informativa
-// para el generador, igual que fechasEvitar — el validador nunca la comprueba. "Doblete" en
-// sentido amplio es cualquier par de guardias separadas por un solo día de descanso, pero la
-// práctica real concentra el sacrificio en un patrón de fin de semana concreto para no perder
-// dos fines de semana distintos del mes; viernes-domingo y jueves-sábado son los dos que la
-// gente pide. OJO: esto NO toca `dobletes` de INV-3/tally.js, que sigue siendo específicamente
-// viernes-domingo — esa es la métrica de equidad que cita la normativa («fines de semana
-// dobles»), y esta preferencia no la redefine.
-const DOBLETE_LABEL = { "": "Sin preferencia", VIERNES_DOMINGO: "Viernes-domingo", JUEVES_SABADO: "Jueves-sábado" };
 // Etiquetas de los riesgos de P-13 (spec.md §8/§8.1, blockPreview.js) — el `tipo` que devuelve
 // el dominio es un identificador estable, no texto pensado para pantalla.
 const RIESGO_LABEL = {
@@ -423,16 +413,6 @@ function PrefsScreen() {
           {tieneAusenciaEsteMes
             ? "(normativa: 4–6, salvo excepciones — con una ausencia registrada este mes podés pedir menos)"
             : "(normativa: 4–6)"}
-        </div>
-        <div style={{ marginTop: 14 }}>
-          <label style={S.label}>Si me toca doblete de fin de semana, prefiero…</label>
-          <select value={prefs.preferDobles} onChange={(e) => set("preferDobles")(e.target.value)}
-            style={{ ...S.input, width: "100%", marginTop: 4, boxSizing: "border-box" }}>
-            {Object.entries(DOBLETE_LABEL).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-          </select>
-          <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 6, lineHeight: 1.4 }}>
-            Así concentra el sacrificio en un solo fin de semana del mes, en vez de perder dos.
-          </div>
         </div>
       </Card>
 

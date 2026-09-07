@@ -110,14 +110,13 @@ function seccionEventos(eventos) {
  */
 function seccionPreferencias(preferencias) {
   const utiles = (preferencias || []).filter(
-    (p) => (p.fechasEvitar && p.fechasEvitar.length) || p.maxGuardias || p.preferDobles || p.notas
+    (p) => (p.fechasEvitar && p.fechasEvitar.length) || p.maxGuardias || p.notas
   );
   if (utiles.length === 0) return "PREFERENCIAS PERSONALES DEL MES: ninguna registrada.";
   const lista = utiles.map((p) => {
     const partes = [];
     if (p.fechasEvitar && p.fechasEvitar.length) partes.push(`preferiría evitar ${p.fechasEvitar.join(", ")}`);
     if (p.maxGuardias) partes.push(`querría no pasar de ${p.maxGuardias} guardias`);
-    if (p.preferDobles) partes.push(`doblete preferido: ${String(p.preferDobles).toLowerCase().replace(/_/g, "-")}`);
     if (p.notas) partes.push(`nota: "${p.notas}"`);
     return `  - id="${p.residenteId}" — ${partes.join("; ")}`;
   }).join("\n");

@@ -227,7 +227,7 @@ export function handleRequest(rawBody, deps) {
       // Alcance EQUIPO, a diferencia de misPreferencias. Existe porque hasta ahora la tabla
       // `preferencias` era de solo escritura: los residentes llevaban meses rellenando el
       // formulario de Prefs.jsx y nadie —ni el dominio, ni el validador, ni el generador— leía
-      // jamás `fechasEvitar`, `maxGuardias`, `preferDobles` ni `notas`. Quien monta el cuadrante
+      // jamás `fechasEvitar`, `maxGuardias` ni `notas`. Quien monta el cuadrante
       // necesita verlas para poder tenerlas en cuenta.
       //
       // Abierta a cualquier sesión, como listBloqueos: las preferencias son BLANDAS (nunca
@@ -250,10 +250,10 @@ export function handleRequest(rawBody, deps) {
         return authed(req, deps, (session) => {
           if (!req.prefs || typeof req.prefs !== "object") return { ok: false, error: "prefs inválido" };
           if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
-          const { maxGuardias, preferDobles, fechasEvitar, notas } = req.prefs;
+          const { maxGuardias, fechasEvitar, notas } = req.prefs;
           deps.store.appendRecord("preferencias", {
             residenteId: session.sub, anio: req.anio, mes: req.mes,
-            maxGuardias, preferDobles, fechasEvitar, notas,
+            maxGuardias, fechasEvitar, notas,
           });
           return { ok: true };
         });

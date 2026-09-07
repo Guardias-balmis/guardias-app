@@ -56,10 +56,12 @@ export const TABLES = {
   // `bloqueos` — spec.md §5 Fase 4: "distingue DURO vs BLANDO, son cosas distintas". Desde V-8
   // (Fase 5.x) la severidad dentro de `bloqueos` ya no es uniforme: solo motivo BAJA bloquea
   // la asignación (INV-5); VACACIONES/ROTACION son informativas.
-  // preferDobles pasó de bool a enum de texto ("" | VIERNES_DOMINGO | JUEVES_SABADO) el
-  // 2026-08-08, a petición del autor — ver client/screens/Prefs.jsx:DOBLETE_LABEL. Las filas
-  // viejas con TRUE/FALSE se leen tal cual (string plana) y no calzan con ningún valor del
-  // nuevo enum: no rompen nada, simplemente no coinciden hasta que el residente vuelva a guardar.
+  // preferDobles (a petición del autor, 2026-09-04) se retiró de la app: la normativa no deja
+  // elegir entre viernes-domingo y jueves-sábado, exige viernes-domingo específicamente, y esa
+  // distribución ya la gobierna el eje `dobletes` de INV-3 (equity.js/tally.js) — nunca una
+  // preferencia personal. La columna se queda en el Sheet, como toda tabla append-only de este
+  // proyecto, pero ya no se lee ni se escribe desde ningún sitio: las filas viejas con un valor
+  // conservan su historia, sin más efecto.
   preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles"), col("fechasEvitar", "json"), col("notas")] },
   // Fase 6.2: ciclo BORRADOR|VALIDADO|PUBLICADO por mes+año (spec.md §2 Cuadrante). Cada fila
   // es UNA transición de estado (append-only, `readLatest` por mes|anio se queda con la

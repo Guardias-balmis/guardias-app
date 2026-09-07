@@ -65,10 +65,12 @@ const TABLES = {
   // `bloqueos` — spec.md §5 Fase 4: "distingue DURO vs BLANDO, son cosas distintas". Desde V-8
   // (Fase 5.x) la severidad dentro de `bloqueos` ya no es uniforme: solo motivo BAJA bloquea
   // la asignación (INV-5); VACACIONES/ROTACION son informativas.
-  // preferDobles pasó de bool a enum de texto ("" | VIERNES_DOMINGO | JUEVES_SABADO) el
-  // 2026-08-08, a petición del autor — ver client/screens/Prefs.jsx:DOBLETE_LABEL. Las filas
-  // viejas con TRUE/FALSE se leen tal cual (string plana) y no calzan con ningún valor del
-  // nuevo enum: no rompen nada, simplemente no coinciden hasta que el residente vuelva a guardar.
+  // preferDobles (a petición del autor, 2026-09-04) se retiró de la app: la normativa no deja
+  // elegir entre viernes-domingo y jueves-sábado, exige viernes-domingo específicamente, y esa
+  // distribución ya la gobierna el eje `dobletes` de INV-3 (equity.js/tally.js) — nunca una
+  // preferencia personal. La columna se queda en el Sheet, como toda tabla append-only de este
+  // proyecto, pero ya no se lee ni se escribe desde ningún sitio: las filas viejas con un valor
+  // conservan su historia, sin más efecto.
   preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles"), col("fechasEvitar", "json"), col("notas")] },
   // Fase 6.2: ciclo BORRADOR|VALIDADO|PUBLICADO por mes+año (spec.md §2 Cuadrante). Cada fila
   // es UNA transición de estado (append-only, `readLatest` por mes|anio se queda con la
@@ -500,14 +502,13 @@ function seccionEventos(eventos) {
  */
 function seccionPreferencias(preferencias) {
   const utiles = (preferencias || []).filter(
-    (p) => (p.fechasEvitar && p.fechasEvitar.length) || p.maxGuardias || p.preferDobles || p.notas
+    (p) => (p.fechasEvitar && p.fechasEvitar.length) || p.maxGuardias || p.notas
   );
   if (utiles.length === 0) return "PREFERENCIAS PERSONALES DEL MES: ninguna registrada.";
   const lista = utiles.map((p) => {
     const partes = [];
     if (p.fechasEvitar && p.fechasEvitar.length) partes.push(`preferiría evitar ${p.fechasEvitar.join(", ")}`);
     if (p.maxGuardias) partes.push(`querría no pasar de ${p.maxGuardias} guardias`);
-    if (p.preferDobles) partes.push(`doblete preferido: ${String(p.preferDobles).toLowerCase().replace(/_/g, "-")}`);
     if (p.notas) partes.push(`nota: "${p.notas}"`);
     return `  - id="${p.residenteId}" — ${partes.join("; ")}`;
   }).join("\n");
@@ -1057,7 +1058,7 @@ function handleRequest(rawBody, deps) {
       // Alcance EQUIPO, a diferencia de misPreferencias. Existe porque hasta ahora la tabla
       // `preferencias` era de solo escritura: los residentes llevaban meses rellenando el
       // formulario de Prefs.jsx y nadie —ni el dominio, ni el validador, ni el generador— leía
-      // jamás `fechasEvitar`, `maxGuardias`, `preferDobles` ni `notas`. Quien monta el cuadrante
+      // jamás `fechasEvitar`, `maxGuardias` ni `notas`. Quien monta el cuadrante
       // necesita verlas para poder tenerlas en cuenta.
       //
       // Abierta a cualquier sesión, como listBloqueos: las preferencias son BLANDAS (nunca
@@ -1080,10 +1081,10 @@ function handleRequest(rawBody, deps) {
         return authed(req, deps, (session) => {
           if (!req.prefs || typeof req.prefs !== "object") return { ok: false, error: "prefs inválido" };
           if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
-          const { maxGuardias, preferDobles, fechasEvitar, notas } = req.prefs;
+          const { maxGuardias, fechasEvitar, notas } = req.prefs;
           deps.store.appendRecord("preferencias", {
             residenteId: session.sub, anio: req.anio, mes: req.mes,
-            maxGuardias, preferDobles, fechasEvitar, notas,
+            maxGuardias, fechasEvitar, notas,
           });
           return { ok: true };
         });
