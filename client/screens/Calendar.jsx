@@ -464,12 +464,15 @@ function CalendarScreen() {
     // solo de quien pulsa Validar — listBloqueos (a diferencia de misBloqueos) los trae
     // todos. Desde la decisión V-8, solo BAJA bloquea la asignación (INV-5); VACACIONES y
     // ROTACION siguen alimentando INV-6/7 sin bloquear.
-    // Las tres lecturas que no dependen entre sí van A LA VEZ (2026-09-04): en serie eran tres
+    // Las lecturas que no dependen entre sí van A LA VEZ (2026-09-04): en serie eran otras tantas
     // idas y vueltas a Apps Script encadenadas, dos o tres segundos cada una, antes de ver nada.
-    const [rBloqueos, rFestivos, rExcepciones] = await Promise.all([
+    // `listEventos` entra en la misma tanda por eso mismo: es independiente de las otras tres y
+    // encadenarla sumaría un viaje más a un botón que ya hace unos cuantos.
+    const [rBloqueos, rFestivos, rExcepciones, rEventos] = await Promise.all([
       app.api.listBloqueos(anio, mes),
       app.api.listFestivosRango(addDays(monthWindow.start, -1), addDays(monthWindow.end, 1)),
       app.api.listExcepciones(),
+      app.api.listEventos(),
     ]);
     if (!rBloqueos.ok) { setViolaciones(null); showToast("Error cargando bloqueos para validar: " + rBloqueos.error, "err"); return; }
     // Las ausencias con fecha ilegible se apartan como hace el servidor (V-22) y se reportan como
@@ -503,6 +506,20 @@ function CalendarScreen() {
     // no impide seguir: solo deja este chequeo local sin la excepción.
     const excepciones = rExcepciones.ok ? rExcepciones.excepciones : [];
 
+    // Eventos (INV-10, V-20): esta pantalla NO los pedía, así que `buildMonthContext` recibía la
+    // lista vacía y la regla «quien cubrió Navidad libra en la despedida» era muda justo aquí, en
+    // la única pantalla desde la que se valida y se publica. El servidor sí la comprobaba en
+    // marcarValidado, pero sus avisos no vuelven a la pantalla y un `aviso` no rechaza nada
+    // (V-14): el resultado se calculaba y no lo veía nadie.
+    // Van SIN filtrar por mes, igual que en el router: `buildMonthContext` se queda con los del
+    // año académico, que es lo que empareja la Navidad de diciembre con la despedida de mayo.
+    // Un fallo de red no bloquea (INV-10 es aviso), pero sí se dice — y esa es la diferencia con
+    // las excepciones de arriba: sin excepciones se avisa de MÁS (no hace falta decir nada), sin
+    // eventos se avisaría de MENOS, y lo que no se ha podido comprobar no se da por bueno en
+    // silencio, igual que con los festivos.
+    if (!rEventos.ok) showToast("No se pudieron cargar los eventos: " + rEventos.error + " — INV-10 no se ha comprobado", "err");
+    const eventos = rEventos.ok ? rEventos.eventos : [];
+
     // Sin las celdas vaciadas en esta sesión (`codigo: ""`): son un borrado pendiente, no una
     // asignación, y como asignación vacía hacían saltar en falso el INV-2 de quien no tenía
     // ninguna otra celda ese mes.
@@ -518,7 +535,7 @@ function CalendarScreen() {
     // traer el día anterior, y contarlo dos veces falsearía el `propias` de INV-7.
     const porClave = new Map(historicas.map((a) => [`${a.residenteId}|${a.fecha}`, a]));
     for (const b of bordes) if (!porClave.has(`${b.residenteId}|${b.fecha}`)) porClave.set(`${b.residenteId}|${b.fecha}`, b);
-    const ctx = buildMonthContext({ mes, anio, residentes, historicas: [...porClave.values()], asignacionesDelMes, bloqueos, festivos, excepciones });
+    const ctx = buildMonthContext({ mes, anio, residentes, historicas: [...porClave.values()], asignacionesDelMes, bloqueos, festivos, eventos, excepciones });
 
     // Cierres de equidad de INV-3 (P-8, decisión V-13): el trimestral en ago/nov/feb/may y el
     // anual en el mes del aniversario de alguien. Es la MISMA comprobación que hará el

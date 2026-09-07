@@ -1679,15 +1679,25 @@ function handleRequest(rawBody, deps) {
           // Las ausencias del día (2026-09-04): sin ellas la cola proponía llamar a quien estaba de
           // baja. Solo las legibles: una fila con fecha ilegible no puede decir si cubre ese día.
           const { usables } = partitionBloqueos(deps, allBloqueos(deps));
+          const coberturas = activeImaginaria(deps);
           return {
             ok: true,
             cola: deps.domain.imaginariaQueue({
               residentes: allResidentes(deps),
-              coberturas: activeImaginaria(deps),
+              coberturas,
               asignaciones: todas.filter((a) => a.fecha >= desde && a.fecha <= hasta),
               bloqueos: bloqueosInRange(deps, usables, req.fecha, req.fecha),
               grupo: req.grupo, fechaIncidencia: req.fecha,
             }),
+            // Las coberturas YA registradas de ESA incidencia, con su `id`. La cola es DERIVADA y
+            // no lleva ninguno —solo la FECHA de la última cobertura de cada uno, que es lo que la
+            // ordena—, así que sin esto el cliente no tenía forma de nombrar la fila que quiere
+            // anular: `anularImaginaria` existía aquí y en `api.js` sin un solo invocador, y una
+            // cobertura apuntada al residente equivocado a las ocho de la mañana solo se podía
+            // corregir entrando al Sheet a mano.
+            coberturas: coberturas
+              .filter((c) => c.grupo === req.grupo && c.fechaIncidencia === req.fecha)
+              .map((c) => ({ id: c.id, residenteId: c.residenteId, registradaEn: c.registradaEn })),
           };
         });
 
