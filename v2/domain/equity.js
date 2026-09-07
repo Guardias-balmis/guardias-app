@@ -245,9 +245,10 @@ function diasNominales(win) {
  * quien lo lea no busque esos números en el Resumen. Vacío cuando todas miden lo mismo.
  */
 function escalaDe(grupo, ref) {
-  const longitudes = [...new Set(grupo.map((x) => x.nominal))];
+  const longitudes = [...new Set(grupo.map((x) => x.nominal))].sort((a, b) => b - a);
   if (longitudes.length < 2) return "";
-  return `; años de ${longitudes.sort((a, b) => b - a).join(" y ")} días, cifras a ritmo de ${ref} días`;
+  const lista = `${longitudes.slice(0, -1).join(", ")} y ${longitudes[longitudes.length - 1]}`;
+  return `; años de ${lista} días, cifras a ritmo de ${ref} días`;
 }
 
 /**

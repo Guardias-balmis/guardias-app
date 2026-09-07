@@ -927,4 +927,13 @@ test("V-48: los que cierran el mismo mes con años de distinta longitud también
   const totales = inv3(v).filter((x) => /^Totales/.test(x.detalle));
   assert.equal(totales.length, 1);
   assert.match(totales[0].detalle, /c=52 vs r3a=47\.01 \(diferencia > 1; años de 365 y 330 días, cifras a ritmo de 330 días\)$/);
+
+  // Con tres longitudes distintas la lista se lee como una lista.
+  const D = { ...C, id: "d", periodos: C.periodos.map((p) => (p.year === 3 ? { ...p, start: "2026-08-01" } : p.year === 2 ? { ...p, end: "2026-07-31" } : p)) }; // 299 días
+  const v3 = validateResidencyYearClose({
+    mes: 5, anio: 2027, residentes: [A, C, D],
+    acumulados: { r3a: acc(52), c: acc(52), d: acc(52) },
+    asignaciones: [],
+  });
+  assert.match(inv3(v3).find((x) => /^Totales/.test(x.detalle)).detalle, /años de 365, 330 y 299 días, cifras a ritmo de 299 días\)$/);
 });
