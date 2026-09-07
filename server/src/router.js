@@ -1251,10 +1251,16 @@ function closeViolations(deps, mes, anio, snap) {
     // El eje `puentesLibres` mira el año de residencia entero (fase 3 de V-17), que cruza dos
     // años naturales: el rango de festivos lo da el dominio, no se recorta aquí.
     const rangoFestivos = deps.domain.yearCloseFestivosRange(snap.residentes, mes, anio);
+    // Los dos primeros días del mes siguiente van con el mes como lookahead del doblete
+    // (contrato C-1): a quien cierra ahora se le mide el mes con `asignaciones`, y un viernes
+    // 30/31 dentro de su ventana empareja su domingo ya en el mes siguiente — sin esas filas ese
+    // doblete existía para quien cerró antes (medido con el histórico entero) y no para él.
+    const prefixSiguiente = mes === 12 ? monthPrefix(anio + 1, 1) : monthPrefix(anio, mes + 1);
+    const lookahead = new Set([`${prefixSiguiente}-01`, `${prefixSiguiente}-02`]);
     violaciones.push(...deps.domain.validateResidencyYearClose(deps.domain.buildYearCloseContext({
       mes, anio, residentes: snap.residentes,
       historicas: snap.asignaciones.filter((a) => a.fecha >= desdeAnual && a.fecha < monthStart),
-      asignacionesDelMes: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
+      asignacionesDelMes: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix) || lookahead.has(a.fecha)),
       bloqueos: bloqueosInRange(deps, snap.bloqueos, desdeAnual, monthEnd),
       festivos: (snap.festivos || []).filter((f) => f.fecha >= rangoFestivos.desde && f.fecha <= rangoFestivos.hasta),
     })));
