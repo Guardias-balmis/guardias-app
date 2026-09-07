@@ -95,6 +95,61 @@ tenga a otro que cerró antes; si el reparto entre los dos se pasa del ±1 en al
 dice «… cerró su año el YYYY-MM-DD» (si no se pasa, no hay aviso, y es lo normal). En el cliente
 sale ya sin desplegar nada, porque `Calendar.jsx` importa el dominio directamente.
 
+## Despliegue del 2026-09-07 (V-49, V-50 y V-51): solo `server-lib.gs`
+
+Los tres cambios de este día van juntos y **ninguno toca el dominio ni `Code.gs`**: `router.js`,
+`sheets-schema.js` y `ai-prompt.js` se compilan los tres a `server-lib.gs`. Con `npm run deploy`
+sube solo; pegando a mano, pega **únicamente `server-lib.gs`** (las líneas y el `sha256` salen con
+`wc -l` y `sha256sum` sobre `main`). Si vienes de una versión anterior a la del V-48 de más arriba,
+pega también `domain.gs`: el mismo despliegue cubre los dos.
+
+- **V-49 — el acceso de desarrollador se amplía a todo el permiso del ciclo, y caduca.**
+  `esAccesoDesarrollador` vive ahora dentro de `requireCicloPermiso`, así que destraba
+  validar/publicar/despublicar, excepciones, sorteo, imaginaria y las ediciones de fechas,
+  periodos formativos y ausencias de otro residente — no solo `generarCuadranteIA` como en V-46.
+  **`FECHA_LIMITE_ACCESO_DESARROLLADOR = "2027-03-31"`**, la misma constante en `router.js` y en
+  `client/lib/permisos.js`: pasada esa fecha vuelve a devolver `false` sin tocar una línea, y el
+  ciclo exige Responsable o Mayor otra vez. Está anotado también abajo, en el ritual anual —
+  después de esa fecha, este párrafo del runbook y las dos constantes se pueden borrar.
+- **V-50 — registrar un Bloqueo escribe la marca V/R/B en la rejilla.** `crearBloqueo` escribe en
+  `asignaciones`, dentro del mismo atómico que el alta. Es la primera vía de escritura de la
+  rejilla que no es `guardarAsignaciones`, así que conviene comprobarla en el Sheet real: escribe
+  solo en celdas VACÍAS, no toca un mes PUBLICADO, y revierte VALIDADO→BORRADOR únicamente en los
+  meses donde de verdad escribió algo.
+- **V-51 — se retira `preferDobles`.** La columna **se queda** en la pestaña `preferencias` (tabla
+  append-only: no se borra una columna con historial). No hay nada que tocar en el Sheet, y
+  borrarla a mano descuadraría las filas viejas.
+
+**Comprobación después de desplegar**, en este orden:
+
+1. Con el email del acceso de desarrollador y **sin** mandato de Responsable ni nivel Mayor:
+   Validar y Publicar un mes de prueba responden en vez de «no tienes permiso». Con cualquier otro
+   email que no sea Mayor, sigue negándose — eso es lo que confirma que V-49 no abrió la puerta a
+   todo el mundo.
+2. Registrar unas vacaciones de varios días desde Preferencias y abrir la rejilla del mes: salen
+   las «V», una por día. Repetir sobre un rango que pise un día con una guardia ya puesta: esa
+   guardia **no** se toca y el día vuelve en el aviso de «días sin marcar» de la pantalla. Repetir
+   con el mes PUBLICADO: no se escribe ni una celda y el Bloqueo se registra igual.
+3. El formulario de Preferencias ya no ofrece el doblete preferido y guardar sigue funcionando.
+
+**Mientras el `/exec` viejo siga en producción** (GitHub Pages publica el cliente al instante, Apps
+Script no), dos de los tres degradan solos y uno no: V-51 aguanta —el servidor viejo normaliza un
+`preferDobles` ausente a `""`, que es un valor válido— y V-50 también —`Prefs.jsx` lee
+`sinMarcar || []`, así que sin el campo no sale el aviso y no se rompe nada—, pero **V-49 no**: la
+pantalla ya ofrece los botones del ciclo al desarrollador y el servidor viejo los rechaza con «no
+tienes permiso» hasta que se pegue `server-lib.gs`.
+
+## Despliegue del 2026-09-07 (V-43 y V-44): solo `server-lib.gs`
+
+`colaImaginaria` devuelve un campo nuevo, `coberturas` (las coberturas activas de esa incidencia,
+con su `id`), que es lo que permite anular una desde la app. Cambio de `router.js` únicamente: ni
+dominio ni `Code.gs`. Comprobación: registrar una cobertura desde la tarjeta de Inicio, anularla
+con el botón «Anular» y recargar — la cola vuelve a su orden anterior y la anulación sigue puesta;
+en la pestaña `imaginaria` del Sheet hay dos filas con el mismo `id` (el alta y la anulación), no
+una borrada. La mitad de V-43 (`eventos` a `Calendar.jsx`) es solo cliente: sale con el push a
+Pages, sin desplegar nada. Con el `/exec` viejo no se rompe nada: sin el campo `coberturas` el
+cliente no enseña el bloque de anular (`r.coberturas || []`).
+
 ## Redesplegar tras un cambio de dominio (el caso de todos los días)
 
 Dos comandos, con roles distintos — confundirlos es exactamente el incidente del
@@ -131,3 +186,10 @@ después de un `npm run deploy` que lo modifique, repetir a mano la verificació
 ## Mantenimiento (ritual anual — requisito rector)
 Cada enero, el R3 responsable entrante **inicia sesión en la cuenta del servicio** y abre Gmail
 y el Sheet (mantiene viva la cuenta y el OAuth client — ADR-001 R1/R2). Anota aquí quién y cuándo.
+
+**Enero de 2027 — una sola cosa más:** el acceso de desarrollador de V-49 caduca el **2027-03-31**
+por sí solo (`FECHA_LIMITE_ACCESO_DESARROLLADOR`, misma constante en `server/src/router.js` y en
+`client/lib/permisos.js`). No hay que hacer nada para que se cierre; lo que sí conviene es
+comprobar después de esa fecha que el ciclo vuelve a exigir Responsable o Mayor, y retirar entonces
+las dos constantes y el párrafo de V-49 de este runbook. Si alguien lo alarga, que sea moviendo la
+fecha y dejándolo escrito aquí — nunca quitando la caducidad.
