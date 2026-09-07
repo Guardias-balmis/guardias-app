@@ -298,7 +298,7 @@ function PrefsScreen() {
   // siempre que no bloquean (si bloquearan, la llamada habría fallado con ok:false y nunca
   // habríamos llegado a onCreated), pero antes nadie los mostraba — se calculaban y se tiraban.
   const [riesgosUltimoBloqueo, setRiesgosUltimoBloqueo] = useState([]);
-  // Días que `crearBloqueo` NO pudo marcar solo en la rejilla (V-49): ya tenían un código puesto
+  // Días que `crearBloqueo` NO pudo marcar solo en la rejilla (V-50): ya tenían un código puesto
   // o el mes está publicado. Se avisa para que quien registró la ausencia sepa que esos días hay
   // que revisarlos a mano — la marca automática nunca pisa una asignación real ni un mes cerrado.
   const [diasSinMarcar, setDiasSinMarcar] = useState([]);

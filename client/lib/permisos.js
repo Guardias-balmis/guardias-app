@@ -18,7 +18,7 @@ import { todayISO } from "./dates.js";
  *   - isResponsable: si la sesión es la del titular del mandato vigente (contexto de la app)
  *   - grupo: "MAYOR" | "PEQUENO" | null, derivado de fechas como todo lo demás
  *   - sinResponsable: lo que devuelve `estadoCuadrante`; true si no hay mandato vigente
- *   - accesoDesarrollador: el resultado de `esAccesoDesarrollador` para esta sesión (V-47)
+ *   - accesoDesarrollador: el resultado de `esAccesoDesarrollador` para esta sesión (V-49)
  */
 export function puedeMoverCiclo({ isResponsable, grupo, sinResponsable, accesoDesarrollador }) {
   return Boolean(accesoDesarrollador) || Boolean(isResponsable) || (Boolean(sinResponsable) && grupo === "MAYOR");
@@ -47,7 +47,7 @@ export function puedeGenerarCuadrante({ isResponsable, grupo, sinResponsable, ac
   return puedeMoverCiclo({ isResponsable, grupo, sinResponsable, accesoDesarrollador }) && estado === "BORRADOR";
 }
 
-// Acceso de desarrollador para TODO el permiso del ciclo (decisión V-47, 2026-09-03, a pedido
+// Acceso de desarrollador para TODO el permiso del ciclo (decisión V-49, 2026-09-03, a pedido
 // explícito del autor de la app — amplía V-46, que cubría solo el botón de generar con IA): ahora
 // se pasa como `accesoDesarrollador` a `puedeMoverCiclo`, así que también se enseñan validar,
 // publicar, despublicar, excepciones, sorteo e imaginaria, mientras el autor corrige errores de

@@ -1328,7 +1328,7 @@ function handleRequest(rawBody, deps) {
               residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo,
               provincia: req.provincia, guardiasEnCentroExterno: req.guardiasEnCentroExterno, activo: true,
             });
-            // V-49: la marca V/R/B se escribe sola en la rejilla para que el equipo la vea sin que
+            // V-50: la marca V/R/B se escribe sola en la rejilla para que el equipo la vea sin que
             // nadie tenga que ir día a día a mano — ver el comentario de `writeBloqueoMarcas`. Va
             // DENTRO del mismo atómico que el alta del bloqueo: si se calculara fuera, dos altas
             // simultáneas podrían volver a ver la rejilla que dejó la otra a medio escribir.
@@ -1977,7 +1977,7 @@ const NOTAS_MAX = 500;
  * que no existe. Los campos ausentes se normalizan a su valor neutro (la pantalla manda siempre
  * los tres, pero el endpoint es público). Devuelve el registro listo o el `{ok:false,error}`.
  *
- * Ya NO valida `preferDobles` (retirado en V-50): la normativa exige viernes-domingo
+ * Ya NO valida `preferDobles` (retirado en V-51): la normativa exige viernes-domingo
  * específicamente y esa distribución la gobierna el eje `dobletes` de INV-3, nunca una preferencia
  * personal — ver el comentario de la columna en `sheets-schema.js`.
  */
@@ -2141,13 +2141,13 @@ function activeBloqueosInMonth(deps, anio, mes) {
   return [...bloqueosInRange(deps, usables, `${prefix}-01`, `${prefix}-31`), ...corruptas.map((c) => c.bloqueo)];
 }
 
-// El código de la rejilla que corresponde a cada motivo de Bloqueo (V-49): son exactamente los
+// El código de la rejilla que corresponde a cada motivo de Bloqueo (V-50): son exactamente los
 // tres códigos "de marca" que ya existían en ASIG_CODIGOS antes de esta decisión.
 const ASIG_CODIGO_DE_BLOQUEO = { VACACIONES: "V", ROTACION: "R", BAJA: "B" };
 
 /**
  * Escribe sola la marca V/R/B en `asignaciones`, un día por cada uno del bloqueo recién creado
- * (decisión del autor, 2026-09-03, V-49): antes había que ir día a día a mano en la rejilla del
+ * (decisión del autor, 2026-09-03, V-50): antes había que ir día a día a mano en la rejilla del
  * cuadrante para que el equipo VIERA una ausencia que la tabla `bloqueos` (la que de verdad leen
  * los invariantes, V-19) ya tenía registrada desde el alta — la rejilla y la tabla real podían
  * contarse historias distintas.
@@ -2300,10 +2300,16 @@ function closeViolations(deps, mes, anio, snap) {
     // El eje `puentesLibres` mira el año de residencia entero (fase 3 de V-17), que cruza dos
     // años naturales: el rango de festivos lo da el dominio, no se recorta aquí.
     const rangoFestivos = deps.domain.yearCloseFestivosRange(snap.residentes, mes, anio);
+    // Los dos primeros días del mes siguiente van con el mes como lookahead del doblete
+    // (contrato C-1): a quien cierra ahora se le mide el mes con `asignaciones`, y un viernes
+    // 30/31 dentro de su ventana empareja su domingo ya en el mes siguiente — sin esas filas ese
+    // doblete existía para quien cerró antes (medido con el histórico entero) y no para él.
+    const prefixSiguiente = mes === 12 ? monthPrefix(anio + 1, 1) : monthPrefix(anio, mes + 1);
+    const lookahead = new Set([`${prefixSiguiente}-01`, `${prefixSiguiente}-02`]);
     violaciones.push(...deps.domain.validateResidencyYearClose(deps.domain.buildYearCloseContext({
       mes, anio, residentes: snap.residentes,
       historicas: snap.asignaciones.filter((a) => a.fecha >= desdeAnual && a.fecha < monthStart),
-      asignacionesDelMes: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
+      asignacionesDelMes: snap.asignaciones.filter((a) => a.fecha.startsWith(prefix) || lookahead.has(a.fecha)),
       bloqueos: bloqueosInRange(deps, snap.bloqueos, desdeAnual, monthEnd),
       festivos: (snap.festivos || []).filter((f) => f.fecha >= rangoFestivos.desde && f.fecha <= rangoFestivos.hasta),
     })));
@@ -2360,7 +2366,7 @@ function mandatoVigente(deps) {
  * ser de hace horas. La existencia del mandato se relee AQUÍ del store en cada llamada — si el
  * sorteo se resolvió a mitad de la sesión de alguien, el permiso deja de ser el de su token.
  *
- * Decisión V-48 (2026-09-03, ampliando V-46): antes de mirar mandato o grupo se comprueba
+ * Decisión V-49 (2026-09-03, ampliando V-46): antes de mirar mandato o grupo se comprueba
  * `esAccesoDesarrollador`, que destraba TODO este permiso —ya no solo `generarCuadranteIA`— para
  * el autor de la app mientras corrige errores de esta primera puesta en producción, y caduca solo
  * en la fecha fijada ahí sin que nadie tenga que acordarse de retirar el código.
@@ -2453,11 +2459,12 @@ function promptData(deps, mes, anio, snap) {
   };
 }
 
-// Acceso de desarrollador para TODO el permiso del ciclo (decisión V-48, 2026-09-03, a pedido
+// Acceso de desarrollador para TODO el permiso del ciclo (decisión V-49, 2026-09-03, a pedido
 // explícito del autor de la app — amplía V-46, que cubría solo `generarCuadranteIA`; no debe
-// confundirse con V-47, la decisión —de otro autor— sobre los modos completar/reemplazar del
-// generador). Vive DENTRO de `requireCicloPermiso`, así que validar/publicar/despublicar/
-// excepciones/sorteo/imaginaria y las ediciones de fechas/periodos formativos/ausencias de otro
+// confundirse con V-47 (modos completar/reemplazar del generador) ni con V-48 (cierre anual de
+// INV-3 entre compañeros de cohorte), las dos de otro autor. Vive DENTRO de `requireCicloPermiso`,
+// así que validar/publicar/despublicar/excepciones/sorteo/imaginaria y las ediciones de
+// fechas/periodos formativos/ausencias de otro
 // residente quedan destrabadas igual: el autor va a corregir errores de esta primera puesta en
 // producción durante los próximos meses y necesita poder resolver cualquier incidencia sin
 // depender de tener el mandato de Responsable ni ser Mayor — forzarle el nivel o el grupo
@@ -2692,7 +2699,7 @@ function handleGenerarIA(req, deps, session) {
     const existentesAhora = snapAhora.asignaciones.filter((a) => a.fecha.startsWith(prefix));
     if (estadoAhora !== estadoActual || huella(existentesAhora) !== huella(existentes)) return null;
     // La huella solo cubre el mes: una BAJA registrada mientras el modelo pensaba (`crearBloqueo`
-    // está abierto a cualquiera para sí mismo) no siempre la cambia —desde V-49 SÍ lo hace cuando
+    // está abierto a cualquiera para sí mismo) no siempre la cambia —desde V-50 SÍ lo hace cuando
     // `writeBloqueoMarcas` encuentra la celda vacía y le pone una "B", pero si el día ya tenía un
     // código puesto la marca no se escribe y la huella queda igual—, y la propuesta se juzgó
     // contra unas ausencias que ya no son las de ahora — se habrían escrito guardias sobre una

@@ -49,7 +49,7 @@ function makeDeps(overrides = {}) {
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
     // `parseISO` porque `crearBloqueo` valida el rango de verdad (no por orden lexicográfico).
-    // `addDays`/`canEdit`/`stateAfterEdit` los necesita `writeBloqueoMarcas` (V-48): la marca
+    // `addDays`/`canEdit`/`stateAfterEdit` los necesita `writeBloqueoMarcas` (V-50): la marca
     // V/R/B se escribe sola en la rejilla al crear el bloqueo.
     domain: { absences, parseISO, addDays, previewBloqueoRisk, canEdit, stateAfterEdit },
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
@@ -173,11 +173,11 @@ test("crearBloqueo, misBloqueos y cancelarBloqueo requieren sesión", () => {
   assert.equal(call({ action: "cancelarBloqueo", id: "x" }, deps).ok, false);
 });
 
-// ── V-48: la marca V/R/B se escribe sola en la rejilla al crear el bloqueo ──────────────────────
+// ── V-50: la marca V/R/B se escribe sola en la rejilla al crear el bloqueo ──────────────────────
 
 const asignacionesDe = (deps, session, anio, mes) => call({ action: "listAsignaciones", session, anio, mes }, deps).asignaciones;
 
-test("V-48: VACACIONES escribe V, ROTACION escribe R y BAJA escribe B en cada día del rango", () => {
+test("V-50: VACACIONES escribe V, ROTACION escribe R y BAJA escribe B en cada día del rango", () => {
   const deps = makeDeps();
   const session = loggedIn(deps);
   const r = call({ action: "crearBloqueo", session, desde: "2026-08-01", hasta: "2026-08-03", motivo: "VACACIONES" }, deps);
@@ -194,7 +194,7 @@ test("V-48: VACACIONES escribe V, ROTACION escribe R y BAJA escribe B en cada d�
   assert.equal(asignacionesDe(deps, session, 2026, 10).find((a) => a.fecha === "2026-10-01").codigo, "B");
 });
 
-test("V-48: no pisa un día que ya tiene un código puesto a mano, y lo dice en marcasSinEscribir", () => {
+test("V-50: no pisa un día que ya tiene un código puesto a mano, y lo dice en marcasSinEscribir", () => {
   const deps = makeDeps();
   const session = loggedIn(deps);
   call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2026-08-02", residenteId: "uuid-ana", codigo: "G" }] }, deps);
@@ -210,7 +210,7 @@ test("V-48: no pisa un día que ya tiene un código puesto a mano, y lo dice en 
   assert.equal(asig.find((a) => a.fecha === "2026-08-03").codigo, "V");
 });
 
-test("V-48: un mes PUBLICADO no se toca (mismo criterio que guardarAsignaciones, V-9b)", () => {
+test("V-50: un mes PUBLICADO no se toca (mismo criterio que guardarAsignaciones, V-9b)", () => {
   const deps = makeDeps();
   const session = loggedIn(deps);
   deps.store.appendRecord("cuadrantes", { mes: 8, anio: 2026, estado: "PUBLICADO", actorId: "uuid-ana", fecha: "2026-07-01" });
@@ -222,7 +222,7 @@ test("V-48: un mes PUBLICADO no se toca (mismo criterio que guardarAsignaciones,
   assert.deepEqual(asignacionesDe(deps, session, 2026, 8).filter((a) => a.residenteId === "uuid-ana"), []);
 });
 
-test("V-48: un bloqueo que cruza dos meses reparte las marcas en cada uno", () => {
+test("V-50: un bloqueo que cruza dos meses reparte las marcas en cada uno", () => {
   const deps = makeDeps();
   const session = loggedIn(deps);
   const r = call({ action: "crearBloqueo", session, desde: "2026-08-30", hasta: "2026-09-02", motivo: "VACACIONES" }, deps);

@@ -402,7 +402,7 @@ function HomeScreen() {
     })();
     return () => { cancelled = true; };
   }, [mes, anio, reintento]);
-  // El acceso de desarrollador (V-48) destraba el PERMISO del ciclo entero, no el estado del mes:
+  // El acceso de desarrollador (V-49) destraba el PERMISO del ciclo entero, no el estado del mes:
   // sigue sin ofrecerse generar fuera de Borrador, para él igual que para cualquiera.
   const accesoDesarrollador = esAccesoDesarrollador(myResidente?.email);
   const puedoRegistrarImaginaria = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador });

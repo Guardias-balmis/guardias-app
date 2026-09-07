@@ -73,7 +73,7 @@ test("una sesión sin datos todavía no ve el botón", () => {
   assert.equal(puedeGenerarCuadrante({ grupo: null, estado: "BORRADOR" }), false);
 });
 
-// ── acceso de desarrollador, para todo el ciclo (V-47, amplía V-46) ──────────────────────────
+// ── acceso de desarrollador, para todo el ciclo (V-49, amplía V-46) ──────────────────────────
 
 test("esAccesoDesarrollador: email exacto sí (dentro de plazo), cualquier otro no", () => {
   assert.equal(esAccesoDesarrollador("agustinlagioiosa@gmail.com", "2026-09-03"), true);
@@ -82,16 +82,16 @@ test("esAccesoDesarrollador: email exacto sí (dentro de plazo), cualquier otro 
   assert.equal(esAccesoDesarrollador(null, "2026-09-03"), false);
 });
 
-test("esAccesoDesarrollador: caduca sola pasada la fecha límite (V-47)", () => {
+test("esAccesoDesarrollador: caduca sola pasada la fecha límite (V-49)", () => {
   assert.equal(esAccesoDesarrollador("agustinlagioiosa@gmail.com", "2027-03-31"), true, "el último día cuenta");
   assert.equal(esAccesoDesarrollador("agustinlagioiosa@gmail.com", "2027-04-01"), false);
 });
 
-test("V-47: el acceso de desarrollador destraba puedeMoverCiclo entero, no solo generar", () => {
+test("V-49: el acceso de desarrollador destraba puedeMoverCiclo entero, no solo generar", () => {
   const dev = { isResponsable: false, grupo: "PEQUENO", sinResponsable: false, accesoDesarrollador: true };
   assert.equal(puedeMoverCiclo(dev), true, "aunque sea Pequeño y haya Responsable vigente");
 });
 
-test("V-47: sin el acceso de desarrollador, puedeMoverCiclo sigue las reglas de siempre", () => {
+test("V-49: sin el acceso de desarrollador, puedeMoverCiclo sigue las reglas de siempre", () => {
   assert.equal(puedeMoverCiclo({ ...PEQUENO, accesoDesarrollador: false }), false);
 });

@@ -163,7 +163,7 @@ test("con la promoción retrasada por periodos editados, el tercer puesto y la e
   const vol = [{ residenteId: "b", desde: "2026-04-01" }];
   assert.equal(closingPeriodOn(b, 5, 2026), null, "en mayo no cierra nada");
   assert.equal(tphs2(vol, [b], 5, 2026), "2026-04-01", "en mayo solo pide desde su alta como voluntario, no una ventana de cierre");
-  assert.deepEqual(closingPeriodOn(b, 6, 2026), { start: "2025-05-27", end: "2026-06-30" });
+  assert.deepEqual(closingPeriodOn(b, 6, 2026), { year: 2, start: "2025-05-27", end: "2026-06-30" });
   assert.equal(tphs2(vol, [b], 6, 2026), "2025-05-27");
   assert.equal(ychs3([b], 6, 2026), "2025-05-27", "la misma ventana que el cierre anual de INV-3");
 });

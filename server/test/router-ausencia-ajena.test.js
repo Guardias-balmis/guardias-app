@@ -64,7 +64,7 @@ function makeDeps({ mandatoDe = null } = {}) {
     clientId: CLIENT_ID, sessionSecret: "secreto-servicio", sessionTtl: 3600, crypto,
     ss,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => `id-${++idCounter}` }),
-    // `addDays`/`canEdit`/`stateAfterEdit` los necesita `writeBloqueoMarcas` (V-48): la marca
+    // `addDays`/`canEdit`/`stateAfterEdit` los necesita `writeBloqueoMarcas` (V-50): la marca
     // V/R/B se escribe sola en la rejilla al crear el bloqueo, así que crearBloqueo ya no es
     // "solo escribir en bloqueos" y también toca estas tres funciones del ciclo del cuadrante.
     domain: { absences, groupOnDate, parseISO, addDays, previewBloqueoRisk, canEdit, stateAfterEdit },
