@@ -164,10 +164,20 @@ export function closingPeriodOn(residente, mes, anio) {
 export function closedPeriodsBetween(residente, desde, hasta) {
   const periodos = periodsOfResident(residente);
   const finReal = periodos[periodos.length - 1].end;
+  // Tolerante con un periodo mal escrito a mano en el Sheet (una celda de `fechaFin` vaciada o
+  // con «30/05/2024»): esto recorre TODOS los periodos de TODOS los residentes cada vez que
+  // alguien cierra su año, incluidos los de un FINALIZADO de hace años, y `compareISO` lanza
+  // ante lo que no es ISO. `closingPeriodOn` solo compara el periodo que acaba en el mes (y
+  // `levelOn` el primero y el último), así que ese dato roto pasaba desapercibido hasta aquí —
+  // y tumbaba la validación entera del mes con un «Fecha ISO inválida» que no nombraba fila.
+  // Mismo criterio que el validador con `festivos`: una fila ilegible no tumba el cierre.
+  if (!esISO(finReal)) return [];
   return periodos
-    .filter((p) => compareISO(p.end, desde) >= 0 && compareISO(p.end, hasta) <= 0 && esCierreReal(p, finReal))
+    .filter((p) => esISO(p.start) && esISO(p.end) && compareISO(p.end, desde) >= 0 && compareISO(p.end, hasta) <= 0 && esCierreReal(p, finReal))
     .map((p) => ({ year: p.year, start: p.start, end: p.end }));
 }
+
+const esISO = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 function esCierreReal(p, finReal) {
   return compareISO(p.end, finReal) <= 0 && compareISO(p.start, p.end) <= 0;

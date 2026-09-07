@@ -788,3 +788,100 @@ test("V-48: un ctx armado a mano sin `cerradosAntes` se comporta exactamente com
   });
   assert.deepEqual(inv3(v), [], "r3e no cierra este mes y nadie ha medido su año: cohorte de uno, nada que comparar");
 });
+
+// ── Verificación adversarial de V-48 (2026-09-07): tres defectos confirmados y corregidos ──────
+test("V-48: un periodo con la fecha de fin vaciada o mal escrita a mano no tumba el cierre del mes de nadie", () => {
+  // Un FINALIZADO de hace años con la celda `fechaFin` de su R2 borrada en el Sheet (o «30/05/2024»):
+  // antes de V-48 nadie leía ese dato en la validación; `closedPeriodsBetween` recorre TODOS los
+  // periodos de TODOS los residentes, así que tiene que tolerarlo.
+  for (const roto of [undefined, "", "30/05/2024"]) {
+    const Z = {
+      id: "z", fechaInicio: "2022-05-30", fechaFin: "2026-05-29",
+      periodos: [
+        { year: 1, start: "2022-05-30", end: "2023-05-29" },
+        { year: 2, start: "2023-05-30", end: roto },
+        { year: 3, start: "2024-05-30", end: "2025-05-29" },
+        { year: 4, start: "2025-05-30", end: "2026-05-29" },
+      ],
+    };
+    assert.equal(yearCloseHistoryStart([A, B, Z], 5, 2027), "2026-05-27", `fin roto=${JSON.stringify(roto)}`);
+    assert.deepEqual(earlierClosedPeers([A, B, Z], 5, 2027), []);
+    const v = validateResidencyYearClose(buildYearCloseContext({ mes: 5, anio: 2027, residentes: [A, B, Z], historicas: [] }));
+    assert.deepEqual(deParejas(v), []);
+  }
+});
+
+test("V-48: con ventanas de distinta longitud (año alargado por la nota [a]) se compara el RITMO por día disponible, no el total proyectado", () => {
+  // B tiene el R3 alargado a 15 meses (2026-08-27→2027-11-26, 457 días) y cierra en noviembre;
+  // A (365 días) cerró en mayo y es su compañero anterior. Misma carga semanal: 52 vs 65 en crudo.
+  const B15 = {
+    id: "b15", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2025-05-26" },
+      { year: 2, start: "2025-05-27", end: "2026-08-26" },
+      { year: 3, start: "2026-08-27", end: "2027-11-26" },
+      { year: 4, start: "2027-11-27", end: "2028-05-26" },
+    ],
+  };
+  assert.deepEqual(earlierClosedPeers([A, B15], 11, 2027).map((e) => e.id), ["r3a"]);
+  const todas = [...cadaSemana("r3a", "2026-06-02", 52), ...cadaSemana("b15", "2026-09-01", 65)];
+  const enMes = (a) => a.fecha.startsWith("2027-11");
+  const ctx = buildYearCloseContext({
+    mes: 11, anio: 2027, residentes: [A, B15],
+    historicas: todas.filter((a) => !enMes(a)), asignacionesDelMes: todas.filter(enMes),
+  });
+  assert.deepEqual(deParejas(validateResidencyYearClose(ctx)), [], "65 en 457 días es el mismo ritmo que 52 en 365: antes salía 65 vs 52");
+
+  // Y si de verdad hace más (80 en 15 meses ≈ 64 al ritmo de 12), avisa y el texto explica la escala.
+  const mas = [...cadaSemana("r3a", "2026-06-02", 52), ...cadaSemana("b15", "2026-09-01", 65), ...cadaSemana("b15", "2026-09-03", 15)];
+  const v = validateResidencyYearClose(buildYearCloseContext({
+    mes: 11, anio: 2027, residentes: [A, B15],
+    historicas: mas.filter((a) => !enMes(a)), asignacionesDelMes: mas.filter(enMes),
+  }));
+  const totales = deParejas(v).filter((x) => /^Totales/.test(x.detalle));
+  assert.equal(totales.length, 1);
+  assert.match(totales[0].detalle, /b15=63\.89 vs r3a=52 .*años de 457 y 365 días, cifras a ritmo de 365 días/);
+
+  // Nota [a] de verdad: 15 meses con 3 de BAJA, 52 guardias en los 12 disponibles. A la par.
+  const bajaB = [{ residenteId: "b15", motivo: "BAJA", desde: "2026-12-01", hasta: "2027-03-01", activo: true }];
+  const conBaja = [...cadaSemana("r3a", "2026-06-02", 52), ...cadaSemana("b15", "2026-09-01", 13), ...cadaSemana("b15", "2027-03-02", 39)];
+  const v2 = validateResidencyYearClose(buildYearCloseContext({
+    mes: 11, anio: 2027, residentes: [A, B15], bloqueos: bajaB,
+    historicas: conBaja.filter((a) => !enMes(a)), asignacionesDelMes: conBaja.filter(enMes),
+  }));
+  assert.deepEqual(deParejas(v2), [], "antes: 52/0,80 = 65 vs 52, el aviso falso en el escenario para el que se escribió V-48");
+});
+
+test("V-48: los que cierran el mismo mes se agrupan por cohorte Y año de residencia — un R2 alargado no se compara con los R3", () => {
+  const bea = {
+    id: "bea", fechaInicio: "2024-05-27", fechaFin: "2029-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2025-05-26" },
+      { year: 2, start: "2025-05-27", end: "2027-05-26" }, // 24 meses, cierra el mismo día que el R3 de A y B
+      { year: 3, start: "2027-05-27", end: "2028-05-26" },
+      { year: 4, start: "2028-05-27", end: "2029-05-26" },
+    ],
+  };
+  const v = validateResidencyYearClose({
+    mes: 5, anio: 2027, residentes: [A, B, bea],
+    acumulados: { r3a: acc(20), r3b: acc(20), bea: acc(0) },
+    asignaciones: [],
+  });
+  assert.deepEqual(inv3(v).filter((x) => /bea/.test(x.detalle)), [], "Pequeño y Mayor no reparten las mismas guardias");
+  assert.deepEqual(inv3(v), [], "y A y B siguen comparándose entre sí");
+});
+
+test("V-48: el doblete del viernes 30 de quien cierra ahora se cierra con el domingo del mes siguiente que le pasa el invocador (C-1)", () => {
+  // Año de residencia 2026-05-01→2027-04-30 (viernes) para los dos.
+  const X = R("x", "2024-05-01", "2028-04-30");
+  const Y = R("y", "2024-05-01", "2028-04-30");
+  const delMes = [g("x", "2027-04-16"), g("x", "2027-04-18"), g("x", "2027-04-30")]; // V, D, V
+  const con = validateResidencyYearClose(buildYearCloseContext({ mes: 4, anio: 2027, residentes: [X, Y], asignacionesDelMes: [...delMes, g("x", "2027-05-02")] }));
+  const dobletes = inv3(con).filter((v) => /^Dobletes/.test(v.detalle));
+  assert.equal(dobletes.length, 1);
+  assert.match(dobletes[0].detalle, /x=2 vs y=0/);
+  // Y la fila del mes siguiente no suma en ningún otro eje: totales 3 (no 4).
+  assert.match(inv3(con).find((v) => /^Totales/.test(v.detalle)).detalle, /x=3 vs y=0/);
+  const sin = validateResidencyYearClose(buildYearCloseContext({ mes: 4, anio: 2027, residentes: [X, Y], asignacionesDelMes: delMes }));
+  assert.equal(inv3(sin).filter((v) => /^Dobletes/.test(v.detalle)).length, 0, "sin lookahead: 1 vs 0, diferencia 1");
+});

@@ -488,6 +488,31 @@ test("marcarValidado: el cierre ANUAL compara con quien cerró ese mismo año en
   assert.equal(marzo.violaciones.filter((v) => v.invariante === "INV-3" && /cerró su año/.test(v.detalle)).length, 0);
 });
 
+// Contrato C-1 en el cierre anual: quien cierra su año un viernes 30 empareja su domingo en el
+// mes siguiente. El servidor pasa esos dos días con el mes; antes ese doblete solo existía para
+// quien cerró antes (medido con el histórico entero), no para quien cierra ahora.
+test("marcarValidado: el cierre ANUAL ve el doblete del viernes 30 con el domingo 2 del mes siguiente (C-1)", () => {
+  const X = { ...RESP, fechaInicio: "2024-05-01", fechaFin: "2028-04-30" }; // R3: 2026-05-01→2027-04-30 (viernes)
+  const Y = { ...OTRO, fechaInicio: "2024-05-01", fechaFin: "2028-04-30" };
+  const deps = stubClean(makeDeps({}, {
+    residentes: [headerOf(TABLES.residentes), ...[X, Y].map((r) => recordToRow(TABLES.residentes, r))],
+  }));
+  const session = loggedInAs(deps, "resp@gmail.com");
+  guardar(deps, session, [
+    { fecha: "2027-04-16", residenteId: "resp-1", codigo: "G" }, // viernes
+    { fecha: "2027-04-18", residenteId: "resp-1", codigo: "G" }, // domingo → doblete 1
+    { fecha: "2027-04-30", residenteId: "resp-1", codigo: "G" }, // viernes, último día de su año
+    { fecha: "2027-05-02", residenteId: "resp-1", codigo: "G" }, // domingo del mes siguiente → doblete 2
+  ]);
+  const r = call({ action: "marcarValidado", session, mes: 4, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  const dobletes = r.violaciones.filter((v) => v.invariante === "INV-3" && /Dobletes/.test(v.detalle));
+  assert.equal(dobletes.length, 1, "2 dobletes de Rita frente a 0 de Óscar");
+  assert.match(dobletes[0].detalle, /resp-1=2 vs otro-1=0/);
+  // El domingo 2 de mayo no suma al total de abril: 3, no 4.
+  assert.match(r.violaciones.find((v) => v.invariante === "INV-3" && /Totales al cierre del año/.test(v.detalle)).detalle, /resp-1=3 vs otro-1=0/);
+});
+
 test("marcarValidado: un mes que no cierra trimestre ni año no comprueba ningún cierre", () => {
   const deps = stubClean(makeDeps());
   const session = loggedInAs(deps, "resp@gmail.com");
