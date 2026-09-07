@@ -2692,10 +2692,13 @@ function handleGenerarIA(req, deps, session) {
     const existentesAhora = snapAhora.asignaciones.filter((a) => a.fecha.startsWith(prefix));
     if (estadoAhora !== estadoActual || huella(existentesAhora) !== huella(existentes)) return null;
     // La huella solo cubre el mes: una BAJA registrada mientras el modelo pensaba (`crearBloqueo`
-    // está abierto a cualquiera para sí mismo) no la cambia, y la propuesta se juzgó contra unas
-    // ausencias que ya no son las de ahora — se habrían escrito guardias sobre una baja médica
-    // (INV-5, la regla legal). Lo mismo con un residente nuevo o unos periodos editados. Volver a
-    // juzgar cuesta milisegundos: solo se escribe si el mes resultante sigue sin errores AHORA.
+    // está abierto a cualquiera para sí mismo) no siempre la cambia —desde V-49 SÍ lo hace cuando
+    // `writeBloqueoMarcas` encuentra la celda vacía y le pone una "B", pero si el día ya tenía un
+    // código puesto la marca no se escribe y la huella queda igual—, y la propuesta se juzgó
+    // contra unas ausencias que ya no son las de ahora — se habrían escrito guardias sobre una
+    // baja médica (INV-5, la regla legal). Lo mismo con un residente nuevo o unos periodos
+    // editados. Volver a juzgar cuesta milisegundos: solo se escribe si el mes resultante sigue
+    // sin errores AHORA.
     if (snapAhora.bloqueosCorruptos.length > 0) return null;
     if (validarCon(snapAhora)(r.asignaciones).some((v) => v.severidad === "error")) return null;
     deps.store.appendRecords("asignaciones", plan.cambios);

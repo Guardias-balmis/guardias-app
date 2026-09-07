@@ -588,7 +588,12 @@ test("una BAJA registrada mientras el modelo pensaba: la propuesta se vuelve a j
     assert.equal(call({ action: "crearBloqueo", session: sessionOtro, motivo: "BAJA", desde: "2027-07-02", hasta: "2027-07-02" }, deps).ok, true);
     return ok(RESPUESTA_OK);
   }]);
-  // Primer juicio (en el ciclo del generador): limpio. Segundo (bajo el lock, con el snapshot fresco): INV-5.
+  // Primer juicio (en el ciclo del generador): limpio. Un segundo juicio explícito (bajo el lock,
+  // con el snapshot fresco) solo llegaría a correr si la huella de `asignaciones` no cambiara; pero
+  // desde V-49 `crearBloqueo` marca sola la celda vacía con una "B", así que la huella YA detecta
+  // el cambio y corta antes de necesitar ese segundo juicio — se queda en 1, no en 2. El resultado
+  // final es el mismo (CONFLICTO, nada de la propuesta escrito): la huella es un guardarraíl más
+  // tosco que el juicio semántico, pero cubre el mismo caso y de sobra.
   deps = makeDeps({ llm, violaciones: () => (++juicios >= 2 ? INV5 : []) });
   const session = loggedInAs(deps, "resp@gmail.com");
   sessionOtro = loggedInAs(deps, "otro@gmail.com");
@@ -596,8 +601,9 @@ test("una BAJA registrada mientras el modelo pensaba: la propuesta se vuelve a j
   assert.equal(r.ok, false);
   assert.equal(r.resultado, "CONFLICTO");
   assert.match(r.error, /registró una ausencia/);
-  assert.equal(juicios, 2, "se juzgó dos veces: al proponer y al escribir");
-  assert.equal(asignacionesDe(deps).length, 0, "no se escribió ni una guardia sobre la baja");
+  assert.equal(juicios, 1, "la huella corta antes del segundo juicio (V-49: la baja ya marcó la celda)");
+  assert.equal(asignacionesDe(deps).length, 1, "la única fila es la marca 'B' que la baja escribió sola (V-49); ninguna guardia de la propuesta");
+  assert.equal(asignacionesDe(deps)[0].codigo, "B");
   assert.equal(bitacora(deps).at(-1).resultado, "CONFLICTO");
 });
 
