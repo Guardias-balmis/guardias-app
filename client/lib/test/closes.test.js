@@ -78,7 +78,8 @@ test("cierre anual en un mes que no cierra trimestre: pide desde el aniversario"
     ],
   });
   const r = await closeViolations({ api, mes: 10, anio: 2027, residentes: [C, D], asignacionesDelMes: [] });
-  assert.deepEqual(api.calls[0], { tipo: "asignaciones", desde: "2026-10-15", hasta: "2027-10-31" });
+  // Dos días más allá del mes: el lookahead del doblete (C-1) para quien cierra ahora.
+  assert.deepEqual(api.calls[0], { tipo: "asignaciones", desde: "2026-10-15", hasta: "2027-11-02" });
   // Los festivos se piden por AÑOS NATURALES completos (más un día de margen): además de los
   // vecinos del borde (§3.4), el validador necesita ver el año entero para poder distinguir
   // «ese año no está cargado» de «ese tramo del año no tiene festivos».
@@ -185,4 +186,23 @@ test("los bloqueos del rango llegan al descuento proporcional de la baja (nota [
   });
   assert.equal(conBaja.violaciones.length, 0); // 31 de 91 días de baja → 4/0.66 ≈ 6.07 vs 6
   assert.equal(sinBaja.violaciones.length, 1); // sin la baja, 6 vs 4 → avisa
+});
+
+// ── Contrato C-1 en el cierre anual: el viernes 30/31 de quien cierra ahora empareja su domingo
+// en el mes siguiente, que no está en pantalla. Se pide al store y entra solo como lookahead.
+test("cierre anual: los dos primeros días del mes siguiente se piden y cierran el doblete de quien cierra ahora", async () => {
+  // Año de residencia 2026-05-01→2027-04-30 (viernes) para los dos; ambos cierran en abril.
+  const X = R("x", "2024-05-01", "2028-04-30");
+  const Y = R("y", "2024-05-01", "2028-04-30");
+  const delMes = [g("x", "2027-04-16"), g("x", "2027-04-18"), g("x", "2027-04-30")]; // V, D, V
+  const conDomingo = fakeApi({ asignaciones: [g("x", "2027-05-02")] }); // el domingo del viernes 30
+  const r = await closeViolations({ api: conDomingo, mes: 4, anio: 2027, residentes: [X, Y], asignacionesDelMes: delMes });
+  assert.deepEqual(conDomingo.calls[0], { tipo: "asignaciones", desde: "2026-05-01", hasta: "2027-05-02" });
+  const dobletes = r.violaciones.filter((v) => /Dobletes/.test(v.detalle));
+  assert.equal(dobletes.length, 1, "2 dobletes de x frente a 0 de y");
+  assert.match(dobletes[0].detalle, /x=2 vs y=0/);
+
+  const sinDomingo = fakeApi({ asignaciones: [] });
+  const r2 = await closeViolations({ api: sinDomingo, mes: 4, anio: 2027, residentes: [X, Y], asignacionesDelMes: delMes });
+  assert.equal(r2.violaciones.filter((v) => /Dobletes/.test(v.detalle)).length, 0, "sin el domingo solo hay un doblete: diferencia 1");
 });

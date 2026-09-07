@@ -13,12 +13,19 @@
 // ejes los ancla la normativa al año de residencia, p.1/p.4) y su severidad es `aviso`, no
 // `error`, porque la propia frase prevé compensar el exceso «en los meses siguientes hasta
 // equilibrar el cómputo dentro del año de residencia» (criterio V-4: lo compensable avisa).
+//
+// Desde V-48 el cierre anual compara TAMBIÉN con los compañeros de la misma cohorte que cerraron
+// ese mismo año de residencia en un mes ANTERIOR (fechaInicio distinta dentro del mismo año
+// natural, o periodos editados por la nota [a]): antes solo se comparaban entre sí los que
+// cerraban el mismo mes, así que dos compañeros que cerraban en meses distintos no se comparaban
+// nunca. Cada uno se mide sobre su propio año completo, y cada pareja se compara una sola vez:
+// en el mes en que cierra el último de los dos (`earlierClosedPeers`).
 
-import { compareISO, addDays, addYears, datesOfMonth, toISO, trimesterWindow, bridgesOfMonth, bridgesBetween } from "./calendar.js";
+import { compareISO, addDays, addYears, datesOfMonth, toISO, daysInMonth, trimesterWindow, bridgesOfMonth, bridgesBetween } from "./calendar.js";
 import { tally } from "./tally.js";
 import { absences, DESCUENTA_DISPONIBILIDAD, AUSENTE_EN_PUENTE } from "./absences.js";
 import { accumulatedTally } from "./accumulate.js";
-import { periodsOfResident, closingPeriodOn } from "./residents.js";
+import { periodsOfResident, closingPeriodOn, closedPeriodsBetween } from "./residents.js";
 
 // Los seis ejes de INV-3 y cuáles se normalizan por disponibilidad. Se EXPORTAN porque el
 // generador (`schedule.js`) y el banco de equidad tienen que perseguir exactamente lo que este
@@ -47,9 +54,13 @@ const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Numb
 const inRange = (f, a, b) => compareISO(f, a) >= 0 && compareISO(f, b) <= 0;
 
 /**
- * @param {object} ctx { mes, anio, residentes, acumulados, asignaciones?, puentesDelMes?, bloqueos?, festivos? }
+ * @param {object} ctx { mes, anio, residentes, acumulados, asignaciones?, puentesDelMes?, bloqueos?, festivos?, cerradosAntes? }
  *   - acumulados: { id: {total, findes, festivos, puentesLibres, dobletes} } hasta fin del mes anterior
- *   - asignaciones: del mes validado (G/GF/GP/3P, con origen? para cedidas/compradas)
+ *   - asignaciones: del mes validado (G/GF/GP/3P, con origen? para cedidas/compradas), MÁS los
+ *     dos primeros días del mes siguiente como lookahead del doblete (contrato C-1): un viernes
+ *     30 o 31 dentro de la ventana empareja su domingo ya en el mes siguiente, y sin esas filas
+ *     ese doblete no existe para quien cierra ahora mientras sí existe para quien cerró antes
+ *     (a ese se le mide con el histórico entero). Solo se cuenta lo que cae en la ventana.
  *   - puentesDelMes: [string] fechas ISO de los puentes del mes validado, derivadas de la tabla
  *     `festivos` con `bridgesOfMonth` (V-17b: los puentes se derivan, nunca se escriben)
  *   - bloqueos: del año (para el descuento proporcional por baja, nota [a])
@@ -60,15 +71,24 @@ const inRange = (f, a, b) => compareISO(f, a) >= 0 && compareISO(f, b) <= 0;
  *     array al que le falte ENTERO alguno de los años que cubre la ventana significa "ese
  *     calendario no está cargado" y sí avisa, porque si no ese eje compararía ceros y se leería
  *     como verificado (el fallo que V-13(e) dejó anotado).
+ *   - cerradosAntes: [{id, cohorte, year, cierre, win, dims, avail, dias, nominal, f}] — compañeros que ya
+ *     cerraron ese mismo año de residencia en un mes anterior, con sus seis ejes YA medidos
+ *     sobre su propia ventana (`dias` días, `nominal` sin contar el 29 de febrero, `avail` de ellos sin baja; los calcula
+ *     `buildYearCloseContext` desde `historicas`; V-48). Quien cierra este mes se compara con
+ *     cada uno de ellos por parejas; ellos entre sí no, porque esa pareja ya se comparó cuando
+ *     cerró el segundo de los dos.
  */
 export function validateResidencyYearClose(ctx) {
-  const { mes, anio, residentes, acumulados = {}, asignaciones = [], puentesDelMes = [], bloqueos = [], festivos } = ctx;
+  const { mes, anio, residentes, acumulados = {}, asignaciones = [], puentesDelMes = [], bloqueos = [], festivos, cerradosAntes = [] } = ctx;
   const violations = [];
   const monthDays = datesOfMonth(anio, mes);
   const monthStart = monthDays[0];
   const monthEnd = monthDays[monthDays.length - 1];
 
-  // Métricas finales por residente que cierra su año este mes, agrupadas por cohorte.
+  // Métricas finales por residente que cierra su año este mes, agrupadas por cohorte Y año de
+  // residencia: «del mismo año» es el índice del periodo (V-48a), también entre los que cierran
+  // el mismo mes — con periodos editados (nota [a]) un R2 alargado puede acabar el mismo mes que
+  // el R3 de sus compañeros, y un Pequeño y un Mayor no reparten las mismas guardias.
   const byCohort = new Map();
   for (const r of residentes) {
     const win = closingWindowThisMonth(r, mes, anio);
@@ -94,17 +114,31 @@ export function validateResidencyYearClose(ctx) {
     // salida para el caso degenerado— y el cierre lo juzgaría como plenamente disponible con cero
     // guardias, avisando en los seis ejes contra toda su cohorte. Mismo criterio que la cohorte
     // de uno: se queda fuera de la comparación.
-    if (availableDays(win, bajas) <= 0) continue;
-    const f = availabilityFraction(win, bajas);
+    const avail = availableDays(win, bajas);
+    if (avail <= 0) continue;
+    const dias = daysInclusive(win.start, win.end);
 
     const cohorte = cohortOf(r);
-    if (!byCohort.has(cohorte)) byCohort.set(cohorte, []);
-    byCohort.get(cohorte).push({ id: r.id, cierre: win.end, win, dims, f });
+    const clave = `${cohorte}|${win.year}`;
+    if (!byCohort.has(clave)) byCohort.set(clave, []);
+    byCohort.get(clave).push({ id: r.id, cohorte, year: win.year, cierre: win.end, win, dims, avail, dias, nominal: diasNominales(win), f: avail / dias });
   }
 
   // Solo se compara dentro de una cohorte con al menos dos miembros: quien cierra su año siendo
   // el único de su promoción no tiene con quién compararse en NINGÚN eje.
   const comparables = [...byCohort.values()].filter((grupo) => grupo.length >= 2);
+
+  // Parejas con quien ya cerró ese mismo año meses antes (V-48): misma cohorte, mismo año de
+  // residencia, y nunca uno consigo mismo. `cerradosAntes` viene ya filtrado por
+  // `earlierClosedPeers`, pero el emparejamiento se decide aquí, que es donde se compara.
+  const parejas = [];
+  for (const grupo of byCohort.values()) {
+    for (const x of grupo) {
+      for (const e of cerradosAntes) {
+        if (e.id !== x.id && e.cohorte === x.cohorte && e.year === x.year) parejas.push([x, e]);
+      }
+    }
+  }
 
   // El eje `puentesLibres` se deriva de la tabla `festivos` (V-17b), y si el calendario no está
   // cargado compararía ceros y saldría "cuadrado" sin haber mirado nada. La comprobación es por
@@ -114,13 +148,13 @@ export function validateResidencyYearClose(ctx) {
   // laxa bastaba un festivo de 2026 para dar por comprobados también los puentes de 2027.
   // Tampoco aplica aquí el matiz de V-17(d) —no avisar en un febrero sin festivos—: un año
   // natural español entero sin ningún festivo no existe, solo puede ser calendario sin cargar.
-  if (festivos !== undefined && comparables.length) {
+  if (festivos !== undefined && (comparables.length || parejas.length)) {
     // Comparación de cadenas, no `parseISO`: esto es una heurística de "¿está cargado el
     // calendario de este año?", no aritmética de fechas, y la tabla vive en un Sheet que alguien
     // puede editar a mano — una fila con una fecha mal escrita no debe tumbar el cierre entero.
     // Misma tolerancia que `isHoliday`, que tampoco valida lo que le pasan.
     const fechaDe = (f) => (typeof f === "string" ? f : f && f.fecha) || "";
-    const ventanas = comparables.flat().map((x) => x.win);
+    const ventanas = [...comparables.flat(), ...parejas.flat()].map((x) => x.win);
     const desde = ventanas.reduce((min, w) => (w.start < min ? w.start : min), ventanas[0].start);
     const hasta = ventanas.reduce((max, w) => (w.end > max ? w.end : max), ventanas[0].end);
     const sinCargar = [];
@@ -137,14 +171,32 @@ export function validateResidencyYearClose(ctx) {
 
   // Comparación por dimensión dentro de cada cohorte.
   for (const grupo of comparables) {
+    const ref = referencia(grupo);
     for (const dim of DIMS) {
-      const vals = grupo.map((x) => ({ id: x.id, cierre: x.cierre, f: x.f, v: PROPORCIONAL.has(dim) ? x.dims[dim] / x.f : x.dims[dim] }));
-      const par = excedeElUno(vals, PROPORCIONAL.has(dim));
+      const par = excedeElUno(grupo.map(medida(dim, ref)), PROPORCIONAL.has(dim));
       if (par) {
         const { maxEntry, minEntry } = par;
         violations.push(warn(
-          `${labelDim(dim)} al cierre del año de residencia: ${maxEntry.id}=${round(maxEntry.v)} vs ${minEntry.id}=${round(minEntry.v)} (diferencia > 1)`,
+          `${labelDim(dim)} al cierre del año de residencia: ${maxEntry.id}=${round(maxEntry.v)} vs ${minEntry.id}=${round(minEntry.v)} (diferencia > 1${escalaDe(grupo, ref)})`,
           { fecha: maxEntry.cierre, residenteId: maxEntry.id }
+        ));
+      }
+    }
+  }
+
+  // Y por parejas con quien cerró antes (V-48). El aviso se fecha en el cierre de quien cierra
+  // AHORA y se le atribuye a él, aunque el que tenga más sea el otro: es lo que cae dentro del
+  // mes que se está validando; el compañero cerró en un mes ya validado y el texto lo dice.
+  for (const [x, e] of parejas) {
+    const ref = referencia([x, e]);
+    const escala = escalaDe([x, e], ref);
+    for (const dim of DIMS) {
+      const par = excedeElUno([x, e].map(medida(dim, ref)), PROPORCIONAL.has(dim));
+      if (par) {
+        const { maxEntry, minEntry } = par;
+        violations.push(warn(
+          `${labelDim(dim)} al cierre del año de residencia: ${maxEntry.id}=${round(maxEntry.v)} vs ${minEntry.id}=${round(minEntry.v)} (diferencia > 1; ${e.id} cerró su año el ${e.cierre}${escala})`,
+          { fecha: x.cierre, residenteId: x.id }
         ));
       }
     }
@@ -154,19 +206,109 @@ export function validateResidencyYearClose(ctx) {
 }
 
 /**
+ * La normalización por disponibilidad de los ejes PROPORCIONAL, escrita para ventanas que pueden
+ * tener DISTINTA longitud (V-48b). Con la misma longitud para todos es exactamente el `dims/f`
+ * de la nota [a] (V-8) y la tolerancia `1/min(f)` de V-37. Con longitudes distintas —el año
+ * alargado por la nota [a], que es justo el caso que V-48 pone a comparar— dividir por la
+ * fracción de la PROPIA ventana proyectaba a quien estuvo de baja sobre sus quince meses y lo
+ * sacaba como sobrecargado frente a doce de su compañero (52 guardias en 12 meses disponibles
+ * de 15 salían como 65 frente a 52), o sea, el aviso falso en el escenario para el que se
+ * escribió la decisión. Se compara el RITMO por día disponible, reescalado a la ventana más
+ * corta de las que se comparan para que las cifras sigan leyéndose como guardias.
+ *
+ * La longitud que se compara es la NOMINAL: los días de la ventana sin contar el 29 de febrero.
+ * Dos años de residencia de doce meses miden 365 o 366 días según pillen o no un bisiesto, y
+ * con el reescalado a días de calendario una diferencia cruda de exactamente una guardia —dentro
+ * de la norma— salía como 1 + n/366 y avisaba (hallado por la verificación del 2026-09-07). Un
+ * 29 de febrero no alarga el año de nadie; un periodo editado de quince meses, sí.
+ *
+ * `f` pasa a ser `(avail/dias) · (nominal/ref)`: la fracción disponible de la propia ventana,
+ * corregida por cuánto más larga es que la de referencia. Con ventanas de la misma longitud
+ * nominal el segundo factor es 1 y `f` es bit a bit el de antes; `excedeElUno` sigue midiendo la
+ * tolerancia en guardias de verdad (`1/min(f)`) sin saber nada de esto.
+ */
+const referencia = (grupo) => Math.min(...grupo.map((x) => x.nominal));
+const medida = (dim, ref) => (x) => {
+  const f = (x.avail / x.dias) * (x.nominal / ref);
+  return { id: x.id, cierre: x.cierre, f, v: PROPORCIONAL.has(dim) ? x.dims[dim] / f : x.dims[dim] };
+};
+/** Días de la ventana sin contar los 29 de febrero que caigan dentro. */
+function diasNominales(win) {
+  let bisiestos = 0;
+  for (let y = Number(win.start.slice(0, 4)); y <= Number(win.end.slice(0, 4)); y++) {
+    if (daysInMonth(y, 2) === 29 && inRange(toISO(y, 2, 29), win.start, win.end)) bisiestos++;
+  }
+  return daysInclusive(win.start, win.end) - bisiestos;
+}
+/**
+ * Con ventanas de distinta longitud las cifras van reescaladas y el texto lo dice, para que
+ * quien lo lea no busque esos números en el Resumen. Vacío cuando todas miden lo mismo.
+ */
+function escalaDe(grupo, ref) {
+  const longitudes = [...new Set(grupo.map((x) => x.nominal))];
+  if (longitudes.length < 2) return "";
+  return `; años de ${longitudes.sort((a, b) => b - a).join(" y ")} días, cifras a ritmo de ${ref} días`;
+}
+
+/**
  * Primer día de histórico que hace falta para evaluar el cierre ANUAL en este mes: el
- * aniversario más antiguo entre los residentes que cierran su año de residencia ese mes, o
- * `null` si no lo cierra ninguno (y entonces no hay nada que leer ni que comprobar).
+ * aniversario más antiguo entre los residentes que cierran su año de residencia ese mes —y,
+ * desde V-48, entre los compañeros con los que se les va a comparar porque cerraron ese mismo
+ * año meses antes (`earlierClosedPeers`), cuya ventana empieza aún antes—, o `null` si no lo
+ * cierra ninguno (y entonces no hay nada que leer ni que comprobar).
  * Simétrico de `rotationHistoryStart` (contrato C-2): el invocador no puede adivinar el rango
  * que necesita el validador, así que lo pregunta al dominio en vez de reimplementarlo.
  */
 export function yearCloseHistoryStart(residentes, mes, anio) {
   let min = null;
-  for (const r of residentes) {
-    const win = closingWindowThisMonth(r, mes, anio);
-    if (win && (min === null || compareISO(win.start, min) < 0)) min = win.start;
+  const ventanas = [
+    ...residentes.map((r) => closingWindowThisMonth(r, mes, anio)).filter(Boolean),
+    ...earlierClosedPeers(residentes, mes, anio).map((e) => e.win),
+  ];
+  for (const win of ventanas) {
+    if (min === null || compareISO(win.start, min) < 0) min = win.start;
   }
   return min;
+}
+
+/**
+ * Cuánto puede distar el cierre de un compañero para seguir contando como «el mismo año»
+ * (V-48): un año. Dos residentes de la misma cohorte (mismo año natural de `fechaInicio`)
+ * cierran cada año de residencia con menos de doce meses de diferencia salvo que alguien haya
+ * editado los periodos (nota [a]), y aun entonces un año de distancia deja de ser el mismo
+ * reparto. Acota además el histórico que hay que leer.
+ */
+const DISTANCIA_MAX_CIERRES = 1; // años
+
+/**
+ * Compañeros con los que hay que comparar a quien cierra su año de residencia este mes porque
+ * ya cerraron ESE MISMO año (misma cohorte, mismo índice de periodo) en un mes anterior, dentro
+ * del último año (V-48). Devuelve [] si este mes no cierra nadie: entonces tampoco hay a quién
+ * comparar, y `yearCloseHistoryStart` sigue devolviendo `null` en los meses en que no cierra
+ * nadie, que son la mayoría. Cada pareja se compara una sola vez, en el mes en que cierra el
+ * segundo: quien cerró antes no se compara aquí con otros que también cerraron antes.
+ *
+ * @returns {{id:string, cohorte:number, year:number, win:{start:string,end:string}}[]}
+ */
+export function earlierClosedPeers(residentes, mes, anio) {
+  const monthStart = toISO(anio, mes, 1);
+  const cierran = residentes
+    .map((r) => ({ id: r.id, cohorte: cohortOf(r), win: closingWindowThisMonth(r, mes, anio) }))
+    .filter((c) => c.win);
+  if (!cierran.length) return [];
+  const desde = addYears(monthStart, -DISTANCIA_MAX_CIERRES);
+  const hasta = addDays(monthStart, -1);
+  const out = [];
+  for (const r of residentes) {
+    const cerrados = closedPeriodsBetween(r, desde, hasta);
+    if (!cerrados.length) continue;
+    const cohorte = cohortOf(r);
+    for (const p of cerrados) {
+      const conQuien = cierran.some((c) => c.id !== r.id && c.cohorte === cohorte && c.win.year === p.year);
+      if (conQuien) out.push({ id: r.id, cohorte, year: p.year, win: { start: p.start, end: p.end } });
+    }
+  }
+  return out;
 }
 
 /**
@@ -191,10 +333,20 @@ export function yearCloseHistoryStart(residentes, mes, anio) {
  *
  * @param {object} args
  *   - historicas: asignaciones anteriores al mes (desde `yearCloseHistoryStart`)
- *   - asignacionesDelMes: las del mes validado (las que se están por validar, no las del store)
+ *   - asignacionesDelMes: las del mes validado (las que se están por validar, no las del store),
+ *     MÁS los dos primeros días del mes siguiente tal y como estén en el store, como lookahead
+ *     del doblete (contrato C-1) para quien cierra ahora. `tally` solo cuenta lo que cae en cada
+ *     ventana, así que esas filas de más no suman en ningún eje y los puentes se miran por fecha
+ *     exacta: son inertes salvo para emparejar el viernes 30/31 con su domingo.
  *   - festivos: los de TODA la ventana del cierre con un día de margen a cada lado — el rango
  *     lo da `yearCloseFestivosRange`, no se adivina. Cruza dos años naturales porque el año de
  *     residencia va de aniversario a aniversario (en la práctica, de mayo a mayo).
+ *
+ * Los compañeros que cerraron ese mismo año meses antes (V-48) se miden aquí ENTEROS, sobre su
+ * propia ventana y desde `historicas` (que desde `yearCloseHistoryStart` la cubre completa): no
+ * pasan por `accumulatedTally`, que acumula el año EN CURSO de cada uno, y el suyo ya terminó.
+ * El mes validado se les pasa también, solo como lookahead del doblete (C-1): si su año cerró el
+ * último día del mes anterior, el domingo de su último viernes cae en el mes que se valida.
  */
 export function buildYearCloseContext({ mes, anio, residentes, historicas = [], asignacionesDelMes = [], bloqueos = [], festivos = [] }) {
   const finAcumulado = addDays(toISO(anio, mes, 1), -1);
@@ -214,8 +366,24 @@ export function buildYearCloseContext({ mes, anio, residentes, historicas = [], 
       .filter((p) => residentIsFreeOnBridge(r.id, historicas, p, win, bloqueos)).length;
   }
 
+  const cerradosAntes = [];
+  for (const e of earlierClosedPeers(residentes, mes, anio)) {
+    const bajas = absences(bloqueos, { residenteId: e.id, motivos: DESCUENTA_DISPONIBILIDAD });
+    // Mismo criterio que para quien cierra ahora: un año entero de baja no se compara.
+    const avail = availableDays(e.win, bajas);
+    if (avail <= 0) continue;
+    const dias = daysInclusive(e.win.start, e.win.end);
+    const propias = [...historicas, ...asignacionesDelMes].filter((a) => a.residenteId === e.id);
+    const t = tally(propias, { start: e.win.start, end: e.win.end });
+    const dims = {
+      total: t.total, findes: t.finde, festivos: t.festivos, prefestivos: t.prefestivos, dobletes: t.dobletes,
+      puentesLibres: bridgesBetween(e.win.start, e.win.end, festivos).filter((p) => residentIsFreeOnBridge(e.id, historicas, p, e.win, bloqueos)).length,
+    };
+    cerradosAntes.push({ ...e, cierre: e.win.end, dims, avail, dias, nominal: diasNominales(e.win), f: avail / dias });
+  }
+
   return {
-    mes, anio, residentes, acumulados, asignaciones: asignacionesDelMes, bloqueos, festivos,
+    mes, anio, residentes, acumulados, asignaciones: asignacionesDelMes, bloqueos, festivos, cerradosAntes,
     puentesDelMes: bridgesOfMonth(anio, mes, festivos),
   };
 }
@@ -345,7 +513,9 @@ function closingWindowThisMonth(r, mes, anio) {
  * Exportada desde V-34: `schedule.js` divide por el MISMO `f` que este validador, o el generador
  * perseguiría un objetivo distinto del que el cierre le va a medir (regla 2 de V-32). Duplicarla
  * allí era la vía rápida y es justo lo que V-19 prohíbe: dos definiciones de la misma pregunta
- * que empiezan iguales y se separan sin que nadie lo note.
+ * que empiezan iguales y se separan sin que nadie lo note. Desde V-48 el juez añade sobre esta
+ * `f` el reescalado por longitud nominal de `medida`, que solo actúa entre ventanas de distinta
+ * longitud; el generador trabaja dentro de un mes y no lo necesita.
  */
 export function availabilityFraction(win, bajas) {
   const windowDays = daysInclusive(win.start, win.end);

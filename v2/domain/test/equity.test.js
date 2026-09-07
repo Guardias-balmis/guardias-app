@@ -627,3 +627,304 @@ test("baja durante TODO el año de residencia: se excluye de la comparación en 
   const v = vryc2(bycc2({ mes: 5, anio: 2026, residentes: [a, baja], historicas, asignacionesDelMes: [], bloqueos }));
   assert.deepEqual(v.filter((x) => x.invariante === "INV-3" && /baja/.test(x.detalle)), []);
 });
+
+// ── V-48: compañeros de la misma cohorte que cerraron ese mismo año en un mes ANTERIOR ──────────
+// Antes solo se comparaban entre sí los que cerraban el MISMO mes, así que dos compañeros con
+// `fechaInicio` distinta dentro del mismo año natural (o con periodos editados, nota [a]) no se
+// comparaban nunca. Ahora quien cierra se compara, por parejas, con los de su cohorte que ya
+// cerraron ese año dentro de los doce meses anteriores; cada uno sobre su propio año completo.
+import { earlierClosedPeers } from "../equity.js";
+import { addDays as addDays48 } from "../calendar.js";
+
+// `n` guardias en el MISMO día de la semana, una por semana: si `desde` es martes, todo martes —
+// ni findes ni viernes, así que solo el eje `total` se mueve.
+const cadaSemana = (id, desde, n) => Array.from({ length: n }, (_, i) => g(id, addDays48(desde, 7 * i)));
+const deParejas = (v) => inv3(v).filter((x) => /cerró su año/.test(x.detalle));
+const E_MARZO = R("r3e", "2024-03-11", "2028-03-10"); // cohorte 2024; su R3 cierra el 2027-03-10
+const E_ENERO = R("r3e1", "2024-01-15", "2028-01-14"); // cohorte 2024; su R3 cierra el 2027-01-14
+
+test("V-48: quien cierra en mayo se compara con el compañero de cohorte que cerró ese mismo año en marzo, cada uno sobre su propio año", () => {
+  assert.deepEqual(earlierClosedPeers([A, E_MARZO], 5, 2027), [
+    { id: "r3e", cohorte: 2024, year: 3, win: { start: "2026-03-11", end: "2027-03-10" } },
+  ]);
+  assert.equal(yearCloseHistoryStart([A, E_MARZO], 5, 2027), "2026-03-11", "el histórico arranca en la ventana del que cerró antes");
+
+  const historicas = [...cadaSemana("r3a", "2026-06-02", 20), ...cadaSemana("r3e", "2026-03-17", 10)];
+  const v = validateResidencyYearClose(buildYearCloseContext({ mes: 5, anio: 2027, residentes: [A, E_MARZO], historicas }));
+  const parejas = deParejas(v);
+  assert.equal(parejas.length, 1, "solo el eje total se descuadra");
+  assert.match(parejas[0].detalle, /^Totales al cierre del año de residencia: r3a=20 vs r3e=10 \(diferencia > 1; r3e cerró su año el 2027-03-10\)$/);
+  assert.equal(parejas[0].fecha, "2027-05-26", "el aviso se fecha en el cierre de quien cierra AHORA, dentro del mes validado");
+  assert.equal(parejas[0].residenteId, "r3a");
+  assert.equal(parejas[0].severidad, "aviso");
+
+  const cuadrado = validateResidencyYearClose(buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, E_MARZO],
+    historicas: [...cadaSemana("r3a", "2026-06-02", 11), ...cadaSemana("r3e", "2026-03-17", 10)],
+  }));
+  assert.deepEqual(deParejas(cuadrado), [], "diferencia 1 sigue dentro de la norma");
+});
+
+test("V-48: en el mes en que cierra el PRIMERO de los dos no hay con quién comparar (el otro aún no ha cerrado)", () => {
+  assert.deepEqual(earlierClosedPeers([A, E_MARZO], 3, 2027), []);
+  assert.equal(yearCloseHistoryStart([A, E_MARZO], 3, 2027), "2026-03-11", "solo su propia ventana");
+  const historicas = [...cadaSemana("r3a", "2026-06-02", 20), ...cadaSemana("r3e", "2026-03-17", 2)];
+  const v = validateResidencyYearClose(buildYearCloseContext({ mes: 3, anio: 2027, residentes: [A, E_MARZO], historicas }));
+  assert.deepEqual(deParejas(v), []);
+});
+
+test("V-48: con tres cierres en meses distintos, el último se compara con los dos anteriores y ellos entre sí NO (cada pareja, una vez)", () => {
+  const residentes = [A, E_MARZO, E_ENERO];
+  assert.deepEqual(earlierClosedPeers(residentes, 5, 2027).map((e) => e.id).sort(), ["r3e", "r3e1"]);
+  assert.equal(yearCloseHistoryStart(residentes, 5, 2027), "2026-01-15");
+  // r3a=10, r3e1=10, r3e=20: si r3e1 y r3e se compararan entre sí habría DOS avisos de totales.
+  const historicas = [...cadaSemana("r3a", "2026-06-02", 10), ...cadaSemana("r3e", "2026-03-17", 20), ...cadaSemana("r3e1", "2026-01-20", 10)];
+  const v = validateResidencyYearClose(buildYearCloseContext({ mes: 5, anio: 2027, residentes, historicas }));
+  const parejas = deParejas(v);
+  assert.equal(parejas.length, 1);
+  assert.match(parejas[0].detalle, /r3e=20 vs r3a=10 .* r3e cerró su año el 2027-03-10/);
+  assert.equal(parejas[0].residenteId, "r3a", "se le atribuye a quien cierra ahora aunque el que tiene más sea el otro");
+  assert.equal(parejas[0].fecha, "2027-05-26");
+});
+
+test("V-48: ni otra cohorte ni otro año de residencia cuentan como «el mismo año», y un cierre de hace más de doce meses tampoco", () => {
+  // Cohorte 2023 cuyo R3 cierra dentro de los doce meses anteriores a mayo-2027: no es su cohorte.
+  const otraCohorte = R("r3c", "2023-09-01", "2027-08-31");
+  assert.deepEqual(earlierClosedPeers([A, otraCohorte], 5, 2027), []);
+  // Misma cohorte, pero lo que cerró en ese tramo fue su R2 alargado (nota [a]), no un R3.
+  const otroAnio = {
+    id: "r2d", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2025-05-26" },
+      { year: 2, start: "2025-05-27", end: "2026-08-31" },
+      { year: 3, start: "2026-09-01", end: "2027-08-31" },
+      { year: 4, start: "2027-09-01", end: "2028-05-26" },
+    ],
+  };
+  assert.deepEqual(earlierClosedPeers([A, otroAnio], 5, 2027), []);
+  // Misma cohorte y mismo año, pero cerrado el 2026-04-30: más de un año antes del mes → fuera.
+  const lejos = {
+    id: "r3lejos", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2024-12-31" },
+      { year: 2, start: "2025-01-01", end: "2025-08-31" },
+      { year: 3, start: "2025-09-01", end: "2026-04-30" },
+      { year: 4, start: "2026-05-01", end: "2028-05-26" },
+    ],
+  };
+  assert.deepEqual(earlierClosedPeers([A, lejos], 5, 2027), []);
+  assert.equal(yearCloseHistoryStart([A, lejos], 5, 2027), "2026-05-27", "y no estira el histórico");
+  // Un día más tarde (2026-05-01, justo doce meses antes) sí entra.
+  const borde = { ...lejos, id: "r3borde", periodos: lejos.periodos.map((p) => (p.year === 3 ? { ...p, end: "2026-05-01" } : p.year === 4 ? { ...p, start: "2026-05-02" } : p)) };
+  assert.deepEqual(earlierClosedPeers([A, borde], 5, 2027).map((e) => [e.id, e.win.end]), [["r3borde", "2026-05-01"]]);
+  assert.equal(yearCloseHistoryStart([A, borde], 5, 2027), "2025-09-01");
+});
+
+test("V-48: si este mes no cierra nadie, haber cerrado hace poco no pide histórico ni compara nada", () => {
+  assert.deepEqual(earlierClosedPeers([A, E_MARZO], 8, 2027), []);
+  assert.equal(yearCloseHistoryStart([A, E_MARZO], 8, 2027), null);
+  assert.equal(yearCloseFestivosRange([A, E_MARZO], 8, 2027), null);
+});
+
+test("V-48: el compañero que cerró antes se mide sobre SU ventana — puentes libres desde `festivos`, doblete con lookahead al mes validado, y sin disponibilidad no entra", () => {
+  // El puente del 7-dic-2026 cae dentro de la ventana de r3e (2026-03-11→2027-03-10).
+  const conGuardiaEnPuente = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, E_MARZO], festivos: FESTIVOS,
+    historicas: [g("r3e", "2026-12-07", "G")],
+  });
+  assert.equal(conGuardiaEnPuente.cerradosAntes.length, 1);
+  assert.equal(conGuardiaEnPuente.cerradosAntes[0].dims.puentesLibres, 0);
+  const libre = buildYearCloseContext({ mes: 5, anio: 2027, residentes: [A, E_MARZO], festivos: FESTIVOS, historicas: [] });
+  assert.equal(libre.cerradosAntes[0].dims.puentesLibres, 1);
+  assert.equal(libre.cerradosAntes[0].f, 1);
+  assert.equal(libre.cerradosAntes[0].cierre, "2027-03-10");
+
+  // Año 3 editado para cerrar el viernes 30-abr-2027: su doblete V-D se completa con el domingo
+  // 2 de mayo, que está en el mes validado (contrato C-1) y no en el histórico.
+  const viernes = {
+    id: "r3v", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2025-05-26" },
+      { year: 2, start: "2025-05-27", end: "2026-04-30" },
+      { year: 3, start: "2026-05-01", end: "2027-04-30" },
+      { year: 4, start: "2027-05-01", end: "2028-05-26" },
+    ],
+  };
+  const ctx = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, viernes],
+    historicas: [g("r3v", "2027-04-30", "G")], asignacionesDelMes: [g("r3v", "2027-05-02", "G")],
+  });
+  assert.deepEqual(ctx.cerradosAntes.map((e) => [e.id, e.dims.total, e.dims.dobletes]), [["r3v", 1, 1]], "el domingo no suma al total (está fuera de su año) pero sí cierra el doblete");
+
+  // Baja durante toda su ventana: mismo criterio que para quien cierra ahora, fuera.
+  const baja = buildYearCloseContext({
+    mes: 5, anio: 2027, residentes: [A, E_MARZO], historicas: [],
+    bloqueos: [{ residenteId: "r3e", motivo: "BAJA", desde: "2026-03-11", hasta: "2027-03-10", activo: true }],
+  });
+  assert.deepEqual(baja.cerradosAntes, []);
+});
+
+test("V-48: el aviso de calendario sin cargar mira también los años que toca la ventana del que cerró antes", () => {
+  const borde = {
+    id: "r3borde", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2024-12-31" },
+      { year: 2, start: "2025-01-01", end: "2025-08-31" },
+      { year: 3, start: "2025-09-01", end: "2026-05-01" },
+      { year: 4, start: "2026-05-02", end: "2028-05-26" },
+    ],
+  };
+  const v = validateResidencyYearClose(buildYearCloseContext({ mes: 5, anio: 2027, residentes: [A, borde], festivos: FESTIVOS, historicas: [] }));
+  const sinCargar = inv3(v).filter((x) => /no hay ningún festivo cargado/.test(x.detalle));
+  assert.equal(sinCargar.length, 1);
+  assert.match(sinCargar[0].detalle, /de 2025,? .*ventana 2025-09-01→2027-05-26|de 2025.*2025-09-01→2027-05-26/);
+});
+
+test("V-48: un ctx armado a mano sin `cerradosAntes` se comporta exactamente como antes", () => {
+  const v = validateResidencyYearClose({
+    mes: 5, anio: 2027, residentes: [A, E_MARZO],
+    acumulados: { r3a: acc(20), r3e: acc(0) },
+    asignaciones: [],
+  });
+  assert.deepEqual(inv3(v), [], "r3e no cierra este mes y nadie ha medido su año: cohorte de uno, nada que comparar");
+});
+
+// ── Verificación adversarial de V-48 (2026-09-07): tres defectos confirmados y corregidos ──────
+test("V-48: un periodo con la fecha de fin vaciada o mal escrita a mano no tumba el cierre del mes de nadie", () => {
+  // Un FINALIZADO de hace años con la celda `fechaFin` de su R2 borrada en el Sheet (o «30/05/2024»):
+  // antes de V-48 nadie leía ese dato en la validación; `closedPeriodsBetween` recorre TODOS los
+  // periodos de TODOS los residentes, así que tiene que tolerarlo.
+  for (const roto of [undefined, "", "30/05/2024", "2024-06-31", "2024-02-30"]) {
+    const Z = {
+      id: "z", fechaInicio: "2022-05-30", fechaFin: "2026-05-29",
+      periodos: [
+        { year: 1, start: "2022-05-30", end: "2023-05-29" },
+        { year: 2, start: "2023-05-30", end: roto },
+        { year: 3, start: "2024-05-30", end: "2025-05-29" },
+        { year: 4, start: "2025-05-30", end: "2026-05-29" },
+      ],
+    };
+    assert.equal(yearCloseHistoryStart([A, B, Z], 5, 2027), "2026-05-27", `fin roto=${JSON.stringify(roto)}`);
+    assert.deepEqual(earlierClosedPeers([A, B, Z], 5, 2027), []);
+    const v = validateResidencyYearClose(buildYearCloseContext({ mes: 5, anio: 2027, residentes: [A, B, Z], historicas: [] }));
+    assert.deepEqual(deParejas(v), []);
+  }
+});
+
+test("V-48: con ventanas de distinta longitud (año alargado por la nota [a]) se compara el RITMO por día disponible, no el total proyectado", () => {
+  // B tiene el R3 alargado a 15 meses (2026-08-27→2027-11-26, 457 días) y cierra en noviembre;
+  // A (365 días) cerró en mayo y es su compañero anterior. Misma carga semanal: 52 vs 65 en crudo.
+  const B15 = {
+    id: "b15", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2025-05-26" },
+      { year: 2, start: "2025-05-27", end: "2026-08-26" },
+      { year: 3, start: "2026-08-27", end: "2027-11-26" },
+      { year: 4, start: "2027-11-27", end: "2028-05-26" },
+    ],
+  };
+  assert.deepEqual(earlierClosedPeers([A, B15], 11, 2027).map((e) => e.id), ["r3a"]);
+  const todas = [...cadaSemana("r3a", "2026-06-02", 52), ...cadaSemana("b15", "2026-09-01", 65)];
+  const enMes = (a) => a.fecha.startsWith("2027-11");
+  const ctx = buildYearCloseContext({
+    mes: 11, anio: 2027, residentes: [A, B15],
+    historicas: todas.filter((a) => !enMes(a)), asignacionesDelMes: todas.filter(enMes),
+  });
+  assert.deepEqual(deParejas(validateResidencyYearClose(ctx)), [], "65 en 457 días es el mismo ritmo que 52 en 365: antes salía 65 vs 52");
+
+  // Y si de verdad hace más (80 en 15 meses ≈ 64 al ritmo de 12), avisa y el texto explica la escala.
+  const mas = [...cadaSemana("r3a", "2026-06-02", 52), ...cadaSemana("b15", "2026-09-01", 65), ...cadaSemana("b15", "2026-09-03", 15)];
+  const v = validateResidencyYearClose(buildYearCloseContext({
+    mes: 11, anio: 2027, residentes: [A, B15],
+    historicas: mas.filter((a) => !enMes(a)), asignacionesDelMes: mas.filter(enMes),
+  }));
+  const totales = deParejas(v).filter((x) => /^Totales/.test(x.detalle));
+  assert.equal(totales.length, 1);
+  assert.match(totales[0].detalle, /b15=63\.89 vs r3a=52 .*años de 457 y 365 días, cifras a ritmo de 365 días/);
+
+  // Nota [a] de verdad: 15 meses con 3 de BAJA, 52 guardias en los 12 disponibles. A la par.
+  const bajaB = [{ residenteId: "b15", motivo: "BAJA", desde: "2026-12-01", hasta: "2027-03-01", activo: true }];
+  const conBaja = [...cadaSemana("r3a", "2026-06-02", 52), ...cadaSemana("b15", "2026-09-01", 13), ...cadaSemana("b15", "2027-03-02", 39)];
+  const v2 = validateResidencyYearClose(buildYearCloseContext({
+    mes: 11, anio: 2027, residentes: [A, B15], bloqueos: bajaB,
+    historicas: conBaja.filter((a) => !enMes(a)), asignacionesDelMes: conBaja.filter(enMes),
+  }));
+  assert.deepEqual(deParejas(v2), [], "antes: 52/0,80 = 65 vs 52, el aviso falso en el escenario para el que se escribió V-48");
+});
+
+test("V-48: los que cierran el mismo mes se agrupan por cohorte Y año de residencia — un R2 alargado no se compara con los R3", () => {
+  const bea = {
+    id: "bea", fechaInicio: "2024-05-27", fechaFin: "2029-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2025-05-26" },
+      { year: 2, start: "2025-05-27", end: "2027-05-26" }, // 24 meses, cierra el mismo día que el R3 de A y B
+      { year: 3, start: "2027-05-27", end: "2028-05-26" },
+      { year: 4, start: "2028-05-27", end: "2029-05-26" },
+    ],
+  };
+  const v = validateResidencyYearClose({
+    mes: 5, anio: 2027, residentes: [A, B, bea],
+    acumulados: { r3a: acc(20), r3b: acc(20), bea: acc(0) },
+    asignaciones: [],
+  });
+  assert.deepEqual(inv3(v).filter((x) => /bea/.test(x.detalle)), [], "Pequeño y Mayor no reparten las mismas guardias");
+  assert.deepEqual(inv3(v), [], "y A y B siguen comparándose entre sí");
+});
+
+test("V-48: el doblete del viernes 30 de quien cierra ahora se cierra con el domingo del mes siguiente que le pasa el invocador (C-1)", () => {
+  // Año de residencia 2026-05-01→2027-04-30 (viernes) para los dos.
+  const X = R("x", "2024-05-01", "2028-04-30");
+  const Y = R("y", "2024-05-01", "2028-04-30");
+  const delMes = [g("x", "2027-04-16"), g("x", "2027-04-18"), g("x", "2027-04-30")]; // V, D, V
+  const con = validateResidencyYearClose(buildYearCloseContext({ mes: 4, anio: 2027, residentes: [X, Y], asignacionesDelMes: [...delMes, g("x", "2027-05-02")] }));
+  const dobletes = inv3(con).filter((v) => /^Dobletes/.test(v.detalle));
+  assert.equal(dobletes.length, 1);
+  assert.match(dobletes[0].detalle, /x=2 vs y=0/);
+  // Y la fila del mes siguiente no suma en ningún otro eje: totales 3 (no 4).
+  assert.match(inv3(con).find((v) => /^Totales/.test(v.detalle)).detalle, /x=3 vs y=0/);
+  const sin = validateResidencyYearClose(buildYearCloseContext({ mes: 4, anio: 2027, residentes: [X, Y], asignacionesDelMes: delMes }));
+  assert.equal(inv3(sin).filter((v) => /^Dobletes/.test(v.detalle)).length, 0, "sin lookahead: 1 vs 0, diferencia 1");
+});
+
+test("V-48: un 29 de febrero no alarga el año — dos años nominales de 365 y 366 días con diferencia cruda de 1 no avisan", () => {
+  // E (cohorte 2024, fechaInicio en enero) cierra su R4 el 2028-01-14: ventana sin bisiesto, 365 días.
+  // X (fechaInicio en mayo) cierra su R4 el 2028-05-26: la ventana incluye el 29-feb-2028, 366 días.
+  const E = R("e", "2024-01-15", "2028-01-14");
+  const X = R("x", "2024-05-27", "2028-05-26");
+  assert.deepEqual(earlierClosedPeers([X, E], 5, 2028).map((p) => p.id), ["e"]);
+  const enMes = (a) => a.fecha.startsWith("2028-05");
+  const cierra = (todas) => validateResidencyYearClose(buildYearCloseContext({
+    mes: 5, anio: 2028, residentes: [X, E],
+    historicas: todas.filter((a) => !enMes(a)), asignacionesDelMes: todas.filter(enMes),
+  }));
+  // E=53, X=52: diferencia cruda exactamente 1 → dentro de la norma. Con el reescalado a días de
+  // calendario X salía como 52·365/366 = 51,86 y la diferencia como 1,14.
+  const unaMas = [...cadaSemana("e", "2027-01-19", 52), g("e", "2027-01-20"), ...cadaSemana("x", "2027-06-01", 52)];
+  assert.deepEqual(deParejas(cierra(unaMas)), []);
+  // E=54, X=52: diferencia 2 → avisa, y sin nota de escala porque los dos años miden lo mismo.
+  const dosMas = [...unaMas, g("e", "2027-01-21")];
+  const totales = deParejas(cierra(dosMas)).filter((v) => /^Totales/.test(v.detalle));
+  assert.equal(totales.length, 1);
+  assert.match(totales[0].detalle, /e=54 vs x=52 \(diferencia > 1; e cerró su año el 2028-01-14\)$/);
+});
+
+test("V-48: los que cierran el mismo mes con años de distinta longitud también se reescalan, y el aviso lo dice", () => {
+  // C tiene el R3 recortado a 2026-07-01→2027-05-26 (330 días) y cierra el mismo día que A (365).
+  const C = {
+    id: "c", fechaInicio: "2024-05-27", fechaFin: "2028-05-26",
+    periodos: [
+      { year: 1, start: "2024-05-27", end: "2025-05-26" },
+      { year: 2, start: "2025-05-27", end: "2026-06-30" },
+      { year: 3, start: "2026-07-01", end: "2027-05-26" },
+      { year: 4, start: "2027-05-27", end: "2028-05-26" },
+    ],
+  };
+  const v = validateResidencyYearClose({
+    mes: 5, anio: 2027, residentes: [A, C],
+    acumulados: { r3a: acc(52), c: acc(52) }, // mismo total en 365 y en 330 días: C va más deprisa
+    asignaciones: [],
+  });
+  const totales = inv3(v).filter((x) => /^Totales/.test(x.detalle));
+  assert.equal(totales.length, 1);
+  assert.match(totales[0].detalle, /c=52 vs r3a=47\.01 \(diferencia > 1; años de 365 y 330 días, cifras a ritmo de 330 días\)$/);
+});

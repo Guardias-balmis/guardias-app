@@ -455,6 +455,65 @@ test("marcarValidado: el eje de puentes libres se deriva de la tabla `festivos` 
   assert.match(puentes[0].detalle, /otro-1=3.*resp-1=1/);
 });
 
+// V-48: el cierre anual compara también con el compañero de cohorte que cerró ese mismo año meses
+// antes. Aquí el servidor no hace nada nuevo: `yearCloseHistoryStart` estira el histórico que lee
+// (el único cambio del router para V-48, el lookahead de C-1, tiene su test más abajo).
+test("marcarValidado: el cierre ANUAL compara con quien cerró ese mismo año en un mes anterior, leyendo su histórico completo (V-48)", () => {
+  // Misma cohorte (2024) que Rita y Óscar, pero empezó en marzo: su 4.º año va del 2027-03-11 al
+  // 2028-03-10, dos meses antes del cierre de los otros dos (2028-05-26).
+  const TERCERO = { id: "tercero-1", nombre: "Tomás", email: "tercero@gmail.com", fechaInicio: "2024-03-11", fechaFin: "2028-03-10" };
+  const deps = stubClean(makeDeps({}, {
+    residentes: [headerOf(TABLES.residentes), ...[RESP, OTRO, TERCERO].map((r) => recordToRow(TABLES.residentes, r))],
+  }));
+  const session = loggedInAs(deps, "resp@gmail.com");
+  // Sus tres guardias caen ANTES del aniversario de Rita y Óscar (2027-05-27): si el servidor
+  // leyera el histórico solo desde ahí, Tomás saldría con cero y no habría nada que avisar.
+  guardar(deps, session, [
+    { fecha: "2027-04-05", residenteId: "tercero-1", codigo: "G" },
+    { fecha: "2027-04-12", residenteId: "tercero-1", codigo: "G" },
+    { fecha: "2027-04-19", residenteId: "tercero-1", codigo: "G" },
+  ]);
+  const r = call({ action: "marcarValidado", session, mes: 5, anio: 2028 }, deps);
+  assert.equal(r.ok, true, "la equidad nunca bloquea (V-14)");
+  const parejas = r.violaciones.filter((v) => v.invariante === "INV-3" && /cerró su año el 2028-03-10/.test(v.detalle));
+  assert.equal(parejas.length, 2, "Tomás frente a Rita y frente a Óscar, solo en totales");
+  for (const v of parejas) {
+    assert.equal(v.severidad, "aviso");
+    assert.match(v.detalle, /^Totales al cierre del año de residencia: tercero-1=3 vs (resp-1|otro-1)=0/);
+    assert.equal(v.fecha, "2028-05-26", "fechado en el cierre de quien cierra ahora");
+  }
+  assert.deepEqual(parejas.map((v) => v.residenteId).sort(), ["otro-1", "resp-1"]);
+  // Y en el mes en que cerró Tomás (marzo-2028) aún no había con quién compararle.
+  const marzo = call({ action: "marcarValidado", session, mes: 3, anio: 2028 }, deps);
+  assert.equal(marzo.ok, true);
+  assert.equal(marzo.violaciones.filter((v) => v.invariante === "INV-3" && /cerró su año/.test(v.detalle)).length, 0);
+});
+
+// Contrato C-1 en el cierre anual: quien cierra su año un viernes 30 empareja su domingo en el
+// mes siguiente. El servidor pasa esos dos días con el mes; antes ese doblete solo existía para
+// quien cerró antes (medido con el histórico entero), no para quien cierra ahora.
+test("marcarValidado: el cierre ANUAL ve el doblete del viernes 30 con el domingo 2 del mes siguiente (C-1)", () => {
+  const X = { ...RESP, fechaInicio: "2024-05-01", fechaFin: "2028-04-30" }; // R3: 2026-05-01→2027-04-30 (viernes)
+  const Y = { ...OTRO, fechaInicio: "2024-05-01", fechaFin: "2028-04-30" };
+  const deps = stubClean(makeDeps({}, {
+    residentes: [headerOf(TABLES.residentes), ...[X, Y].map((r) => recordToRow(TABLES.residentes, r))],
+  }));
+  const session = loggedInAs(deps, "resp@gmail.com");
+  guardar(deps, session, [
+    { fecha: "2027-04-16", residenteId: "resp-1", codigo: "G" }, // viernes
+    { fecha: "2027-04-18", residenteId: "resp-1", codigo: "G" }, // domingo → doblete 1
+    { fecha: "2027-04-30", residenteId: "resp-1", codigo: "G" }, // viernes, último día de su año
+    { fecha: "2027-05-02", residenteId: "resp-1", codigo: "G" }, // domingo del mes siguiente → doblete 2
+  ]);
+  const r = call({ action: "marcarValidado", session, mes: 4, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  const dobletes = r.violaciones.filter((v) => v.invariante === "INV-3" && /Dobletes/.test(v.detalle));
+  assert.equal(dobletes.length, 1, "2 dobletes de Rita frente a 0 de Óscar");
+  assert.match(dobletes[0].detalle, /resp-1=2 vs otro-1=0/);
+  // El domingo 2 de mayo no suma al total de abril: 3, no 4.
+  assert.match(r.violaciones.find((v) => v.invariante === "INV-3" && /Totales al cierre del año/.test(v.detalle)).detalle, /resp-1=3 vs otro-1=0/);
+});
+
 test("marcarValidado: un mes que no cierra trimestre ni año no comprueba ningún cierre", () => {
   const deps = stubClean(makeDeps());
   const session = loggedInAs(deps, "resp@gmail.com");

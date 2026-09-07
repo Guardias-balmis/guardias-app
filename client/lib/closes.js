@@ -12,7 +12,7 @@
 // rechazarle el cuadrante: sin ello, un cierre anual incumplido bloquearía la validación sin
 // ninguna explicación en pantalla.
 
-import { toISO, daysInMonth } from "../../v2/domain/calendar.js";
+import { toISO, daysInMonth, addDays } from "../../v2/domain/calendar.js";
 import {
   quarterCloseWindow, validateQuarterClose,
   yearCloseHistoryStart, yearCloseFestivosRange, buildYearCloseContext, validateResidencyYearClose,
@@ -47,8 +47,13 @@ export async function closeViolations({ api, mes, anio, residentes, asignaciones
   // el año de residencia entero, que cruza dos años naturales.
   const rangoFestivos = yearCloseFestivosRange(residentes, mes, anio);
 
+  // Si cierra el año alguien, se piden también los dos primeros días del mes siguiente: son el
+  // lookahead del doblete (contrato C-1) para quien cierra ahora — su viernes 30/31 empareja el
+  // domingo del mes siguiente, que no está en pantalla. El trimestral no los necesita (mide
+  // solo `total`), así que sin cierre anual el rango termina en el mes.
+  const hastaAsignaciones = desdeAnual ? addDays(monthEnd, 2) : monthEnd;
   const [rAsig, rBloq, rFest] = await Promise.all([
-    api.listAsignacionesRango(desde, monthEnd),
+    api.listAsignacionesRango(desde, hastaAsignaciones),
     api.listBloqueosRango(desde, monthEnd),
     rangoFestivos ? api.listFestivosRango(rangoFestivos.desde, rangoFestivos.hasta) : Promise.resolve({ ok: true, festivos: [] }),
   ]);
@@ -59,6 +64,7 @@ export async function closeViolations({ api, mes, anio, residentes, asignaciones
   if (!rFest.ok) return { ok: false, error: rFest.error };
 
   const previas = rAsig.asignaciones.filter((a) => a.fecha < monthStart);
+  const siguientes = rAsig.asignaciones.filter((a) => a.fecha > monthEnd);
   const bloqueos = rBloq.bloqueos;
   const violaciones = [];
 
@@ -73,7 +79,8 @@ export async function closeViolations({ api, mes, anio, residentes, asignaciones
     violaciones.push(...validateResidencyYearClose(buildYearCloseContext({
       mes, anio, residentes, bloqueos,
       historicas: previas.filter((a) => a.fecha >= desdeAnual),
-      asignacionesDelMes,
+      // Las del mes son las de la pantalla; las del mes siguiente, del store, solo como lookahead.
+      asignacionesDelMes: [...asignacionesDelMes, ...siguientes],
       festivos: rFest.festivos,
     })));
   }
