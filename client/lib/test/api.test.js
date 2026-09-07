@@ -211,3 +211,38 @@ test("callBackend espera entre intentos, y con backoff creciente", async () => {
   assert.equal(esperas.length, 2);
   assert.ok(esperas[1] > esperas[0], `el backoff debe crecer: ${JSON.stringify(esperas)}`);
 });
+
+// ── sesión rechazada por el servidor (2026-09-04) ──
+import { isSessionError } from "../api.js";
+
+test("isSessionError reconoce SOLO los rechazos de sesión de router.js:authed", () => {
+  for (const e of ["sesión expirada", "sesión firma", "sesión formato", "sesión payload"]) assert.equal(isSessionError(e), true, e);
+  for (const e of ["solo el Responsable puede validar el cuadrante", "sesión caducada de otra cosa", "", undefined, "el token no identifica a ningún residente (¿es un token de alta?)"]) assert.equal(isSessionError(e), false, String(e));
+});
+
+test("makeApi avisa por onSessionInvalid cuando el servidor rechaza la sesión, y devuelve igualmente la respuesta", async () => {
+  const fetchImpl = fakeFetch(200, { ok: false, error: "sesión expirada" });
+  const avisos = [];
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "tok-viejo", onSessionInvalid: (e) => avisos.push(e) });
+  const r = await api.listResidentes();
+  assert.equal(r.ok, false);
+  assert.deepEqual(avisos, ["sesión expirada"]);
+});
+
+test("makeApi NO avisa por un rechazo de negocio ni por un fallo de transporte", async () => {
+  const avisos = [];
+  const api1 = makeApi("https://exec.example/x", { fetchImpl: fakeFetch(200, { ok: false, error: "solo el Responsable puede validar el cuadrante" }), getSession: () => "tok", onSessionInvalid: (e) => avisos.push(e) });
+  await api1.marcarValidado(2027, 7);
+  const api2 = makeApi("https://exec.example/x", { fetchImpl: fakeFetch(500, {}), getSession: () => "tok", onSessionInvalid: (e) => avisos.push(e) });
+  await api2.whoami();
+  assert.deepEqual(avisos, []);
+});
+
+test("generarCuadranteIA manda el modo (completar por defecto) — decisión V-47", async () => {
+  const fetchImpl = fakeFetch(200, { ok: true });
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "tok" });
+  await api.generarCuadranteIA(2027, 7);
+  assert.equal(JSON.parse(fetchImpl.calls[0].init.body).modo, "completar");
+  await api.generarCuadranteIA(2027, 7, "reemplazar");
+  assert.equal(JSON.parse(fetchImpl.calls[1].init.body).modo, "reemplazar");
+});

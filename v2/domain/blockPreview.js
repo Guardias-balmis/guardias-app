@@ -42,6 +42,8 @@ import { absences, AUSENCIA_SIMULTANEA } from "./absences.js";
 
 const MESES_VENTANA_BLOQUEANTE = 3;
 const TECHO_INV2 = 6;
+// Días de un mes medio: la carga se mide POR MES, que es la unidad del techo de INV-2.
+const DIAS_MES_MEDIO = 30.44;
 const CONCENTRACION_MAX = 2;
 
 const err = (tipo, detalle, extra = {}) => ({ tipo, severidad: "error", detalle, ...extra });
@@ -149,13 +151,19 @@ export function previewBloqueoRisk(nuevo, { residentes, bloqueosActivos, today }
       : aviso("IMPOSIBILIDAD", `${detalle} (fuera de la ventana de 3 meses: no bloquea, puede resolverse antes)`, { fecha: diaImposible }));
   }
 
-  // 2. Sobrecarga (espejo INV-2) — siempre aviso. Días del periodo que el grupo debe cubrir
-  // (uno por día) divididos entre los que quedarían disponibles en el peor día del periodo.
+  // 2. Sobrecarga (espejo INV-2) — siempre aviso. El grupo cubre UNA guardia por día, así que
+  // los días del periodo que caen en un mismo mes se reparten entre los disponibles del peor día:
+  // eso es lo que cada uno carga DE MÁS ese mes, y se compara con el techo mensual de INV-2. Un
+  // periodo más largo que un mes no carga más por mes —cada mes se reparten sus ~30 días—, de ahí
+  // el tope a los días de un mes. Antes se dividían los días del periodo ENTERO entre los
+  // disponibles y se comparaba eso con «6/mes» (corregido el 2026-09-04): una rotación de tres
+  // meses con seis Mayores libres daba «15,3 > 6» cuando la carga real es ~5 al mes, y cualquier
+  // ausencia de más de cinco semanas avisaba, la absorbiera el grupo o no.
   if (minDisponibles > 0) {
-    const promedio = dias.length / minDisponibles;
-    if (promedio > TECHO_INV2) {
+    const porMes = Math.min(dias.length, DIAS_MES_MEDIO) / minDisponibles;
+    if (porMes > TECHO_INV2) {
       riesgos.push(aviso("SOBRECARGA",
-        `${dias.length} día(s) del periodo repartidos entre ${minDisponibles} residente(s) disponible(s): ${promedio.toFixed(1)} de media, por encima del techo de ${TECHO_INV2}/mes`,
+        `Con ${minDisponibles} residente(s) disponible(s) en el peor día del periodo (${dias.length} día(s)), a cada uno le tocarían ${porMes.toFixed(1)} guardias en un mes, por encima del techo de ${TECHO_INV2}/mes`,
         { diasPeriodo: dias.length, disponibles: minDisponibles }));
     }
   }

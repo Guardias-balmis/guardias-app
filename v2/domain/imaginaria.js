@@ -18,6 +18,7 @@
 
 import { addDays } from "./calendar.js";
 import { groupOnDate, levelOn, periodsOfResident } from "./residents.js";
+import { absences } from "./absences.js";
 
 const GUARDIA = new Set(["G", "GF", "GP"]); // el 3P no ocupa puesto obligatorio
 
@@ -46,15 +47,24 @@ export function isEligibleForImaginaria(residente, grupo, fecha) {
  * comprometer el descanso previo a esa guardia), y a quien tenga guardia la propia noche de la
  * incidencia. Tampoco está en la normativa: práctica real del servicio (V-20).
  *
+ * Y se aparta a quien tenga una AUSENCIA registrada ese día (2026-09-04): a quien está de baja no
+ * se le puede exigir una guardia (el fundamento de INV-5), y quien está de vacaciones o rotando
+ * fuera no está en el hospital para cogerla. Sin esto la lista proponía llamar primero a quien
+ * llevaba un mes de baja, justo en el único momento en que la herramienta se usa (las ocho de la
+ * mañana con un puesto sin cubrir).
+ *
  * @param {object} p
  *   - residentes, coberturas: filas de `imaginaria` (solo las activas), asignaciones
+ *   - bloqueos: filas de `bloqueos` (las activas las filtra `absences`, V-19); opcional
  *   - grupo: "MAYOR" | "PEQUENO" — el del puesto que hay que cubrir
  *   - fechaIncidencia: ISO
  * @returns {{residenteId:string, ultimaCobertura:string|null, apartadoPor:string|null}[]}
  *   TODA la lista elegible, en orden, con el motivo de quien queda apartado — la pantalla
  *   enseña a quién llamar y también a quién no, que es lo que evita la llamada inútil.
  */
-export function imaginariaQueue({ residentes = [], coberturas = [], asignaciones = [], grupo, fechaIncidencia }) {
+const AUSENCIA_LABEL = { BAJA: "está de baja", VACACIONES: "está de vacaciones", ROTACION: "está de rotación externa" };
+
+export function imaginariaQueue({ residentes = [], coberturas = [], asignaciones = [], bloqueos = [], grupo, fechaIncidencia }) {
   const vispera = addDays(fechaIncidencia, -1);
   const siguiente = addDays(fechaIncidencia, 1);
 
@@ -66,17 +76,22 @@ export function imaginariaQueue({ residentes = [], coberturas = [], asignaciones
   }
 
   const guardiaEn = (id, fecha) => asignaciones.some((a) => a.residenteId === id && a.fecha === fecha && GUARDIA.has(a.codigo));
+  const ausenciaEn = (id) => absences(bloqueos, { residenteId: id, fecha: fechaIncidencia })[0] || null;
 
   return residentes
     .filter((r) => isEligibleForImaginaria(r, grupo, fechaIncidencia))
-    .map((r) => ({
-      residenteId: r.id,
-      ultimaCobertura: ultimaPorResidente.get(r.id) || null,
-      apartadoPor: guardiaEn(r.id, fechaIncidencia) ? "tiene guardia esa misma noche"
-        : guardiaEn(r.id, vispera) ? `tiene guardia el día anterior (${vispera})`
-          : guardiaEn(r.id, siguiente) ? `tiene guardia el día siguiente (${siguiente})`
-            : null,
-    }))
+    .map((r) => {
+      const ausencia = ausenciaEn(r.id);
+      return {
+        residenteId: r.id,
+        ultimaCobertura: ultimaPorResidente.get(r.id) || null,
+        apartadoPor: ausencia ? (AUSENCIA_LABEL[ausencia.motivo] || `tiene una ausencia registrada (${ausencia.motivo})`)
+          : guardiaEn(r.id, fechaIncidencia) ? "tiene guardia esa misma noche"
+            : guardiaEn(r.id, vispera) ? `tiene guardia el día anterior (${vispera})`
+              : guardiaEn(r.id, siguiente) ? `tiene guardia el día siguiente (${siguiente})`
+                : null,
+      };
+    })
     .sort((a, b) => {
       // Los apartados van al final, pero se devuelven: la pantalla dice por qué no se les llama.
       if (!a.apartadoPor !== !b.apartadoPor) return a.apartadoPor ? 1 : -1;

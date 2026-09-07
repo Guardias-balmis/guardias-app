@@ -8,11 +8,18 @@
 // (informativo, no bloquea).
 import { COLOR, S } from "./client/lib/design-tokens.js";
 import { datesOfMonth, weekday, compareISO, addDays, toISO, addMonths } from "./v2/domain/calendar.js";
+import { rangoValido } from "./client/lib/fechas.js";
 import { puedeMoverCiclo, esAccesoDesarrollador } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 const { Card, SectionTitle, Btn, Aviso } = window.UI;
+
+/** Las fechas de `fechasEvitar` que pertenecen al mes en pantalla (las demás no se ven ni se mandan). */
+function fechasDelMes(lista, anio, mes) {
+  const prefijo = `${anio}-${String(mes).padStart(2, "0")}-`;
+  return (Array.isArray(lista) ? lista : []).filter((f) => typeof f === "string" && f.startsWith(prefijo));
+}
 
 const DEFAULT_PREFS = {
   maxGuardias: 5,
@@ -32,7 +39,10 @@ function nombreMesDe(anio, mes) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 function fechaEs(iso) {
-  return new Date(iso + "T00:00:00Z").toLocaleDateString("es-ES", { day: "numeric", month: "short", timeZone: "UTC" });
+  const d = new Date(iso + "T00:00:00Z");
+  // Una fecha ilegible se enseña tal cual (con el texto que hay en la hoja), nunca «Invalid Date».
+  if (Number.isNaN(d.getTime())) return `«${iso}»`;
+  return d.toLocaleDateString("es-ES", { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
 function Counter({ value, onChange, min, max, accent = COLOR.blue, bg = COLOR.bluePale }) {
@@ -84,7 +94,9 @@ function NuevoBloqueo({ anio, mes, onCreated, showToast, api, paraOtros, residen
   const [residenteId, setResidenteId] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const valido = desde && hasta && compareISO(desde, hasta) <= 0;
+  // `rangoValido` y no `compareISO` a pelo: mientras se teclea el año, el input emite "0002-09-04" y
+  // `parseISO` lanzaría EN EL RENDER, desmontando la app entera (ver client/lib/fechas.js).
+  const valido = rangoValido(desde, hasta);
   const ajena = paraOtros && residenteId && residenteId !== miId;
 
   const crear = async () => {
@@ -286,23 +298,37 @@ function PrefsScreen() {
   // siempre que no bloquean (si bloquearan, la llamada habría fallado con ok:false y nunca
   // habríamos llegado a onCreated), pero antes nadie los mostraba — se calculaban y se tiraban.
   const [riesgosUltimoBloqueo, setRiesgosUltimoBloqueo] = useState([]);
-  // Días que `crearBloqueo` NO pudo marcar solo en la rejilla (V-48): ya tenían un código puesto
+  // Días que `crearBloqueo` NO pudo marcar solo en la rejilla (V-49): ya tenían un código puesto
   // o el mes está publicado. Se avisa para que quien registró la ausencia sepa que esos días hay
   // que revisarlos a mano — la marca automática nunca pisa una asignación real ni un mes cerrado.
   const [diasSinMarcar, setDiasSinMarcar] = useState([]);
+  // `cancelando` deshabilita los botones de «Cancelar» mientras la petición está en vuelo: un doble
+  // toque (fácil en el móvil con la latencia de Apps Script) mandaba `cancelarBloqueo` dos veces y,
+  // con las dos recargas que dispara cada respuesta, seis idas y vueltas donde bastan tres.
+  // Declarado AQUÍ, con los demás hooks y ANTES del `return` temprano de «Cargando tu residente…»:
+  // declararlo después (2026-09-04, un día en producción) hacía que el render que llegaba con la
+  // lista de residentes tuviera un hook más que el anterior — error #310 de React y la app en
+  // blanco para quien recargaba y entraba en Preferencias antes de que respondiera Apps Script.
+  const [cancelando, setCancelando] = useState(null);
   const puedoRegistrarAjenas = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador: esAccesoDesarrollador(myResidente?.email) });
 
+  // El mes que está en pantalla, para tirar las respuestas de un mes anterior que lleguen tarde:
+  // con dos flechas seguidas, los bloqueos de agosto podían pintarse sobre septiembre.
+  const mesEnPantallaRef = useRef(`${anio}-${mes}`);
+  mesEnPantallaRef.current = `${anio}-${mes}`;
   const cargarBloqueos = async () => {
+    const pedido = `${anio}-${mes}`;
     const r = await api.misBloqueos(anio, mes);
-    if (r.ok) setBloqueos(r.bloqueos);
+    if (r.ok && mesEnPantallaRef.current === pedido) setBloqueos(r.bloqueos);
   };
   // Las ajenas solo las ve quien puede registrarlas: si no, esta pantalla pasaría de ser "mis
   // preferencias" a un tablón de las ausencias de todo el equipo. Y sin esta lista, quien
   // registra la baja de otro no vería nunca el resultado ni podría corregir una equivocación.
   const cargarAjenas = async () => {
     if (!puedoRegistrarAjenas) { setAjenas([]); return; }
+    const pedido = `${anio}-${mes}`;
     const r = await api.listBloqueos(anio, mes);
-    if (r.ok) setAjenas(r.bloqueos.filter((b) => b.residenteId !== myResidente?.id));
+    if (r.ok && mesEnPantallaRef.current === pedido) setAjenas(r.bloqueos.filter((b) => b.residenteId !== myResidente?.id));
   };
 
   useEffect(() => {
@@ -310,11 +336,17 @@ function PrefsScreen() {
     let cancelled = false;
     (async () => {
       app.setLoading(true);
+      // Al cambiar de mes se parte de cero ANTES de que responda el servidor: si no, un Guardar
+      // rápido mandaba las `fechasEvitar` del mes anterior con el mes nuevo.
+      setPrefs({ ...DEFAULT_PREFS });
       const [rPrefs, , rEstado] = await Promise.all([api.misPreferencias(anio, mes), cargarBloqueos(), api.estadoCuadrante(anio, mes)]);
       if (cancelled) return;
       // Un fallo aquí solo esconde el selector de ausencia ajena: no se asume el permiso.
       setSinResponsable(rEstado.ok ? rEstado.sinResponsable === true : false);
-      if (rPrefs.ok) setPrefs(rPrefs.prefs ? { ...DEFAULT_PREFS, ...rPrefs.prefs } : { ...DEFAULT_PREFS });
+      // Solo las fechas DEL MES: una fila legada con una fecha de otro mes (escrita por un servidor
+      // anterior a la validación) no se ve en la rejilla, no se puede quitar, y el servidor nuevo
+      // rechazaría cada Guardar por ella — sin salida desde la app.
+      if (rPrefs.ok) setPrefs(rPrefs.prefs ? { ...DEFAULT_PREFS, ...rPrefs.prefs, fechasEvitar: fechasDelMes(rPrefs.prefs.fechasEvitar, anio, mes) } : { ...DEFAULT_PREFS });
       else showToast("Error cargando preferencias: " + rPrefs.error, "err");
       app.setLoading(false);
     })();
@@ -356,8 +388,13 @@ function PrefsScreen() {
 
   // Fechas ya cubiertas por CUALQUIER bloqueo (vacaciones/rotación/baja): no tiene sentido
   // marcarlas también como "a evitar" — ya son una ausencia conocida y registrada.
+  // Un bloqueo con la fecha ilegible (tecleada en la hoja; `misBloqueos` lo devuelve a propósito
+  // para que se pueda cancelar, V-22) no entra aquí: `compareISO` lanzaría y la pantalla entera
+  // se quedaría en blanco — justo la única desde la que se puede cancelar esa fila.
   const fechasBloqueadas = new Set();
+  const fechaLegible = (iso) => { try { compareISO(iso, iso); return true; } catch { return false; } };
   for (const b of bloqueos) {
+    if (!fechaLegible(b.desde) || !fechaLegible(b.hasta)) continue;
     for (const f of datesOfMonth(anio, mes)) {
       if (compareISO(b.desde, f) <= 0 && compareISO(f, b.hasta) <= 0) fechasBloqueadas.add(f);
     }
@@ -366,7 +403,7 @@ function PrefsScreen() {
   const guardar = async () => {
     setSaving(true);
     setSaved(false);
-    const r = await api.guardarPreferencias(anio, mes, prefs);
+    const r = await api.guardarPreferencias(anio, mes, { ...prefs, fechasEvitar: fechasDelMes(prefs.fechasEvitar, anio, mes) });
     setSaving(false);
     if (r.ok) {
       showToast("Preferencias guardadas ✓");
@@ -378,7 +415,10 @@ function PrefsScreen() {
   };
 
   const cancelarBloqueo = async (id) => {
+    if (cancelando !== null) return;
+    setCancelando(id);
     const r = await api.cancelarBloqueo(id);
+    setCancelando(null);
     if (r.ok) { showToast("Bloqueo cancelado"); cargarBloqueos(); cargarAjenas(); }
     else showToast("Error cancelando: " + r.error, "err");
   };
@@ -406,6 +446,18 @@ function PrefsScreen() {
         preferencias del mes en curso y de los siguientes, una por una — recordá guardar antes de
         cambiar de mes.
       </div>
+
+      {/* Decisión V-47: lo que ya está comprometido no es una preferencia, es una guardia, y va a
+          la rejilla — desde aquí solo se señala el camino, para que nadie lo escriba en «Notas»
+          esperando que el generador lo lea. */}
+      <Card title="📌 Guardias que ya tengo acordadas" accent={COLOR.blueDark}>
+        <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
+          Si ya tienes guardias comprometidas para este mes (cambios acordados, días fijados con
+          el servicio), ponlas directamente en <b>tu fila del cuadrante</b> y guarda. El generador
+          con IA las respeta tal cual y reparte solo el resto.
+        </div>
+        <Btn onClick={() => setTab("calendar")} color={COLOR.bluePale} textColor={COLOR.blueDark}>Ponerlas en el cuadrante →</Btn>
+      </Card>
 
       <Card title="🎯 Guardias que quiero hacer este mes" accent={COLOR.turquoise}>
         <Counter value={prefs.maxGuardias} min={tieneAusenciaEsteMes ? 0 : 4} max={6} onChange={set("maxGuardias")} accent={COLOR.turquoise} bg={COLOR.turquoiseLight} />
@@ -444,7 +496,7 @@ function PrefsScreen() {
                     {b.provincia ? ` · ${b.provincia}` : ""}
                     {!esBaja && <span style={{ fontWeight: 600 }}> · no bloquea</span>}
                   </div>
-                  <button onClick={() => cancelarBloqueo(b.id)} style={{ ...S.smallBtn, background: "#fff", color }}>Cancelar</button>
+                  <button onClick={() => cancelarBloqueo(b.id)} disabled={cancelando !== null} style={{ ...S.smallBtn, background: "#fff", color, opacity: cancelando !== null ? 0.6 : 1 }}>Cancelar</button>
                 </div>
               );
             })}
@@ -470,7 +522,7 @@ function PrefsScreen() {
                       <b>{quien ? quien.nombre : b.residenteId}</b> · {MOTIVO_LABEL[b.motivo] || b.motivo} ·{" "}
                       {fechaEs(b.desde)} – {fechaEs(b.hasta)}
                     </div>
-                    <button onClick={() => cancelarBloqueo(b.id)} style={{ ...S.smallBtn, background: "#fff", color }}>Cancelar</button>
+                    <button onClick={() => cancelarBloqueo(b.id)} disabled={cancelando !== null} style={{ ...S.smallBtn, background: "#fff", color, opacity: cancelando !== null ? 0.6 : 1 }}>Cancelar</button>
                   </div>
                 );
               })}

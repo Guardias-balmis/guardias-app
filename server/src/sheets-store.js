@@ -19,7 +19,24 @@ import { TABLES, headerOf, recordToRow, rowsToRecords } from "./sheets-schema.js
 
 const TMP_PREFIX = "_tmp_";
 
-export function makeStore({ ss, withLock, newId }) {
+export function makeStore({ ss, withLock: withLockCrudo, newId }) {
+  // El lock, REENTRANTE por ejecución (2026-09-04): `transaction(fn)` lo coge para que una
+  // comprobación y su escritura sean atómicas, y las escrituras de dentro de `fn` vuelven a pedirlo.
+  // Con el `LockService` de Apps Script un `waitLock` anidado sobre el mismo lock esperaría a sí
+  // mismo hasta agotar los 30 s y lanzaría, así que la reentrada se resuelve AQUÍ, en código
+  // probado, y no en `Code.gs`: así el adaptador impuro no cambia y un despliegue que repegue solo
+  // `server-lib.gs` (como manda CLAUDE.md para los cambios de dominio) no puede dejar el lock
+  // colgado. `dentro` es local a este store, que en Apps Script se construye por petición
+  // (`deps_()`), así que no se comparte entre ejecuciones concurrentes.
+  let dentro = false;
+  const withLock = (fn) => {
+    if (dentro) return fn();
+    return withLockCrudo(() => {
+      dentro = true;
+      try { return fn(); } finally { dentro = false; }
+    });
+  };
+
   function table(nameOrTable) {
     const t = typeof nameOrTable === "string" ? TABLES[nameOrTable] : nameOrTable;
     if (!t) throw new Error(`tabla desconocida: ${nameOrTable}`);
@@ -95,5 +112,20 @@ export function makeStore({ ss, withLock, newId }) {
     });
   }
 
-  return { appendRecord, appendRecords, readRecords, readLatest, rebuildSheet };
+  /**
+   * Ejecuta `fn` con el lock de escritura cogido, para que una comprobación y la escritura que
+   * depende de ella sean atómicas frente a otros escritores (2026-09-04). Sin esto, `marcarValidado`
+   * leía el mes, lo validaba y escribía VALIDADO en tres pasos entre los que otro residente podía
+   * guardar una celda: el mes quedaba VALIDADO con una guardia que nadie validó. Lo mismo con dos
+   * sorteos del Responsable a la vez (dos mandatos para el mismo periodo).
+   *
+   * Las escrituras de dentro (`appendRecords`, `rebuildSheet`) vuelven a pedir el lock, y la
+   * reentrada la resuelve el `withLock` de arriba: el lock real de Apps Script se coge UNA vez por
+   * transacción. No se coge para leer suelto: solo para leer-y-escribir junto.
+   */
+  function transaction(fn) {
+    return withLock(fn);
+  }
+
+  return { appendRecord, appendRecords, readRecords, readLatest, rebuildSheet, transaction };
 }

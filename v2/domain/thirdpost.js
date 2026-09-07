@@ -15,7 +15,7 @@
 // INV-8 sigue exigiendo la confirmación explícita de la UI.
 
 import { weekday, compareISO, addDays, addMonths, addYears, datesOfMonth } from "./calendar.js";
-import { levelOn, periodsOfResident } from "./residents.js";
+import { levelOn, periodsOfResident, closingPeriodOn } from "./residents.js";
 
 const aviso = (detalle, extra = {}) => ({ invariante: "INV-8", severidad: "aviso", detalle, ...extra });
 
@@ -206,13 +206,15 @@ export function thirdPostHistoryStart(voluntarios3P = [], residentes = [], mes, 
   return min;
 }
 
-/** Si el residente cierra un año de residencia dentro de [mes/anio], devuelve la ventana [inicio, cierre]. */
+/**
+ * Si el residente cierra un año de residencia dentro de [mes/anio], devuelve la ventana [inicio,
+ * cierre]. Es la misma definición que usa el cierre anual de INV-3 (`residents.js:closingPeriodOn`,
+ * 2026-09-04): antes se calculaba aquí sobre el aniversario NOMINAL, ignorando los periodos
+ * editados de la nota [a] y la `fechaFin` real, y un R2 con la promoción retrasada cerraba su año
+ * en mayo para INV-8c y en junio para INV-3.
+ */
 function closingWindowThisMonth(r, mes, anio) {
-  for (let k = 1; k <= 4; k++) {
-    const cierre = addDays(addYears(r.fechaInicio, k), -1);
-    if (inMonth(cierre, mes, anio)) return { start: addYears(r.fechaInicio, k - 1), end: cierre };
-  }
-  return null;
+  return closingPeriodOn(r, mes, anio);
 }
 
 function countThirdPostInWindow(id, historial3P, thisMonth3P, win) {

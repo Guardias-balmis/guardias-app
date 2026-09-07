@@ -241,3 +241,23 @@ test("residenteId desconocido lanza, no falla en silencio", () => {
     { residentes: RESIDENTES, bloqueosActivos: [], today: "2026-01-01" },
   ), /residenteId desconocido/);
 });
+
+// ── 2026-09-04: la sobrecarga se mide por MES ──
+test("sobrecarga: una rotación de tres meses con seis disponibles NO avisa (≈5 guardias/mes), y con cuatro disponibles sí", () => {
+  const muchos = [
+    ...["a", "b", "c", "d", "e", "f", "g"].map((x) => ({ id: `r3${x}`, fechaInicio: "2024-05-27", fechaFin: "2028-05-26" })),
+    { id: "r2a", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" },
+  ];
+  const sin = previewBloqueoRisk(
+    { residenteId: "r3a", desde: "2026-10-01", hasta: "2026-12-31", motivo: "ROTACION" },
+    { residentes: muchos, bloqueosActivos: [], today: "2026-09-04" },
+  );
+  assert.equal(sin.riesgos.some((x) => x.tipo === "SOBRECARGA"), false, "92 días entre 6 disponibles son ~5 al mes: dentro del techo");
+  const con = previewBloqueoRisk(
+    { residenteId: "r3a", desde: "2026-10-01", hasta: "2026-12-31", motivo: "ROTACION" },
+    { residentes: muchos, bloqueosActivos: [b("r3b", "2026-10-01", "2026-12-31", "ROTACION"), b("r3c", "2026-10-01", "2026-12-31", "ROTACION")], today: "2026-09-04" },
+  );
+  const sobre = con.riesgos.find((x) => x.tipo === "SOBRECARGA");
+  assert.ok(sobre, "con 4 disponibles son 7,6 al mes");
+  assert.match(sobre.detalle, /7\.6 guardias en un mes/);
+});

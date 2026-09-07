@@ -106,3 +106,26 @@ test("el nivel se deriva a la fecha de la incidencia, no a hoy", () => {
   assert.equal(isEligibleForImaginaria(EVA, "PEQUENO", "2026-10-21"), false);
   assert.equal(isEligibleForImaginaria(EVA, "PEQUENO", "2027-10-21"), true);
 });
+
+// ── 2026-09-04: las ausencias apartan de la cola ──
+import { imaginariaQueue as iq2 } from "../imaginaria.js";
+
+test("quien está de baja (o de vacaciones/rotación) ese día queda apartado con el motivo, no el primero de la lista", () => {
+  const residentes = [
+    { id: "r3a", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" },
+    { id: "r3b", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" },
+    { id: "r3c", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" },
+  ];
+  const bloqueos = [
+    { residenteId: "r3a", desde: "2026-10-01", hasta: "2026-10-31", motivo: "BAJA", activo: true },
+    { residenteId: "r3b", desde: "2026-10-10", hasta: "2026-10-10", motivo: "VACACIONES", activo: true },
+    { residenteId: "r3c", desde: "2026-10-10", hasta: "2026-10-12", motivo: "ROTACION", activo: false }, // cancelada: no aparta
+  ];
+  const cola = iq2({ residentes, coberturas: [], asignaciones: [], bloqueos, grupo: "MAYOR", fechaIncidencia: "2026-10-10" });
+  assert.equal(cola[0].residenteId, "r3c");
+  assert.equal(cola[0].apartadoPor, null);
+  assert.equal(cola.find((x) => x.residenteId === "r3a").apartadoPor, "está de baja");
+  assert.equal(cola.find((x) => x.residenteId === "r3b").apartadoPor, "está de vacaciones");
+  // Sin `bloqueos` (invocadores viejos) todo sigue igual que antes.
+  assert.equal(iq2({ residentes, coberturas: [], asignaciones: [], grupo: "MAYOR", fechaIncidencia: "2026-10-10" })[0].apartadoPor, null);
+});

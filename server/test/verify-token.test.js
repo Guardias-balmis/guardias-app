@@ -99,3 +99,11 @@ test("sin consumeNonce (nonce no exigido) valida el resto igualmente", () => {
   const r = verifyTokeninfo(claims, { clientId: CLIENT_ID, now: NOW });
   assert.equal(r.ok, true);
 });
+
+test("un error de tokeninfo (HTTP 4xx: token caducado o inválido) se rechaza con un mensaje que dice qué hacer, sin culpar a Google", () => {
+  const r = verifyTokeninfo({ error: "invalid_token", error_description: "Invalid Value" }, { clientId: CLIENT_ID, now: NOW });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /ha caducado.*Invalid Value.*vuelve a pulsar/);
+  // Sin descripción, el código de error basta; y un token normal con `aud` no entra por aquí.
+  assert.match(verifyTokeninfo({ error: "invalid_token", status: 400 }, { clientId: CLIENT_ID, now: NOW }).reason, /invalid_token/);
+});

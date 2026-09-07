@@ -101,7 +101,8 @@ test("editarResidente corrige fechaFin y el cambio se ve en listResidentes (appe
   assert.equal(r.ok, true);
   assert.equal(residenteDe(deps, session, "r-nuevo").fechaFin, "2031-05-24");
   // La fila vieja sigue en la tabla: el historial no se borra nunca.
-  assert.equal(deps.ss._rows("residentes").filter((f) => f[0] === "r-nuevo").length, 2);
+  // (`f[0]` lleva el apóstrofe con que se escribe todo texto; el fake no lo despoja como Sheets.)
+  assert.equal(deps.ss._rows("residentes").filter((f) => String(f[0]).replace(/^'/, "") === "r-nuevo").length, 2);
 });
 
 test("editarResidente NO toca el email: es la llave del login", () => {

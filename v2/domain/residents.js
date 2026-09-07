@@ -126,3 +126,28 @@ export function validateTrainingPeriods(periods) {
   }
   return errors;
 }
+
+/**
+ * La ventana [inicio, cierre] del año de residencia que TERMINA dentro de `mes/anio`, o null si
+ * ese mes no cierra ninguno. ÚNICA definición (2026-09-04): `equity.js` la tenía sobre
+ * `periodsOfResident` y `thirdpost.js` sobre el aniversario nominal, así que con unos periodos
+ * editados (nota [a]) el mismo residente cerraba su año en un mes para INV-3 y en otro para INV-8
+ * — justo la incoherencia entre módulos que V-24 vino a quitar.
+ *
+ * Dos casos que NO cierran nada, a propósito:
+ *  - Quien dejó la residencia antes del fin nominal (`fechaFin` dentro de R2, digamos): sus
+ *    periodos R2/R3 derivados siguen «terminando» en mayo, pero ya no estaba — compararlo con su
+ *    cohorte daría ceros contra guardias reales en todos los ejes, dos mayos seguidos.
+ *  - Una ventana invertida (inicio > fin), que es lo que le queda a ese mismo residente como R4:
+ *    `tally` no contaría nada en ella y saldrían los mismos ceros.
+ */
+export function closingPeriodOn(residente, mes, anio) {
+  const periodos = periodsOfResident(residente);
+  const finReal = periodos[periodos.length - 1].end;
+  const prefijo = `${anio}-${String(mes).padStart(2, "0")}`;
+  const p = periodos.find((per) => String(per.end).startsWith(prefijo));
+  if (!p) return null;
+  if (compareISO(p.end, finReal) > 0) return null;
+  if (compareISO(p.start, p.end) > 0) return null;
+  return { start: p.start, end: p.end };
+}

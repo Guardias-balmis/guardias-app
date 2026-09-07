@@ -170,3 +170,97 @@ test("ejecutarSorteoResponsable sí lo puede lanzar un Mayor cuando no hay Respo
   assert.equal(r.ok, true);
   assert.equal(deps.store.readRecords("responsables").length, 1);
 });
+
+// ── login/alta devuelven la lista de residentes; el alta valida fechas (2026-09-04) ──
+
+test("login devuelve además la lista de residentes (la misma que listResidentes), para ahorrar una ida y vuelta al arrancar", () => {
+  const deps = makeDeps();
+  const r = loginComo(deps, "ana@gmail.com");
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.residentes, call({ action: "listResidentes", session: r.session }, deps).residentes);
+});
+
+test("el alta rechaza fechas que no son ISO: una fecha ilegible en `residentes` deja en blanco todas las pantallas del equipo", () => {
+  const deps = makeDeps();
+  const pendingToken = loginComo(deps, "nueva@gmail.com").pendingToken;
+  assert.ok(pendingToken);
+  for (const [fechaInicio, fechaFin] of [["31/05/2026", "2030-05-24"], ["2026-05-25", "2030-02-30"], ["2030-05-24", "2026-05-25"]]) {
+    const r = call({ action: "altaResidente", pendingToken, nombre: "Nueva", fechaInicio, fechaFin }, deps);
+    assert.equal(r.ok, false, `${fechaInicio} → ${fechaFin}`);
+    assert.match(r.error, /fechas de residencia inválidas/);
+  }
+  assert.equal(deps.store.readRecords("residentes").length, 2, "no se escribió ninguna fila");
+});
+
+test("el alta rechaza un nombre en blanco y devuelve la lista con el recién dado de alta cuando todo va bien", () => {
+  const deps = makeDeps();
+  const pendingToken = loginComo(deps, "nueva@gmail.com").pendingToken;
+  assert.equal(call({ action: "altaResidente", pendingToken, nombre: "   ", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps).ok, false);
+  const r = call({ action: "altaResidente", pendingToken, nombre: "  Nueva Residente ", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(r.residente.nombre, "Nueva Residente");
+  assert.equal(r.residentes.length, 3);
+  assert.ok(r.residentes.some((x) => x.email === "nueva@gmail.com"));
+});
+
+// ── guardarPreferencias valida campo a campo (2026-09-04): la tabla es append-only y el prompt la lee literal ──
+
+test("guardarPreferencias rechaza maxGuardias no entero o fuera de 0-6, preferDobles fuera del enum, fechas de otro mes y notas gigantes", () => {
+  const deps = makeDeps();
+  const session = loginComo(deps, "ana@gmail.com").session;
+  const base = { maxGuardias: 5, preferDobles: "", fechasEvitar: [], notas: "" };
+  const casos = [
+    [{ ...base, maxGuardias: "abc" }, /maxGuardias/],
+    [{ ...base, maxGuardias: 7 }, /maxGuardias/],
+    [{ ...base, maxGuardias: 4.5 }, /maxGuardias/],
+    [{ ...base, preferDobles: "LUNES_MARTES" }, /preferDobles/],
+    [{ ...base, fechasEvitar: "2027-07-01" }, /fechasEvitar/],
+    [{ ...base, fechasEvitar: ["2027-08-01"] }, /no es un día de 7\/2027/],
+    [{ ...base, fechasEvitar: ["01/07/2027"] }, /fecha inválida/],
+    [{ ...base, notas: "x".repeat(501) }, /notas/],
+    [{ ...base, notas: { texto: "objeto" } }, /notas/],
+  ];
+  for (const [prefs, re] of casos) {
+    const r = call({ action: "guardarPreferencias", session, anio: 2027, mes: 7, prefs }, deps);
+    assert.equal(r.ok, false, JSON.stringify(prefs));
+    assert.match(r.error, re);
+  }
+  assert.equal(deps.store.readRecords("preferencias").length, 0, "nada escrito");
+});
+
+test("guardarPreferencias normaliza: campos ausentes a su valor neutro, fechas deduplicadas y ordenadas, notas recortadas", () => {
+  const deps = makeDeps();
+  const session = loginComo(deps, "ana@gmail.com").session;
+  const r = call({ action: "guardarPreferencias", session, anio: 2027, mes: 7, prefs: { fechasEvitar: ["2027-07-20", "2027-07-03", "2027-07-20"], notas: "  boda el 20  " } }, deps);
+  assert.equal(r.ok, true);
+  const mia = call({ action: "misPreferencias", session, anio: 2027, mes: 7 }, deps).prefs;
+  assert.deepEqual(mia.fechasEvitar, ["2027-07-03", "2027-07-20"]);
+  assert.equal(mia.notas, "boda el 20");
+  assert.equal(mia.preferDobles ?? "", "", "una celda vacía vuelve como undefined del store: equivale a «sin preferencia»");
+  assert.equal(mia.maxGuardias, undefined);
+});
+
+// ── guardarAsignaciones no deja entrar filas fantasma (2026-09-04) ──
+
+test("guardarAsignaciones rechaza un residenteId que no es de nadie y un puesto fuera del enum; el email con espacios en el Sheet sigue entrando", () => {
+  const deps = makeDeps();
+  const session = loginComo(deps, "ana@gmail.com").session;
+  let r = call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-01", residenteId: "no-existe", codigo: "G" }] }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /residenteId desconocido/);
+  r = call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-01", codigo: "G" }] }, deps);
+  assert.equal(r.ok, false);
+  r = call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-01", residenteId: ANA.id, codigo: "G", puesto: "JEFE" }] }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /puesto inválido/);
+  assert.equal(deps.store.readRecords("asignaciones").length, 0);
+  r = call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2027-07-01", residenteId: ANA.id, codigo: "G", puesto: "MAYOR" }] }, deps);
+  assert.equal(r.ok, true);
+
+  // Email con espacio al final en la hoja: antes el login no lo encontraba y el alta lo duplicaba.
+  const conEspacio = makeDeps();
+  conEspacio.store.appendRecord("residentes", { ...ANA, email: " ana@gmail.com " });
+  const login = loginComo(conEspacio, "ana@gmail.com");
+  assert.equal(login.ok, true, "entra");
+  assert.equal(login.residente.id, ANA.id);
+});
