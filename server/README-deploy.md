@@ -4,6 +4,24 @@
 > cuenta Google del servicio. Todo lo demás (dominio, auth, store, router) ya está probado en
 > Node (`npm test`). Estimado: ~30 min la primera vez.
 
+## Qué corre HOY en el `/exec`
+
+La pregunta que este runbook no sabía contestar y que hay que poder contestar antes de tocar nada:
+el editor de Apps Script enseña el HEAD del proyecto, que **no** es lo que sirve la implementación
+desplegada, así que «lo veo en el editor» nunca ha sido prueba de que esté vivo. Se anota aquí, a
+mano, cada vez que algo llega de verdad a producción.
+
+| Fecha | Qué se subió | Cómo | Decisiones que pasaron a estar vivas | Comprobado con |
+|---|---|---|---|---|
+| 2026-09-07 | `domain.gs` + `server-lib.gs` | pegado a mano + *Editar implementación → Nueva versión* | V-43, V-44, V-48, V-49, V-50, V-51 | El botón «Anular» de la tarjeta de Imaginaria aparece tras registrar una cobertura (es el campo `coberturas` de `colaImaginaria`, que solo devuelve el `server-lib.gs` nuevo) |
+
+`Code.gs` sigue en la versión del 2026-09-05 (V-47): no ha cambiado desde entonces.
+
+Con `domain.gs` y `server-lib.gs` al día no queda ningún cambio de backend pendiente de desplegar.
+Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
+`/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el
+cliente está hablando con un backend que ya no es este (DR-4).
+
 ## Piezas
 - `domain.gs` · núcleo de dominio (generado por `npm run build`, **no editar**).
 - `server-lib.gs` · auth/sesión/store/router (generado, **no editar**).
@@ -72,7 +90,7 @@
    `.clasp.json` (tiene el Script ID de un proyecto real) y `.clasprc.json` (credenciales de
    `clasp login`) están en `.gitignore` a propósito — cada quien despliega configura el suyo.
 
-## Despliegue del 2026-09-05 (V-47 y la revisión adversarial): `Code.gs` SÍ cambia
+## Despliegue del 2026-09-05 (V-47 y la revisión adversarial): `Code.gs` SÍ cambia ✅ hecho
 
 Esta vez hay que subir los **tres** ficheros, no solo los dos generados: `Code.gs` cambia en una
 sola función, `fetchTokeninfo_`, que deja de reintentar tres veces (1,2 s de esperas) ante un HTTP
@@ -82,7 +100,7 @@ sube solo (clasp empuja todo `server/`); pegando a mano, pega también `Code.gs`
 verificación E2E manual de abajo (login, y un login con un token caducado debe fallar rápido y con
 ese mensaje).
 
-## Despliegue del 2026-09-07 (V-48, INV-3 entre compañeros que cierran en meses distintos): `domain.gs` y `server-lib.gs`
+## Despliegue del 2026-09-07 (V-48, INV-3 entre compañeros que cierran en meses distintos): `domain.gs` y `server-lib.gs` ✅ hecho
 
 Cambio de dominio (`equity.js`: el cierre anual compara también con los compañeros de cohorte
 que cerraron ese mismo año meses antes; `residents.js`: `closingPeriodOn` devuelve `year`, nueva
@@ -95,7 +113,7 @@ tenga a otro que cerró antes; si el reparto entre los dos se pasa del ±1 en al
 dice «… cerró su año el YYYY-MM-DD» (si no se pasa, no hay aviso, y es lo normal). En el cliente
 sale ya sin desplegar nada, porque `Calendar.jsx` importa el dominio directamente.
 
-## Despliegue del 2026-09-07 (V-49, V-50 y V-51): solo `server-lib.gs`
+## Despliegue del 2026-09-07 (V-49, V-50 y V-51): solo `server-lib.gs` ✅ hecho
 
 Los tres cambios de este día van juntos y **ninguno toca el dominio ni `Code.gs`**: `router.js`,
 `sheets-schema.js` y `ai-prompt.js` se compilan los tres a `server-lib.gs`. Con `npm run deploy`
@@ -139,7 +157,7 @@ Script no), dos de los tres degradan solos y uno no: V-51 aguanta —el servidor
 pantalla ya ofrece los botones del ciclo al desarrollador y el servidor viejo los rechaza con «no
 tienes permiso» hasta que se pegue `server-lib.gs`.
 
-## Despliegue del 2026-09-07 (V-43 y V-44): solo `server-lib.gs`
+## Despliegue del 2026-09-07 (V-43 y V-44): solo `server-lib.gs` ✅ hecho
 
 `colaImaginaria` devuelve un campo nuevo, `coberturas` (las coberturas activas de esa incidencia,
 con su `id`), que es lo que permite anular una desde la app. Cambio de `router.js` únicamente: ni
