@@ -143,6 +143,10 @@ function App() {
     loadResidentes();
   }, [auth?.session]);
 
+  // Perfil de invitado (V-53): solo lectura. El servidor es quien lo impone (`authed`); esto solo
+  // decide qué se enseña — sin pestañas de edición ni de ajustes, que de todos modos fallarían.
+  const esInvitado = auth?.residente?.rol === "invitado";
+  const tabVisible = esInvitado && tab !== "home" && tab !== "calendar" ? "home" : tab;
   const myResidente = residentes.find((r) => r.id === auth?.residente?.id) || null;
   const nivel = myResidente ? levelOn(periodsOfResident(myResidente), todayISO()) : null;
   const grupo = groupOf(nivel);
@@ -152,7 +156,7 @@ function App() {
 
   const ctx = {
     api, auth, onLoggedIn, logout,
-    residentes, residentesIlegibles, residentesError, loadResidentes, myResidente, nivel, grupo, isResponsable, actualizaResponsable,
+    residentes, residentesIlegibles, residentesError, loadResidentes, myResidente, nivel, grupo, isResponsable, actualizaResponsable, esInvitado,
     loading, setLoading, showToast, cambiosSinGuardarRef,
     tab, setTab, mes, setMes, anio, setAnio,
   };
@@ -161,15 +165,15 @@ function App() {
     <AppCtx.Provider value={ctx}>
       <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: COLOR.gray }}>
         <Header />
-        <div key={!auth ? "login" : tab} className="gapp-rise" style={{ flex: 1, padding: "0 0 80px" }}>
+        <div key={!auth ? "login" : tabVisible} className="gapp-rise" style={{ flex: 1, padding: "0 0 80px" }}>
           {!auth ? React.createElement(window.Screens.Login) :
-            tab === "home" ? React.createElement(window.Screens.Home) :
-            tab === "prefs" ? React.createElement(window.Screens.Prefs) :
-            tab === "calendar" ? React.createElement(window.Screens.Calendar) :
-            tab === "settings" ? React.createElement(window.Screens.Settings) :
-            tab === "responsable" ? React.createElement(window.Screens.Responsable) :
-            tab === "datos-servicio" ? React.createElement(window.Screens.DatosServicio) :
-            tab === "residentes" ? React.createElement(window.Screens.Residentes) : null}
+            tabVisible === "home" ? React.createElement(window.Screens.Home) :
+            tabVisible === "prefs" ? React.createElement(window.Screens.Prefs) :
+            tabVisible === "calendar" ? React.createElement(window.Screens.Calendar) :
+            tabVisible === "settings" ? React.createElement(window.Screens.Settings) :
+            tabVisible === "responsable" ? React.createElement(window.Screens.Responsable) :
+            tabVisible === "datos-servicio" ? React.createElement(window.Screens.DatosServicio) :
+            tabVisible === "residentes" ? React.createElement(window.Screens.Residentes) : null}
         </div>
         {auth && <BottomNav />}
         {toast && <window.UI.Toast msg={toast.msg} type={toast.type} />}
@@ -179,7 +183,7 @@ function App() {
 }
 
 function Header() {
-  const { auth, logout, setTab, isResponsable } = useApp();
+  const { auth, logout, setTab, isResponsable, esInvitado } = useApp();
   return (
     <div style={{ background: COLOR.blueDark, color: "#fff", padding: "14px 16px 10px", position: "sticky", top: 0, zIndex: 100, boxShadow: "0 2px 8px rgba(0,0,0,0.2)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -187,13 +191,13 @@ function Header() {
           <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: 0.3 }}>🏥 Guardias · Dr. Balmis</div>
           {auth && (
             <div style={{ fontSize: 11, opacity: 0.75, marginTop: 1 }}>
-              {auth.residente.nombre}{isResponsable ? " · 📋 Responsable" : ""}
+              {auth.residente.nombre}{isResponsable ? " · 📋 Responsable" : ""}{auth.residente.rol === "invitado" ? " · solo lectura" : ""}
             </div>
           )}
         </div>
         {auth && (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button onClick={() => setTab("settings")} style={S.iconBtn}>⚙️</button>
+            {!esInvitado && <button onClick={() => setTab("settings")} style={S.iconBtn}>⚙️</button>}
             <button onClick={logout} style={S.iconBtn} title="Cerrar sesión">↩️</button>
           </div>
         )}
@@ -203,10 +207,10 @@ function Header() {
 }
 
 function BottomNav() {
-  const { tab, setTab } = useApp();
+  const { tab, setTab, esInvitado } = useApp();
   const items = [
     { id: "home", icon: "🏠", label: "Inicio" },
-    { id: "prefs", icon: "⚙️", label: "Preferencias" },
+    ...(esInvitado ? [] : [{ id: "prefs", icon: "⚙️", label: "Preferencias" }]),
     { id: "calendar", icon: "📅", label: "Cuadrante" },
   ];
   // Índice del tab activo entre los de la barra (puede ser -1 si `tab` es una pantalla

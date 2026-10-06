@@ -19,6 +19,8 @@ mano, cada vez que algo llega de verdad a producción.
 
 **Pendiente de desplegar (2026-10-06):** `server-lib.gs` con V-52 (solo administradores validan) y la memoización de lecturas del store. Hasta pegarlo y crear la «Nueva versión», el servidor sigue dejando validar a Responsable/Mayores aunque el cliente ya oculte el botón.
 
+**Pendiente de desplegar (V-53, perfil de invitado):** `server-lib.gs` **y `Code.gs`** (esta vez cambia el adaptador: añade `sendMail` con `MailApp`). Pasos: (1) pega `server-lib.gs` y `Code.gs`; (2) la primera vez, Apps Script pedirá **autorizar el permiso de envío de correo** (`script.send_mail`): en el editor ejecuta cualquier función (por ejemplo `doGet` si existe, o crea una temporal que llame a `MailApp.getRemainingDailyQuota()`) y acepta el aviso de permisos con la cuenta propietaria — sin ese paso el correo falla en silencio (la solicitud sigue apareciendo en Inicio del administrador); (3) *Implementar → Administrar implementaciones → Nueva versión*. La hoja `solicitudesInvitado` se crea sola al primer uso.
+
 Con `domain.gs` y `server-lib.gs` al día no queda ningún cambio de backend pendiente de desplegar.
 Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
 `/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el

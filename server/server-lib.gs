@@ -97,6 +97,11 @@ const TABLES = {
   // fila. `tipo` es el identificador que lee el dominio (no `INV-n`: un mismo invariante podría
   // en el futuro tener más de un tipo de excepción), y añadir uno nuevo exige cablearlo en
   // `validateMonth`/`buildMonthContext` para que tenga efecto — la tabla por sí sola no hace nada.
+  // Solicitudes de acceso como invitado (V-53). Append-only por `id` como el resto (la última fila
+  // gana): PENDIENTE → APROBADA | RECHAZADA → USADA. `solicitadoEn`/`decididoEn` son epoch en
+  // segundos (no `date`: la ventana de aprobación es de 5 minutos). Guarda el email de quien pidió
+  // entrar —es la traza de quién miró el cuadrante— pero NO crea ningún residente.
+  solicitudesInvitado: { name: "solicitudesInvitado", columns: [col("id"), col("email"), col("solicitadoEn", "number"), col("estado"), col("decididoPor"), col("decididoEn", "number")] },
   excepciones: { name: "excepciones", columns: [col("id"), col("tipo"), col("desde", "date"), col("hasta", "date"), col("justificacion"), col("registradaPor"), col("fecha", "date"), col("activo", "bool")] },
 };
 
@@ -1079,6 +1084,28 @@ function handleRequest(rawBody, deps) {
       case "altaResidente":
         return handleAlta(req, deps);
 
+      // Perfil de invitado (V-53): solo lectura, sin alta, y solo con la aprobación de un
+      // administrador dentro de los 5 minutos siguientes a la solicitud.
+      case "solicitarInvitado":
+        return handleSolicitarInvitado(req, deps);
+
+      case "estadoSolicitudInvitado":
+        return handleEstadoSolicitudInvitado(req, deps);
+
+      case "listSolicitudesInvitado":
+        return authed(req, deps, (session) => {
+          const denegado = requireValidarPermiso(deps, session, "gestionar las solicitudes de invitado");
+          if (denegado) return denegado;
+          return { ok: true, solicitudes: solicitudesPendientes(deps) };
+        });
+
+      case "resolverSolicitudInvitado":
+        return authed(req, deps, (session) => {
+          const denegado = requireValidarPermiso(deps, session, "gestionar las solicitudes de invitado");
+          if (denegado) return denegado;
+          return handleResolverInvitado(req, deps, session);
+        });
+
       case "whoami":
         return authed(req, deps, (session) => ({ ok: true, sub: session.sub, rol: session.rol }));
 
@@ -1100,7 +1127,7 @@ function handleRequest(rawBody, deps) {
         });
 
       case "listResidentes":
-        return authed(req, deps, () => ({ ok: true, residentes: allResidentes(deps) }));
+        return authed(req, deps, (session) => ({ ok: true, residentes: paraSesion(allResidentes(deps), session) }));
 
       // Corregir las fechas de un residente. Hasta ahora `fechaInicio`/`fechaFin` solo se escribían
       // en el alta (`handleAlta`) y no había forma de tocarlas después, lo que dejaba sin salida
@@ -2518,10 +2545,10 @@ function esAccesoDesarrollador(deps, session) {
  * servicio que depende de que alguien con un email concreto siga ahí incumple el criterio de
  * sobrevivir sin administrador, y nadie tendría que acordarse de retirarla.
  */
-function requireValidarPermiso(deps, session) {
-  if (deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return requireCicloPermiso(deps, session, "validar el cuadrante");
+function requireValidarPermiso(deps, session, accion = "validar el cuadrante") {
+  if (deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return requireCicloPermiso(deps, session, accion);
   if (esAccesoDesarrollador(deps, session)) return null;
-  return { ok: false, error: "por ahora solo los administradores pueden validar el cuadrante" };
+  return { ok: false, error: `por ahora solo los administradores pueden ${accion}` };
 }
 
 /**
@@ -2968,7 +2995,131 @@ function authed(req, deps, fn) {
   if (typeof s.payload.sub !== "string" || !s.payload.sub) {
     return { ok: false, error: "el token no identifica a ningún residente (¿es un token de alta?)" };
   }
+  // Perfil de invitado (V-53): por DEFECTO NEGADO. Lo que no está en `INVITADO_ACCIONES` se rechaza
+  // aquí, en el único sitio por el que pasa toda acción con sesión, en vez de añadir una guarda a
+  // cada `case` — una acción nueva (de escritura o de lectura sensible) queda cerrada al invitado
+  // sin que nadie tenga que acordarse de él.
+  if (s.payload.rol === ROL_INVITADO && !INVITADO_ACCIONES.has(req.action)) {
+    return { ok: false, error: "el perfil de invitado es de solo lectura" };
+  }
   return fn(s.payload);
+}
+
+// ── Perfil de invitado (V-53) ──────────────────────────────────────────────────────────────────
+// Pensado para tutores u otras personas que quieren MIRAR el cuadrante sin darse de alta. Se
+// pide con una cuenta de Google verificada (el `pendingToken` de un login con email no vinculado),
+// un administrador la aprueba en menos de 5 min y la sesión lleva `rol: "invitado"` firmado: el cliente no puede
+// ascenderse. No se crea ningún residente; solo queda la fila de la solicitud, y el email no viaja en el
+// token. Ve el cuadrante, el equipo y el estado del ciclo; NO ve ausencias (bajas médicas incluidas),
+// preferencias, imaginaria ni los emails de los residentes.
+const ROL_INVITADO = "invitado";
+const INVITADO_TTL = 2 * 60 * 60; // 2 h: una consulta, no una jornada
+const INVITADO_ACCIONES = new Set([
+  "whoami", "listResidentes", "listAsignaciones", "listAsignacionesRango", "listFestivosRango",
+  "estadoCuadrante", "estadoResponsable", "listResponsables",
+]);
+
+/** A un invitado se le quitan los emails de la lista de residentes; al resto se le deja igual. */
+function paraSesion(residentes, session) {
+  if (!session || session.rol !== ROL_INVITADO) return residentes;
+  return residentes.map(({ email, ...resto }) => resto);
+}
+
+const SOLICITUD_TTL = 300; // 5 min: lo que dura la solicitud para ser aprobada y canjeada
+
+/** Último estado de cada solicitud (append-only: la última fila de cada `id` gana). */
+function allSolicitudes(deps) {
+  return deps.store.readLatest("solicitudesInvitado", (r) => r.id);
+}
+
+/** Las que siguen PENDIENTES y dentro de su ventana de 5 min: lo que un administrador puede decidir. */
+function solicitudesPendientes(deps) {
+  return allSolicitudes(deps)
+    .filter((r) => r.estado === "PENDIENTE" && deps.now - r.solicitadoEn <= SOLICITUD_TTL)
+    .map((r) => ({ id: r.id, email: r.email, solicitadoEn: r.solicitadoEn, expiraEn: r.solicitadoEn + SOLICITUD_TTL }));
+}
+
+/**
+ * Pide entrar como invitado. La identidad ya está verificada con Google (el `pendingToken` solo lo
+ * emite un login que pasó aud/iss/email_verified/exp), pero NO basta para ver datos del servicio:
+ * un administrador tiene que aprobarla. Una petición pendiente del mismo email se reutiliza, para
+ * que pulsar el botón varias veces no inunde de correos a los administradores.
+ */
+function handleSolicitarInvitado(req, deps) {
+  const s = verifySession(req.pendingToken, { now: deps.now, secret: deps.sessionSecret, crypto: deps.crypto });
+  if (!s.valid || !s.payload.pending) return { ok: false, error: "pendingToken inválido o caducado" };
+  const email = s.payload.email;
+  return atomico(deps, () => {
+    let sol = allSolicitudes(deps).find((r) => r.email === email && r.estado === "PENDIENTE" && deps.now - r.solicitadoEn <= SOLICITUD_TTL);
+    if (!sol) {
+      const id = deps.store.appendRecord("solicitudesInvitado", { email, solicitadoEn: deps.now, estado: "PENDIENTE" });
+      sol = { id, email, solicitadoEn: deps.now };
+      avisarAdministradores(deps, email);
+    }
+    // El token de la solicitud solo sirve para preguntar por ELLA y canjearla: no es una sesión.
+    const solicitudToken = issueSession({ solicitud: sol.id, email }, {
+      now: deps.now, ttlSeconds: Math.max(1, sol.solicitadoEn + SOLICITUD_TTL - deps.now), secret: deps.sessionSecret, crypto: deps.crypto,
+    });
+    return { ok: true, solicitudToken, expiraEn: sol.solicitadoEn + SOLICITUD_TTL };
+  });
+}
+
+/**
+ * El correo es solo el AVISO: la aprobación se hace dentro de la app, donde el administrador ya
+ * está autenticado. Un enlace de aprobación en un correo se puede reenviar o abrir sin querer, y
+ * obligaría a una entrada GET que hoy el Web App no tiene. Si el envío falla, la solicitud sigue
+ * visible en Inicio del administrador: un correo caído no puede dejar a nadie sin poder aprobar.
+ * Pasada la ventana de administradores no se avisa a nadie por correo (decide el ciclo normal).
+ */
+function avisarAdministradores(deps, email) {
+  if (typeof deps.sendMail !== "function" || deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return;
+  try {
+    deps.sendMail(
+      EMAILS_ACCESO_DESARROLLADOR,
+      "Guardias · solicitud de acceso como invitado",
+      `${email} ha pedido entrar como invitado (solo lectura).\n\n` +
+      "Para aprobarla o rechazarla, entra en la app → Inicio → «Solicitudes de invitado».\n" +
+      "La solicitud caduca a los 5 minutos; si no la apruebas, tendrá que volver a pedirla.",
+    );
+  } catch (e) { /* el aviso es una comodidad: la solicitud ya está en la tabla y en Inicio */ }
+}
+
+function handleResolverInvitado(req, deps, session) {
+  if (typeof req.id !== "string" || !req.id) return { ok: false, error: "id obligatorio" };
+  if (typeof req.aprobar !== "boolean") return { ok: false, error: "aprobar debe ser true o false" };
+  return atomico(deps, () => {
+    const sol = allSolicitudes(deps).find((r) => r.id === req.id);
+    if (!sol) return { ok: false, error: "la solicitud no existe" };
+    if (sol.estado !== "PENDIENTE") return { ok: false, error: `la solicitud ya está ${sol.estado.toLowerCase()}` };
+    if (deps.now - sol.solicitadoEn > SOLICITUD_TTL) return { ok: false, error: "la solicitud ha caducado (pasaron más de 5 minutos)" };
+    deps.store.appendRecord("solicitudesInvitado", { ...sol, estado: req.aprobar ? "APROBADA" : "RECHAZADA", decididoPor: session.sub, decididoEn: deps.now });
+    return { ok: true, id: sol.id, estado: req.aprobar ? "APROBADA" : "RECHAZADA" };
+  });
+}
+
+/**
+ * El invitado pregunta por su solicitud. Si está APROBADA y dentro de los 5 minutos, se canjea por
+ * una sesión de invitado (UNA vez: la fila pasa a USADA). No escribe ningún residente.
+ */
+function handleEstadoSolicitudInvitado(req, deps) {
+  const t = verifySession(req.solicitudToken, { now: deps.now, secret: deps.sessionSecret, crypto: deps.crypto });
+  if (!t.valid || typeof t.payload.solicitud !== "string") return { ok: true, estado: "CADUCADA" };
+  return atomico(deps, () => {
+    const sol = allSolicitudes(deps).find((r) => r.id === t.payload.solicitud);
+    if (!sol) return { ok: true, estado: "CADUCADA" };
+    if (sol.estado === "RECHAZADA" || sol.estado === "USADA") return { ok: true, estado: sol.estado === "USADA" ? "CADUCADA" : "RECHAZADA" };
+    if (deps.now - sol.solicitadoEn > SOLICITUD_TTL) return { ok: true, estado: "CADUCADA" };
+    if (sol.estado === "PENDIENTE") return { ok: true, estado: "PENDIENTE", expiraEn: sol.solicitadoEn + SOLICITUD_TTL };
+    deps.store.appendRecord("solicitudesInvitado", { ...sol, estado: "USADA" });
+    const session = issueSession({ sub: ROL_INVITADO, rol: ROL_INVITADO }, {
+      now: deps.now, ttlSeconds: Math.min(deps.sessionTtl, INVITADO_TTL), secret: deps.sessionSecret, crypto: deps.crypto,
+    });
+    return {
+      ok: true, estado: "APROBADA", session,
+      residente: { id: ROL_INVITADO, nombre: "Invitado", rol: ROL_INVITADO },
+      residentes: paraSesion(allResidentes(deps), { rol: ROL_INVITADO }),
+    };
+  });
 }
 
 /**

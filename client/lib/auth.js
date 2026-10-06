@@ -173,3 +173,32 @@ export async function submitAlta({ api, identidad, datos, storage = sessionStora
   storeSession(r, storage);
   onSuccess(r);
 }
+
+/**
+ * Perfil de invitado (V-53): pide acceso con el `pendingToken` del login de Google que falló por
+ * «email no vinculado» y espera a que un administrador lo apruebe (5 min). Consulta cada
+ * `intervaloMs`; al aprobarse guarda la sesión igual que un login. `cancelado()` corta la espera
+ * (el usuario pulsó Cancelar o desmontó la pantalla). `onEstado` recibe cada consulta, para que
+ * la pantalla pinte la cuenta atrás con el `expiraEn` que manda el servidor.
+ *
+ * Devuelve el estado final: "APROBADA" | "RECHAZADA" | "CADUCADA" | "CANCELADA" | "ERROR".
+ */
+export async function pedirAccesoInvitado({
+  api, pendingToken, storage = sessionStorage, onSuccess, onError, onEstado = () => {},
+  intervaloMs = 4000, esperar = (ms) => new Promise((r) => setTimeout(r, ms)), cancelado = () => false,
+}) {
+  const sol = await api.solicitarInvitado(pendingToken);
+  if (!sol.ok) { onError(sol.error); return "ERROR"; }
+  onEstado({ estado: "PENDIENTE", expiraEn: sol.expiraEn });
+  while (!cancelado()) {
+    await esperar(intervaloMs);
+    if (cancelado()) break;
+    const r = await api.estadoSolicitudInvitado(sol.solicitudToken);
+    // Un fallo de red puntual no tira la solicitud: se sigue preguntando hasta que caduque.
+    if (!r.ok) continue;
+    if (r.estado === "APROBADA") { storeSession(r, storage); onSuccess(r); return "APROBADA"; }
+    if (r.estado === "RECHAZADA" || r.estado === "CADUCADA") { onEstado(r); return r.estado; }
+    onEstado(r);
+  }
+  return "CANCELADA";
+}

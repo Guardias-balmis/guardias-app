@@ -30,7 +30,7 @@ export function buildRequestInit(payload) {
  * de «HTTP 404», que no es peor. `altaResidente` NO entra: escribe un residente.
  */
 const REINTENTABLES = new Set([
-  "getNonce", "login", "whoami", "validar",
+  "getNonce", "login", "estadoSolicitudInvitado", "listSolicitudesInvitado", "whoami", "validar",
   "listResidentes", "listAsignaciones", "listAsignacionesRango",
   "misPreferencias", "listPreferencias", "misBloqueos", "listBloqueos", "listBloqueosRango",
   "listFestivosRango", "listEventos", "listExcepciones", "colaImaginaria",
@@ -115,6 +115,16 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession, onSessionInval
      */
     altaResidente: (identidad, { nombre, fechaInicio, fechaFin }) =>
       call({ action: "altaResidente", ...identidad, nombre, fechaInicio, fechaFin }),
+    /**
+     * Perfil de invitado (V-53): solo lectura y con la aprobación de un administrador en 5 min.
+     * `solicitarInvitado` usa el `pendingToken` de un login sin vincular; `estadoSolicitudInvitado`
+     * se consulta hasta que la aprueben (devuelve entonces la sesión). NO se reintenta
+     * `solicitarInvitado`/`resolverSolicitudInvitado`: una escribe y la otra decide.
+     */
+    solicitarInvitado: (pendingToken) => call({ action: "solicitarInvitado", pendingToken }),
+    estadoSolicitudInvitado: (solicitudToken) => call({ action: "estadoSolicitudInvitado", solicitudToken }),
+    listSolicitudesInvitado: () => authed("listSolicitudesInvitado"),
+    resolverSolicitudInvitado: (id, aprobar) => authed("resolverSolicitudInvitado", { id, aprobar }),
     whoami: () => authed("whoami"),
     listResidentes: () => authed("listResidentes"),
     /**

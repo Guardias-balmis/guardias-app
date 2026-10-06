@@ -15,7 +15,7 @@
 //  - Volver del formulario de alta («Cancelar») rehace el login entero: el nonce anterior se
 //    consumió al verificar el email, y el botón se desmontó con el formulario.
 import { COLOR } from "./client/lib/design-tokens.js";
-import { setupGoogleSignIn, submitAlta, waitForGis } from "./client/lib/auth.js";
+import { setupGoogleSignIn, submitAlta, pedirAccesoInvitado, waitForGis } from "./client/lib/auth.js";
 import { GOOGLE_CLIENT_ID } from "./client/config.js";
 import { addDays, addYears } from "./v2/domain/calendar.js";
 import { rangoValido } from "./client/lib/fechas.js";
@@ -143,6 +143,24 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
     try { setFechaFin(addDays(addYears(v, 4), -1)); } catch { /* fecha aún incompleta */ }
   };
 
+  // Invitado (V-53): se pide y se espera la aprobación de un administrador (5 min).
+  const [invitado, setInvitado] = useState(null); // null | {estado, expiraEn}
+  const cancelarRef = useRef(false);
+  useEffect(() => () => { cancelarRef.current = true; }, []);
+  const pedirInvitado = async () => {
+    cancelarRef.current = false;
+    setError(null);
+    setInvitado({ estado: "PENDIENTE", expiraEn: null });
+    const fin = await pedirAccesoInvitado({
+      api: app.api, pendingToken, onSuccess,
+      onError: (e) => { setInvitado(null); setError(e); },
+      onEstado: (e) => setInvitado({ estado: e.estado, expiraEn: e.expiraEn || null }),
+      cancelado: () => cancelarRef.current,
+    });
+    if (fin === "CANCELADA") setInvitado(null);
+  };
+  const cancelarInvitado = () => { cancelarRef.current = true; setInvitado(null); };
+
   const submit = async () => {
     if (!nombre.trim() || !fechasValidas) { setError("Rellena el nombre y unas fechas válidas"); return; }
     setSaving(true);
@@ -156,6 +174,35 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
 
   return (
     <div style={{ padding: 16, maxWidth: 420, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+      <Card title="👀 ¿Solo quieres consultar?">
+        {!invitado ? (
+          <>
+            <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 12, lineHeight: 1.5 }}>
+              Si eres tutor/a o no eres residente, puedes entrar como invitado: ves el cuadrante y
+              el equipo, sin editar nada y sin darte de alta. Un administrador tiene que
+              aprobarlo (le llega un aviso por correo) y dispone de 5 minutos para hacerlo.
+            </div>
+            <Btn onClick={pedirInvitado} color={COLOR.bluePale} textColor={COLOR.blueDark}>Solicitar acceso como invitado</Btn>
+          </>
+        ) : invitado.estado === "PENDIENTE" ? (
+          <>
+            <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 12, lineHeight: 1.5 }}>
+              ⏳ Solicitud enviada. Esperando la aprobación de un administrador (hasta 5 minutos).
+              Esta pantalla entrará sola cuando la aprueben; no la cierres.
+            </div>
+            <Btn onClick={cancelarInvitado} color={COLOR.grayMid} textColor={COLOR.grayDark}>Cancelar solicitud</Btn>
+          </>
+        ) : (
+          <>
+            <Aviso color={COLOR.red} bg={COLOR.redLight}>
+              {invitado.estado === "RECHAZADA" ? "Un administrador ha rechazado la solicitud." : "La solicitud ha caducado (pasaron 5 minutos sin aprobarse)."}
+            </Aviso>
+            <div style={{ marginTop: 10 }}>
+              <Btn onClick={pedirInvitado} color={COLOR.bluePale} textColor={COLOR.blueDark}>Volver a solicitarlo</Btn>
+            </div>
+          </>
+        )}
+      </Card>
       <window.UI.SectionTitle>👋 Bienvenido — date de alta</window.UI.SectionTitle>
       <Card>
         <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 12, lineHeight: 1.5 }}>

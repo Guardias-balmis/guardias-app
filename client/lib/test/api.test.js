@@ -246,3 +246,12 @@ test("generarCuadranteIA manda el modo (completar por defecto) — decisión V-4
   await api.generarCuadranteIA(2027, 7, "reemplazar");
   assert.equal(JSON.parse(fetchImpl.calls[1].init.body).modo, "reemplazar");
 });
+
+test("solicitarInvitado manda el pendingToken; estadoSolicitudInvitado el solicitudToken (V-53)", async () => {
+  const cuerpos = [];
+  const api = makeApi("https://x/exec", { fetchImpl: async (_u, init) => { cuerpos.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ ok: true }) }; } });
+  await api.solicitarInvitado("tok");
+  await api.estadoSolicitudInvitado("sol");
+  assert.deepEqual(cuerpos[0], { action: "solicitarInvitado", pendingToken: "tok" });
+  assert.deepEqual(cuerpos[1], { action: "estadoSolicitudInvitado", solicitudToken: "sol" });
+});

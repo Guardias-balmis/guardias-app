@@ -241,3 +241,41 @@ test("cada repintado del botón de Google vacía el contenedor antes (el renderB
   await asa.refrescar();
   assert.equal(buttonEl.children.length, 1, "un solo botón tras dos refrescos");
 });
+
+import { pedirAccesoInvitado } from "../auth.js";
+
+function almacen() { const m = {}; return { setItem: (k, v) => { m[k] = v; }, getItem: (k) => m[k] ?? null, removeItem: (k) => { delete m[k]; }, m }; }
+
+test("pedirAccesoInvitado: espera mientras está PENDIENTE y entra cuando la aprueban (V-53)", async () => {
+  const respuestas = [{ ok: true, estado: "PENDIENTE" }, { ok: true, estado: "PENDIENTE" }, { ok: true, estado: "APROBADA", session: "S", residente: { id: "invitado", nombre: "Invitado", rol: "invitado" }, residentes: [] }];
+  const api = { solicitarInvitado: async () => ({ ok: true, solicitudToken: "t", expiraEn: 99 }), estadoSolicitudInvitado: async () => respuestas.shift() };
+  let entro = null;
+  const fin = await pedirAccesoInvitado({ api, pendingToken: "p", storage: almacen(), onSuccess: (r) => { entro = r; }, onError: () => assert.fail(), esperar: async () => {} });
+  assert.equal(fin, "APROBADA");
+  assert.equal(entro.session, "S");
+});
+
+test("pedirAccesoInvitado: rechazo y caducidad terminan la espera sin sesión", async () => {
+  for (const estado of ["RECHAZADA", "CADUCADA"]) {
+    const api = { solicitarInvitado: async () => ({ ok: true, solicitudToken: "t" }), estadoSolicitudInvitado: async () => ({ ok: true, estado }) };
+    const fin = await pedirAccesoInvitado({ api, pendingToken: "p", storage: almacen(), onSuccess: () => assert.fail(), onError: () => assert.fail(), esperar: async () => {} });
+    assert.equal(fin, estado);
+  }
+});
+
+test("pedirAccesoInvitado: un fallo de red puntual no tira la solicitud, y cancelar corta la espera", async () => {
+  let n = 0;
+  const api = { solicitarInvitado: async () => ({ ok: true, solicitudToken: "t" }), estadoSolicitudInvitado: async () => (++n === 1 ? { ok: false, error: "red" } : { ok: true, estado: "PENDIENTE" }) };
+  let vueltas = 0;
+  const fin = await pedirAccesoInvitado({ api, pendingToken: "p", storage: almacen(), onSuccess: () => assert.fail(), onError: () => assert.fail(), esperar: async () => { vueltas++; }, cancelado: () => vueltas >= 3 });
+  assert.equal(fin, "CANCELADA");
+  assert.ok(n >= 2);
+});
+
+test("pedirAccesoInvitado: si la solicitud se rechaza de entrada, avisa del error", async () => {
+  const api = { solicitarInvitado: async () => ({ ok: false, error: "pendingToken inválido o caducado" }) };
+  let msg = null;
+  const fin = await pedirAccesoInvitado({ api, pendingToken: "p", storage: almacen(), onSuccess: () => assert.fail(), onError: (e) => { msg = e; }, esperar: async () => {} });
+  assert.equal(fin, "ERROR");
+  assert.match(msg, /caducado/);
+});
