@@ -82,16 +82,16 @@ test("makeApi.login no adjunta sesión (aún no existe)", async () => {
   assert.equal(sent.session, undefined);
 });
 
-test("makeApi.altaResidente soporta idToken+nonce o pendingToken", async () => {
+test("makeApi.solicitarAlta soporta idToken+nonce o pendingToken", async () => {
   const fetchImpl = fakeFetch(200, { ok: true });
   const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => null });
 
-  await api.altaResidente({ idToken: "jwt", nonce: "n1" }, { nombre: "Ana", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" });
+  await api.solicitarAlta({ idToken: "jwt", nonce: "n1" }, { nombre: "Ana", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" });
   let sent = JSON.parse(fetchImpl.calls[0].init.body);
   assert.equal(sent.idToken, "jwt");
   assert.equal(sent.nombre, "Ana");
 
-  await api.altaResidente({ pendingToken: "ptok" }, { nombre: "Bea", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" });
+  await api.solicitarAlta({ pendingToken: "ptok" }, { nombre: "Bea", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" });
   sent = JSON.parse(fetchImpl.calls[1].init.body);
   assert.equal(sent.pendingToken, "ptok");
   assert.equal(sent.idToken, undefined);
@@ -184,7 +184,7 @@ test("callBackend hace como máximo 3 intentos y devuelve un error que no es un 
 
 test("callBackend NO reintenta una ESCRITURA: duplicaría una fila en una tabla append-only", async () => {
   for (const action of ["guardarAsignaciones", "crearBloqueo", "guardarPeriodos", "editarResidente",
-                        "restaurarPeriodos", "publicarCuadrante", "marcarValidado", "altaResidente",
+                        "restaurarPeriodos", "publicarCuadrante", "marcarValidado", "solicitarAlta", "solicitarInvitado", "resolverSolicitudInvitado",
                         "crearFestivos", "sortearEvento", "ejecutarSorteoResponsable", "registrarImaginaria"]) {
     const fetchImpl = fetchSecuencia({ status: 404 }, { status: 200, body: { ok: true } });
     const r = await callBackend("https://exec.example/x", { action }, { fetchImpl, esperar: sinEsperar });

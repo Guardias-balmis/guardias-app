@@ -280,28 +280,26 @@ test("guardarAsignaciones lee el estado DENTRO del lock: si otro valida el mes m
   assert.equal(call({ action: "estadoCuadrante", session: otro, mes: 7, anio: 2027 }, deps).estado, "BORRADOR");
 });
 
-test("altaResidente comprueba el email DENTRO del lock: dos altas simultáneas del mismo email dejan UN solo residente", () => {
+test("solicitarAlta comprueba y escribe DENTRO del lock: dos solicitudes simultáneas del mismo email dejan UNA sola (V-54)", () => {
   const deps = makeDeps();
   const alta = () => {
     const nonce = call({ action: "getNonce" }, deps).nonce;
     deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "nuevo@gmail.com", email_verified: "true", sub: "g-9", exp: String(2_000_000), nonce });
-    return call({ action: "altaResidente", idToken: "jwt", nonce, nombre: "Nuevo", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }, deps);
+    return call({ action: "solicitarAlta", idToken: "jwt", nonce, nombre: "Nuevo", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }, deps);
   };
   let segunda = null;
   deps.locks.gancho = () => { segunda = alta(); };
   const primera = alta();
-  assert.equal(segunda.ok, true, "la que se coló primero entra");
-  assert.equal(primera.ok, false);
-  assert.match(primera.error, /ya está vinculado/);
-  const lista = call({ action: "listResidentes", session: segunda.session }, deps).residentes;
-  assert.equal(lista.filter((r) => r.email === "nuevo@gmail.com").length, 1);
+  assert.equal(segunda.ok, true);
+  assert.equal(primera.ok, true);
+  assert.equal(deps.store.readRecords("solicitudesInvitado").filter((r) => r.email === "nuevo@gmail.com").length, 1, "la segunda reutiliza la pendiente");
 });
 
-test("altaResidente rechaza un nombre que empiece por «=» (en las pestañas publicadas sería una fórmula)", () => {
+test("solicitarAlta rechaza un nombre que empiece por «=» (en las pestañas publicadas sería una fórmula)", () => {
   const deps = makeDeps();
   const nonce = call({ action: "getNonce" }, deps).nonce;
   deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "f@gmail.com", email_verified: "true", sub: "g-8", exp: String(2_000_000), nonce });
-  const r = call({ action: "altaResidente", idToken: "jwt", nonce, nombre: '=HYPERLINK("http://x")', fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }, deps);
+  const r = call({ action: "solicitarAlta", idToken: "jwt", nonce, nombre: '=HYPERLINK("http://x")', fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }, deps);
   assert.equal(r.ok, false);
   assert.match(r.error, /«=»/);
 });
@@ -309,9 +307,7 @@ test("altaResidente rechaza un nombre que empiece por «=» (en las pestañas pu
 test("crearBloqueo (simulación P-13 + escritura) y crearEvento (unicidad + escritura) van cada uno en UN solo lock", () => {
   const deps = makeDeps();
   // Un segundo Pequeño, para que las vacaciones de Olga no dejen a su grupo sin nadie (P-13 las rechazaría).
-  const nonce = call({ action: "getNonce" }, deps).nonce;
-  deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "peque2@gmail.com", email_verified: "true", sub: "g-7", exp: String(2_000_000), nonce });
-  assert.equal(call({ action: "altaResidente", idToken: "jwt", nonce, nombre: "Pepe Pequeño", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }, deps).ok, true);
+  deps.store.appendRecord("residentes", { nombre: "Pepe Pequeño", email: "peque2@gmail.com", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" });
   const session = loggedInAs(deps, "otro@gmail.com");
   deps.locks.veces = 0; deps.locks.maxima = 0;
   assert.equal(call({ action: "crearBloqueo", session, motivo: "VACACIONES", desde: "2027-08-02", hasta: "2027-08-04" }, deps).ok, true);
@@ -331,9 +327,7 @@ test("crearBloqueo (simulación P-13 + escritura) y crearEvento (unicidad + escr
 test("sortearEvento comprueba «ya está sorteado» DENTRO del lock: dos sorteos simultáneos del mismo evento dejan UN sorteo", () => {
   const deps = makeDeps();
   // Un segundo R2 para poder sortear (OTRO es el único Pequeño del fixture).
-  const nonce = call({ action: "getNonce" }, deps).nonce;
-  deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "r2b@gmail.com", email_verified: "true", sub: "g-6", exp: String(2_000_000), nonce });
-  assert.equal(call({ action: "altaResidente", idToken: "jwt", nonce, nombre: "Rosa Dos", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" }, deps).ok, true);
+  deps.store.appendRecord("residentes", { nombre: "Rosa Dos", email: "r2b@gmail.com", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" });
   const resp = loggedInAs(deps, "resp@gmail.com");
   const ev = call({ action: "crearEvento", session: resp, tipo: "NAVIDAD", fecha: "2027-12-18", voluntarios: [] }, deps);
   assert.equal(ev.ok, true);

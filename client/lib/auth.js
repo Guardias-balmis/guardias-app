@@ -36,7 +36,7 @@ export function getSession(storage = sessionStorage) {
   }
 }
 /**
- * Guarda SOLO lo que la sesión necesita (token + perfil mínimo). `login`/`altaResidente`
+ * Guarda SOLO lo que la sesión necesita (token + perfil mínimo). `login`/`estadoSolicitudInvitado`
  * devuelven además la lista de residentes para ahorrarle al arranque una ida y vuelta; esa
  * lista es estado de la app, no de la sesión, y no se persiste aquí.
  */
@@ -161,33 +161,20 @@ export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage 
 }
 
 /**
- * Envía el formulario de alta autoservicio. `identidad` es {idToken,nonce} o {pendingToken}
- * (ver router.js handleAlta). Guarda la sesión resultante igual que un login.
- */
-export async function submitAlta({ api, identidad, datos, storage = sessionStorage, onSuccess, onError }) {
-  const r = await api.altaResidente(identidad, datos);
-  if (!r.ok) {
-    onError(r.error);
-    return;
-  }
-  storeSession(r, storage);
-  onSuccess(r);
-}
-
-/**
- * Perfil de invitado (V-53): pide acceso con el `pendingToken` del login de Google que falló por
- * «email no vinculado» y espera a que un administrador lo apruebe (5 min). Consulta cada
- * `intervaloMs`; al aprobarse guarda la sesión igual que un login. `cancelado()` corta la espera
- * (el usuario pulsó Cancelar o desmontó la pantalla). `onEstado` recibe cada consulta, para que
- * la pantalla pinte la cuenta atrás con el `expiraEn` que manda el servidor.
+ * Pide acceso (V-53 invitado, V-54 alta de residente) y espera a que un administrador lo apruebe
+ * (5 min). `iniciar()` lanza la solicitud (`api.solicitarInvitado(pendingToken)` o
+ * `api.solicitarAlta(pendingToken, datos)`) y devuelve `{ok, solicitudToken, expiraEn}`. Consulta
+ * cada `intervaloMs`; al aprobarse guarda la sesión igual que un login (en un alta, la del
+ * residente recién creado). `cancelado()` corta la espera (el usuario pulsó Cancelar o desmontó la
+ * pantalla). `onEstado` recibe cada consulta, para pintar la espera con el `expiraEn` del servidor.
  *
  * Devuelve el estado final: "APROBADA" | "RECHAZADA" | "CADUCADA" | "CANCELADA" | "ERROR".
  */
-export async function pedirAccesoInvitado({
-  api, pendingToken, storage = sessionStorage, onSuccess, onError, onEstado = () => {},
+export async function pedirAcceso({
+  api, iniciar, storage = sessionStorage, onSuccess, onError, onEstado = () => {},
   intervaloMs = 4000, esperar = (ms) => new Promise((r) => setTimeout(r, ms)), cancelado = () => false,
 }) {
-  const sol = await api.solicitarInvitado(pendingToken);
+  const sol = await iniciar();
   if (!sol.ok) { onError(sol.error); return "ERROR"; }
   onEstado({ estado: "PENDIENTE", expiraEn: sol.expiraEn });
   while (!cancelado()) {

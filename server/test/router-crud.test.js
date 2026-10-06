@@ -55,34 +55,42 @@ function loggedIn(deps) {
   return call({ action: "login", idToken: "jwt", nonce }, deps).session;
 }
 
-// ── altaResidente ──
-test("altaResidente crea el registro y devuelve sesión (auto-registro, sin sesión previa)", () => {
+// ── solicitarAlta (V-54: el alta ya no crea nada, la aprueba un administrador) ──
+test("altaResidente (acción antigua) ya no crea nada: remite a la solicitud con aprobación", () => {
+  const deps = makeDeps();
+  const r = call({ action: "altaResidente", idToken: "jwt", nombre: "X", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /aprobación/);
+});
+
+test("solicitarAlta NO crea el residente ni da sesión: deja una solicitud pendiente (auto-registro, sin sesión previa)", () => {
   const deps = makeDeps();
   const nonce = call({ action: "getNonce" }, deps).nonce;
   deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "nuevo@gmail.com", email_verified: "true", exp: String(2_000_000), nonce });
-  const r = call({ action: "altaResidente", idToken: "jwt", nombre: "Nuevo R1", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  const r = call({ action: "solicitarAlta", idToken: "jwt", nombre: "Nuevo R1", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
   assert.equal(r.ok, true);
-  assert.ok(r.session);
-  assert.equal(r.residente.nombre, "Nuevo R1");
-  const guardado = deps.store.readRecords("residentes").find((x) => x.email === "nuevo@gmail.com");
-  assert.equal(guardado.fechaInicio, "2026-05-25");
+  assert.equal(r.session, undefined);
+  assert.ok(r.solicitudToken);
+  assert.equal(deps.store.readRecords("residentes").find((x) => x.email === "nuevo@gmail.com"), undefined, "no hay residente hasta que se apruebe");
+  const sol = deps.store.readRecords("solicitudesInvitado")[0];
+  assert.deepEqual([sol.tipo, sol.estado, sol.nombre, sol.fechaInicio], ["ALTA", "PENDIENTE", "Nuevo R1", "2026-05-25"]);
 });
 
-test("altaResidente rechaza un email ya vinculado (evita duplicados)", () => {
+test("solicitarAlta rechaza un email ya vinculado (evita duplicados)", () => {
   const deps = makeDeps(); // fetchTokeninfo por defecto usa ana@gmail.com, ya existe
   call({ action: "getNonce" }, deps); // registra el nonce que el fetchTokeninfo por defecto reutiliza
-  const r = call({ action: "altaResidente", idToken: "jwt", nombre: "Ana Otra Vez", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" }, deps);
+  const r = call({ action: "solicitarAlta", idToken: "jwt", nombre: "Ana Otra Vez", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" }, deps);
   assert.equal(r.ok, false);
   assert.match(r.error, /ya existe|vinculad/i);
 });
 
-test("altaResidente valida campos obligatorios", () => {
+test("solicitarAlta valida campos obligatorios", () => {
   const deps = makeDeps({ fetchTokeninfo: () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "x@gmail.com", email_verified: "true", exp: String(2_000_000) }) });
-  const r = call({ action: "altaResidente", idToken: "jwt", nombre: "", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  const r = call({ action: "solicitarAlta", idToken: "jwt", nombre: "", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
   assert.equal(r.ok, false);
 });
 
-test("altaResidente acepta un pendingToken de un login fallido, sin volver a verificar con Google (evita un segundo popup)", () => {
+test("solicitarAlta acepta un pendingToken de un login fallido, sin volver a verificar con Google (evita un segundo popup)", () => {
   const deps = makeDeps({ fetchTokeninfo: () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "nuevo2@gmail.com", email_verified: "true", exp: String(2_000_000) }) });
   const nonce = call({ action: "getNonce" }, deps).nonce;
   deps.fetchTokeninfo = () => ({ aud: CLIENT_ID, iss: "https://accounts.google.com", email: "nuevo2@gmail.com", email_verified: "true", exp: String(2_000_000), nonce });
@@ -91,20 +99,20 @@ test("altaResidente acepta un pendingToken de un login fallido, sin volver a ver
   assert.ok(fallo.pendingToken);
 
   // segunda llamada SIN idToken, solo con el pendingToken de la primera
-  const r = call({ action: "altaResidente", pendingToken: fallo.pendingToken, nombre: "Nuevo Dos", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  const r = call({ action: "solicitarAlta", pendingToken: fallo.pendingToken, nombre: "Nuevo Dos", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
   assert.equal(r.ok, true);
-  assert.equal(deps.store.readRecords("residentes").find((x) => x.email === "nuevo2@gmail.com").nombre, "Nuevo Dos");
+  assert.equal(deps.store.readRecords("solicitudesInvitado").find((x) => x.email === "nuevo2@gmail.com").nombre, "Nuevo Dos");
 });
 
-test("altaResidente rechaza un pendingToken caducado o manipulado", () => {
+test("solicitarAlta rechaza un pendingToken caducado o manipulado", () => {
   const deps = makeDeps();
-  const r = call({ action: "altaResidente", pendingToken: "firma.falsa", nombre: "X", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  const r = call({ action: "solicitarAlta", pendingToken: "firma.falsa", nombre: "X", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
   assert.equal(r.ok, false);
 });
 
-test("altaResidente con aud incorrecta se rechaza (misma protección que login)", () => {
+test("solicitarAlta con aud incorrecta se rechaza (misma protección que login)", () => {
   const deps = makeDeps({ fetchTokeninfo: () => ({ aud: "otra.apps.googleusercontent.com", iss: "https://accounts.google.com", email: "x@gmail.com", email_verified: "true", exp: String(2_000_000) }) });
-  const r = call({ action: "altaResidente", idToken: "jwt", nombre: "X", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  const r = call({ action: "solicitarAlta", idToken: "jwt", nombre: "X", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
   assert.equal(r.ok, false);
   assert.match(r.error, /aud/i);
 });

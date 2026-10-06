@@ -73,6 +73,9 @@ const SEED_RESIDENTES = [
   { id: "res-carlos", nombre: "Carlos Ruiz", email: "carlos@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" },
   { id: "res-elena", nombre: "Elena Sansano", email: "elena@gmail.com", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" },
   { id: "res-ivan", nombre: "Iván Cortés", email: "ivan@gmail.com", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" },
+  // Administrador (V-52/V-53/V-54): su email está en la lista de acceso de desarrollador, así que es
+  // quien valida el cuadrante y aprueba las solicitudes de invitado y de alta.
+  { id: "res-quique", nombre: "Quique (admin)", email: "quiquemm14@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" },
 ];
 // SIN mandato de Responsable a propósito: es el estado real de producción (nadie lo ha decidido)
 // y desde la decisión V-16 es el caso interesante — el ciclo VALIDADO/PUBLICADO tiene que seguir
@@ -115,6 +118,8 @@ function deps() {
     // router responde exactamente lo mismo que en producción sin `GEMINI_API_KEY` («falta la
     // propiedad…»), que es el comportamiento que interesa poder ver en local.
     llm: process.env.GEMINI_API_KEY ? llmDev() : undefined,
+    // Los avisos por correo a los administradores (V-53) se imprimen aquí en vez de enviarse.
+    sendMail: (para, asunto, cuerpo) => console.log(`[dev-server] correo a ${para.join(", ")} — ${asunto}\n${cuerpo}`),
   };
 }
 
@@ -178,7 +183,7 @@ window.google = { accounts: { id: {
     // Varios residentes a propósito: el nivel se deriva de fechas, así que entrar como Ana (R4),
     // Carlos (R3) o Elena (R2) es la única forma de probar en local lo que ve cada grupo —
     // permisos del ciclo (V-16), elegibilidad del mandato (INV-14), avisos por nivel.
-    const users = ["ana@gmail.com (R4)", "carlos@gmail.com (R3)", "elena@gmail.com (R2)", "nueva@gmail.com (SIN vincular — prueba el alta)"];
+    const users = ["quiquemm14@gmail.com (ADMIN)", "ana@gmail.com (R4)", "carlos@gmail.com (R3)", "elena@gmail.com (R2)", "nueva@gmail.com (SIN vincular — prueba el alta)"];
     el.innerHTML = "";
     users.forEach((label) => {
       const email = label.split(" ")[0];

@@ -213,3 +213,94 @@ test("la sesión de invitado dura 2 h", () => {
   const p = JSON.parse(Buffer.from(session.split(".")[0], "base64url").toString());
   assert.equal(p.exp - deps.now, 2 * 3600);
 });
+
+// ── Alta de residente con aprobación (V-54) ──
+function pideAlta(deps, email = "nueva@gmail.com", nombre = "  Nueva Residente ") {
+  const r = login(deps, email);
+  assert.equal(r.ok, false);
+  const sol = call({ action: "solicitarAlta", pendingToken: r.pendingToken, nombre, fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  assert.equal(sol.ok, true);
+  return sol;
+}
+const idPendiente = (deps, adm) => call({ action: "listSolicitudesInvitado", session: adm }, deps).solicitudes[0];
+
+test("alta: pedirla avisa a los administradores y NO crea el residente ni da sesión", () => {
+  const deps = makeDeps();
+  const antes = filas(deps);
+  const sol = pideAlta(deps);
+  assert.equal(deps.correos.length, 1);
+  assert.match(deps.correos[0].asunto, /alta de residente/);
+  assert.match(deps.correos[0].cuerpo, /Nueva Residente/);
+  assert.deepEqual(filas(deps), antes);
+  assert.equal(call({ action: "estadoSolicitudInvitado", solicitudToken: sol.solicitudToken }, deps).estado, "PENDIENTE");
+});
+
+test("alta: el administrador la ve con sus datos, la aprueba y SOLO entonces se crea el residente, que entra con su sesión", () => {
+  const deps = makeDeps();
+  const sol = pideAlta(deps);
+  const adm = loggedInAs(deps, "quiquemm14@gmail.com");
+  const p = idPendiente(deps, adm);
+  assert.deepEqual([p.tipo, p.nombre, p.fechaInicio, p.email], ["ALTA", "Nueva Residente", "2026-05-25", "nueva@gmail.com"]);
+  assert.equal(call({ action: "resolverSolicitudInvitado", session: adm, id: p.id, aprobar: true }, deps).ok, true);
+  const e = call({ action: "estadoSolicitudInvitado", solicitudToken: sol.solicitudToken }, deps);
+  assert.equal(e.estado, "APROBADA");
+  assert.equal(e.residente.nombre, "Nueva Residente");
+  assert.notEqual(e.residente.rol, "invitado");
+  assert.equal(e.residentes.length, 3);
+  // Es una sesión de residente de verdad: puede leer lo que un invitado no puede
+  assert.equal(call({ action: "misBloqueos", session: e.session, mes: 10, anio: 2026 }, deps).ok, true);
+  assert.equal(call({ action: "estadoSolicitudInvitado", solicitudToken: sol.solicitudToken }, deps).estado, "CADUCADA", "un solo canje");
+});
+
+test("alta rechazada: no se crea nada", () => {
+  const deps = makeDeps();
+  const sol = pideAlta(deps);
+  const adm = loggedInAs(deps, "quiquemm14@gmail.com");
+  call({ action: "resolverSolicitudInvitado", session: adm, id: idPendiente(deps, adm).id, aprobar: false }, deps);
+  assert.equal(call({ action: "estadoSolicitudInvitado", solicitudToken: sol.solicitudToken }, deps).estado, "RECHAZADA");
+  assert.equal(deps.store.readRecords("residentes").length, 2);
+});
+
+test("alta: a los 5 minutos caduca y no se puede aprobar (no se crea el residente)", () => {
+  const deps = makeDeps();
+  pideAlta(deps);
+  const adm = loggedInAs(deps, "quiquemm14@gmail.com");
+  const id = idPendiente(deps, adm).id;
+  pasa(deps, 301);
+  assert.match(call({ action: "resolverSolicitudInvitado", session: adm, id, aprobar: true }, deps).error, /caducado/);
+  assert.equal(deps.store.readRecords("residentes").length, 2);
+});
+
+test("alta: un residente normal no puede aprobar su propia alta ni la de otro", () => {
+  const deps = makeDeps();
+  pideAlta(deps);
+  const id = deps.store.readLatest("solicitudesInvitado", (r) => r.id)[0].id;
+  const ana = loggedInAs(deps, "ana@gmail.com");
+  assert.match(call({ action: "resolverSolicitudInvitado", session: ana, id, aprobar: true }, deps).error, /administradores/);
+  assert.equal(deps.store.readRecords("residentes").length, 2);
+});
+
+test("alta: si el email ya se vinculó entre la petición y la aprobación, no se duplica", () => {
+  const deps = makeDeps();
+  pideAlta(deps);
+  deps.store.appendRecord("residentes", { nombre: "Colada", email: "nueva@gmail.com", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" });
+  const adm = loggedInAs(deps, "quiquemm14@gmail.com");
+  const r = call({ action: "resolverSolicitudInvitado", session: adm, id: idPendiente(deps, adm).id, aprobar: true }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /ya está vinculado/);
+  assert.equal(deps.store.readRecords("residentes").filter((x) => x.email === "nueva@gmail.com").length, 1);
+});
+
+test("alta: un residente ya vinculado no puede pedirla, y una solicitud de invitado no se confunde con una de alta", () => {
+  const deps = makeDeps();
+  const nonce = call({ action: "getNonce" }, deps).nonce;
+  deps.email = "ana@gmail.com";
+  const r = call({ action: "solicitarAlta", idToken: "jwt", nonce, nombre: "Ana", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  assert.equal(r.ok, false);
+  const inv = solicita(deps); // tutor@gmail.com como INVITADO
+  pideAlta(deps, "tutor@gmail.com", "Tutor"); // el mismo email pide ahora un ALTA: es otra solicitud
+  const adm = loggedInAs(deps, "quiquemm14@gmail.com");
+  const tipos = call({ action: "listSolicitudesInvitado", session: adm }, deps).solicitudes.map((s) => s.tipo).sort();
+  assert.deepEqual(tipos, ["ALTA", "INVITADO"]);
+  assert.ok(inv.solicitudToken);
+});

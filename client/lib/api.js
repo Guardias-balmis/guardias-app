@@ -2,7 +2,7 @@
 // preflight OPTIONS (que Apps Script no atiende): Content-Type text/plain con el JSON en
 // el cuerpo, credentials 'omit' (NUNCA 'include': la respuesta trae ACAO:* y el estándar
 // Fetch prohíbe wildcard+credenciales). La identidad viaja como bearer en el cuerpo
-// (idToken en login/altaResidente, session en el resto), nunca en una cookie ni en un
+// (idToken en login/solicitarAlta, session en el resto), nunca en una cookie ni en un
 // header Authorization (eso dispararía preflight).
 //
 // `fetchImpl` se inyecta (test: fake; navegador: `fetch` global) — módulo puro y testeable.
@@ -27,7 +27,7 @@ export function buildRequestInit(payload) {
  *
  * `login` entra aunque consuma el nonce: si el POST no llegó a ejecutarse —el caso mayoritario de
  * este fallo— el reintento resuelve el login, y si sí llegó, el usuario ve «nonce reusado» en vez
- * de «HTTP 404», que no es peor. `altaResidente` NO entra: escribe un residente.
+ * de «HTTP 404», que no es peor. `solicitarAlta` NO entra: escribe una solicitud.
  */
 const REINTENTABLES = new Set([
   "getNonce", "login", "estadoSolicitudInvitado", "listSolicitudesInvitado", "whoami", "validar",
@@ -110,17 +110,14 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession, onSessionInval
     getNonce: () => call({ action: "getNonce" }),
     login: (idToken, nonce) => call({ action: "login", idToken, nonce }),
     /**
-     * Alta autoservicio. `identidad` es { idToken, nonce } (primer intento) o
-     * { pendingToken } (tras un login fallido por email no vinculado — sin repetir Google).
+     * Solicitudes de acceso (V-53 invitado, V-54 alta), siempre con la aprobación de un administrador
+     * en 5 min. Ambas usan el `pendingToken` de un login sin vincular (la de alta, también un
+     * `idToken`+`nonce`); `estadoSolicitudInvitado` se consulta hasta que la aprueben (devuelve
+     * entonces la sesión). NO se reintentan `solicitarInvitado`/`solicitarAlta`/
+     * `resolverSolicitudInvitado`: escriben o deciden.
      */
-    altaResidente: (identidad, { nombre, fechaInicio, fechaFin }) =>
-      call({ action: "altaResidente", ...identidad, nombre, fechaInicio, fechaFin }),
-    /**
-     * Perfil de invitado (V-53): solo lectura y con la aprobación de un administrador en 5 min.
-     * `solicitarInvitado` usa el `pendingToken` de un login sin vincular; `estadoSolicitudInvitado`
-     * se consulta hasta que la aprueben (devuelve entonces la sesión). NO se reintenta
-     * `solicitarInvitado`/`resolverSolicitudInvitado`: una escribe y la otra decide.
-     */
+    solicitarAlta: (identidad, { nombre, fechaInicio, fechaFin }) =>
+      call({ action: "solicitarAlta", ...(typeof identidad === "string" ? { pendingToken: identidad } : identidad), nombre, fechaInicio, fechaFin }),
     solicitarInvitado: (pendingToken) => call({ action: "solicitarInvitado", pendingToken }),
     estadoSolicitudInvitado: (solicitudToken) => call({ action: "estadoSolicitudInvitado", solicitudToken }),
     listSolicitudesInvitado: () => authed("listSolicitudesInvitado"),

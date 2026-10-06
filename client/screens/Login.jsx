@@ -1,6 +1,6 @@
 // LoginScreen — Sign in with Google real (GIS + ID token verificado), sin implicit flow,
 // sin modo demo, sin backdoor de rol (bugs del v1 — ver docs/auditoria). Un residente sin
-// vincular ve aquí mismo el formulario de alta autoservicio (DoD-1).
+// vincular ve aquí mismo el formulario de solicitud de alta (DoD-1, con aprobación desde V-54).
 //
 // Lo que esta pantalla cuida del arranque (2026-09-04, pedido del autor: «más velocidad al
 // meter el correo con Google»):
@@ -15,7 +15,7 @@
 //  - Volver del formulario de alta («Cancelar») rehace el login entero: el nonce anterior se
 //    consumió al verificar el email, y el botón se desmontó con el formulario.
 import { COLOR } from "./client/lib/design-tokens.js";
-import { setupGoogleSignIn, submitAlta, pedirAccesoInvitado, waitForGis } from "./client/lib/auth.js";
+import { setupGoogleSignIn, pedirAcceso, waitForGis } from "./client/lib/auth.js";
 import { GOOGLE_CLIENT_ID } from "./client/config.js";
 import { addDays, addYears } from "./v2/domain/calendar.js";
 import { rangoValido } from "./client/lib/fechas.js";
@@ -124,14 +124,22 @@ function LoginScreen() {
   );
 }
 
-/** Alta autoservicio (DoD-1): nombre, fecha de inicio, fecha de fin (sugerida a inicio+4a). */
+/**
+ * Alta de cuenta (DoD-1) o acceso como invitado. Desde V-54 ninguna de las dos es inmediata: se
+ * SOLICITAN y un administrador las aprueba en los 5 minutos siguientes (le llega un correo). La
+ * pantalla espera y entra sola cuando se aprueba. El alta pide nombre y fechas (la de fin se
+ * sugiere a inicio+4a); el invitado, nada.
+ */
 function AltaForm({ pendingToken, onCancel, onSuccess }) {
   const app = window.useApp();
   const [nombre, setNombre] = useState("");
   const [fechaInicio, setFechaInicio] = useState(todayISO());
   const [fechaFin, setFechaFin] = useState(addDays(addYears(todayISO(), 4), -1));
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  // null | {tipo: "ALTA"|"INVITADO", estado: "PENDIENTE"|"RECHAZADA"|"CADUCADA"}
+  const [espera, setEspera] = useState(null);
+  const cancelarRef = useRef(false);
+  useEffect(() => () => { cancelarRef.current = true; }, []);
 
   // `rangoValido` y no `compareISO` a pelo: mientras se teclea el año, el input emite "0002-09-04"
   // y `parseISO` lanzaría EN EL RENDER, desmontando la app entera (ver client/lib/fechas.js).
@@ -143,97 +151,90 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
     try { setFechaFin(addDays(addYears(v, 4), -1)); } catch { /* fecha aún incompleta */ }
   };
 
-  // Invitado (V-53): se pide y se espera la aprobación de un administrador (5 min).
-  const [invitado, setInvitado] = useState(null); // null | {estado, expiraEn}
-  const cancelarRef = useRef(false);
-  useEffect(() => () => { cancelarRef.current = true; }, []);
-  const pedirInvitado = async () => {
+  const pedir = async (tipo) => {
+    if (tipo === "ALTA" && (!nombre.trim() || !fechasValidas)) { setError("Rellena el nombre y unas fechas válidas"); return; }
     cancelarRef.current = false;
     setError(null);
-    setInvitado({ estado: "PENDIENTE", expiraEn: null });
-    const fin = await pedirAccesoInvitado({
-      api: app.api, pendingToken, onSuccess,
-      onError: (e) => { setInvitado(null); setError(e); },
-      onEstado: (e) => setInvitado({ estado: e.estado, expiraEn: e.expiraEn || null }),
+    setEspera({ tipo, estado: "PENDIENTE" });
+    const fin = await pedirAcceso({
+      api: app.api,
+      iniciar: () => (tipo === "ALTA"
+        ? app.api.solicitarAlta(pendingToken, { nombre: nombre.trim(), fechaInicio, fechaFin })
+        : app.api.solicitarInvitado(pendingToken)),
+      onSuccess,
+      onError: (e) => { setEspera(null); setError(e); },
+      onEstado: (e) => setEspera({ tipo, estado: e.estado }),
       cancelado: () => cancelarRef.current,
     });
-    if (fin === "CANCELADA") setInvitado(null);
+    if (fin === "CANCELADA") setEspera(null);
   };
-  const cancelarInvitado = () => { cancelarRef.current = true; setInvitado(null); };
-
-  const submit = async () => {
-    if (!nombre.trim() || !fechasValidas) { setError("Rellena el nombre y unas fechas válidas"); return; }
-    setSaving(true);
-    setError(null);
-    await submitAlta({
-      api: app.api, identidad: { pendingToken }, datos: { nombre: nombre.trim(), fechaInicio, fechaFin },
-      onSuccess, onError: (e) => setError(e),
-    });
-    setSaving(false);
-  };
+  const cancelarEspera = () => { cancelarRef.current = true; setEspera(null); };
+  const esperando = espera && espera.estado === "PENDIENTE";
 
   return (
     <div style={{ padding: 16, maxWidth: 420, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
-      <Card title="👀 ¿Solo quieres consultar?">
-        {!invitado ? (
-          <>
+      {esperando && (
+        <Card title="⏳ Esperando la aprobación">
+          <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 12, lineHeight: 1.5 }}>
+            {espera.tipo === "ALTA"
+              ? "Tu solicitud de alta está enviada. Un administrador la tiene que aprobar (le ha llegado un aviso por correo) y dispone de 5 minutos."
+              : "Tu solicitud de acceso como invitado está enviada. Un administrador la tiene que aprobar (le ha llegado un aviso por correo) y dispone de 5 minutos."}
+            {" "}Esta pantalla entrará sola cuando la aprueben; no la cierres.
+          </div>
+          <Btn onClick={cancelarEspera} color={COLOR.grayMid} textColor={COLOR.grayDark}>Cancelar solicitud</Btn>
+        </Card>
+      )}
+      {espera && !esperando && (
+        <Aviso color={COLOR.red} bg={COLOR.redLight}>
+          {espera.estado === "RECHAZADA" ? "Un administrador ha rechazado la solicitud." : "La solicitud ha caducado (pasaron 5 minutos sin aprobarse). Puedes volver a pedirla."}
+        </Aviso>
+      )}
+
+      {!esperando && (
+        <>
+          <Card title="👀 ¿Solo quieres consultar?">
             <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 12, lineHeight: 1.5 }}>
               Si eres tutor/a o no eres residente, puedes entrar como invitado: ves el cuadrante y
-              el equipo, sin editar nada y sin darte de alta. Un administrador tiene que
-              aprobarlo (le llega un aviso por correo) y dispone de 5 minutos para hacerlo.
+              el equipo, sin editar nada y sin darte de alta. Un administrador tiene que aprobarlo
+              (le llega un aviso por correo) y dispone de 5 minutos para hacerlo.
             </div>
-            <Btn onClick={pedirInvitado} color={COLOR.bluePale} textColor={COLOR.blueDark}>Solicitar acceso como invitado</Btn>
-          </>
-        ) : invitado.estado === "PENDIENTE" ? (
-          <>
+            <Btn onClick={() => pedir("INVITADO")} color={COLOR.bluePale} textColor={COLOR.blueDark}>Solicitar acceso como invitado</Btn>
+          </Card>
+
+          <window.UI.SectionTitle>👋 Bienvenido — solicita el alta</window.UI.SectionTitle>
+          <Card>
             <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 12, lineHeight: 1.5 }}>
-              ⏳ Solicitud enviada. Esperando la aprobación de un administrador (hasta 5 minutos).
-              Esta pantalla entrará sola cuando la aprueben; no la cierres.
+              Tu cuenta de Google está verificada pero no hay ningún residente vinculado a este
+              email todavía. Rellena tus datos y solicita el alta: un administrador la aprobará
+              (tienes que esperar su aprobación) y tu nivel (R1–R4) se calculará solo a partir de
+              las fechas, nadie tiene que asignártelo.
             </div>
-            <Btn onClick={cancelarInvitado} color={COLOR.grayMid} textColor={COLOR.grayDark}>Cancelar solicitud</Btn>
-          </>
-        ) : (
-          <>
-            <Aviso color={COLOR.red} bg={COLOR.redLight}>
-              {invitado.estado === "RECHAZADA" ? "Un administrador ha rechazado la solicitud." : "La solicitud ha caducado (pasaron 5 minutos sin aprobarse)."}
-            </Aviso>
-            <div style={{ marginTop: 10 }}>
-              <Btn onClick={pedirInvitado} color={COLOR.bluePale} textColor={COLOR.blueDark}>Volver a solicitarlo</Btn>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: COLOR.grayDark, textTransform: "uppercase" }}>Nombre completo *</label>
+                <input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre Apellido Apellido"
+                  style={{ width: "100%", marginTop: 4, padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${COLOR.grayMid}`, fontSize: 14 }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: COLOR.grayDark, textTransform: "uppercase" }}>Fecha de incorporación *</label>
+                <input type="date" value={fechaInicio} onChange={(e) => onFechaInicioChange(e.target.value)}
+                  style={{ width: "100%", marginTop: 4, padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${COLOR.grayMid}`, fontSize: 14 }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: COLOR.grayDark, textTransform: "uppercase" }}>Fecha de fin de residencia</label>
+                <input type="date" value={fechaFin} onChange={(e) => setFechaFin(e.target.value)}
+                  style={{ width: "100%", marginTop: 4, padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${COLOR.grayMid}`, fontSize: 14 }} />
+                <div style={{ fontSize: 11, color: COLOR.grayDark, marginTop: 4 }}>Sugerida a 4 años; ajústala si tu residencia se alarga (baja, embarazo).</div>
+              </div>
             </div>
-          </>
-        )}
-      </Card>
-      <window.UI.SectionTitle>👋 Bienvenido — date de alta</window.UI.SectionTitle>
-      <Card>
-        <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 12, lineHeight: 1.5 }}>
-          Tu cuenta de Google está verificada pero no hay ningún residente vinculado a este
-          email todavía. Rellena tus datos para darte de alta — tu nivel (R1–R4) se calculará
-          solo a partir de las fechas, nadie tiene que asignártelo.
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: COLOR.grayDark, textTransform: "uppercase" }}>Nombre completo *</label>
-            <input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre Apellido Apellido"
-              style={{ width: "100%", marginTop: 4, padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${COLOR.grayMid}`, fontSize: 14 }} />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: COLOR.grayDark, textTransform: "uppercase" }}>Fecha de incorporación *</label>
-            <input type="date" value={fechaInicio} onChange={(e) => onFechaInicioChange(e.target.value)}
-              style={{ width: "100%", marginTop: 4, padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${COLOR.grayMid}`, fontSize: 14 }} />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: COLOR.grayDark, textTransform: "uppercase" }}>Fecha de fin de residencia</label>
-            <input type="date" value={fechaFin} onChange={(e) => setFechaFin(e.target.value)}
-              style={{ width: "100%", marginTop: 4, padding: "10px 12px", borderRadius: 8, border: `1.5px solid ${COLOR.grayMid}`, fontSize: 14 }} />
-            <div style={{ fontSize: 11, color: COLOR.grayDark, marginTop: 4 }}>Sugerida a 4 años; ajústala si tu residencia se alarga (baja, embarazo).</div>
-          </div>
-        </div>
-        {error && <div style={{ marginTop: 12 }}><Aviso color={COLOR.red} bg={COLOR.redLight}>{error}</Aviso></div>}
-        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <Btn onClick={onCancel} color={COLOR.grayMid} textColor={COLOR.grayDark}>Cancelar</Btn>
-          <Btn onClick={submit} disabled={saving}>{saving ? "Guardando…" : "Darme de alta"}</Btn>
-        </div>
-      </Card>
+            {error && <div style={{ marginTop: 12 }}><Aviso color={COLOR.red} bg={COLOR.redLight}>{error}</Aviso></div>}
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <Btn onClick={onCancel} color={COLOR.grayMid} textColor={COLOR.grayDark}>Cancelar</Btn>
+              <Btn onClick={() => pedir("ALTA")}>Solicitar el alta</Btn>
+            </div>
+          </Card>
+        </>
+      )}
     </div>
   );
 }

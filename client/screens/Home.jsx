@@ -27,7 +27,7 @@ function nivelDe(residente) {
  * alguna pendiente. Cada solicitud caduca a los 5 minutos: se consulta cada 20 s mientras Inicio
  * está abierto, y el correo que recibe el administrador es solo el aviso para venir aquí.
  */
-function SolicitudesInvitado({ api, showToast }) {
+function SolicitudesAcceso({ api, showToast }) {
   const [lista, setLista] = useState([]);
   const [busy, setBusy] = useState(false);
   const cargar = async () => {
@@ -43,19 +43,23 @@ function SolicitudesInvitado({ api, showToast }) {
     setBusy(true);
     const r = await api.resolverSolicitudInvitado(sol.id, aprobar);
     setBusy(false);
-    if (r.ok) showToast(aprobar ? `${sol.email} puede entrar como invitado ✓` : "Solicitud rechazada");
+    if (r.ok) showToast(aprobar ? (sol.tipo === "ALTA" ? `Alta de ${sol.nombre} aprobada ✓` : `${sol.email} puede entrar como invitado ✓`) : "Solicitud rechazada");
     else showToast(r.error, "err");
     cargar();
   };
   if (lista.length === 0) return null;
   return (
-    <Card title="👀 Solicitudes de invitado">
+    <Card title="🔔 Solicitudes de acceso">
       <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
-        Alguien quiere ver el cuadrante sin darse de alta (solo lectura). Caduca a los 5 minutos.
+        Alguien pide entrar: como invitado (solo lectura) o con una cuenta de residente nueva. Cada solicitud caduca a los 5 minutos.
       </div>
       {lista.map((sol) => (
         <div key={sol.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
-          <span style={{ fontSize: 13, wordBreak: "break-all" }}>{sol.email}</span>
+          <span style={{ fontSize: 13, wordBreak: "break-word", lineHeight: 1.4 }}>
+            <strong>{sol.tipo === "ALTA" ? "Alta de residente" : "Invitado"}</strong>
+            {sol.tipo === "ALTA" && <> · {sol.nombre} ({sol.fechaInicio} → {sol.fechaFin})</>}
+            <br /><span style={{ color: COLOR.grayDark }}>{sol.email}</span>
+          </span>
           <span style={{ display: "flex", gap: 6 }}>
             <Btn onClick={() => decidir(sol, true)} disabled={busy}>Aprobar</Btn>
             <Btn onClick={() => decidir(sol, false)} disabled={busy} color={COLOR.grayMid} textColor={COLOR.grayDark}>Rechazar</Btn>
@@ -621,7 +625,7 @@ function HomeScreen() {
         estadoError={estadoError} reintentar={() => setReintento((n) => n + 1)}
         comprobando={estadoMes === null && (app.isResponsable || app.grupo === "MAYOR" || accesoDesarrollador)} />
 
-      {puedoAprobarInvitados && !app.esInvitado && <SolicitudesInvitado api={app.api} showToast={app.showToast} />}
+      {puedoAprobarInvitados && !app.esInvitado && <SolicitudesAcceso api={app.api} showToast={app.showToast} />}
 
       {!app.esInvitado && <Imaginaria api={app.api} residentes={residentes} showToast={app.showToast} puedoRegistrar={puedoRegistrarImaginaria} />}
 

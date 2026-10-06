@@ -3,7 +3,7 @@
 // `google.accounts.id`, cargado por index.html vía CDN — aquí lo simulamos.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { setupGoogleSignIn, submitAlta, getSession, storeSession, clearSession } from "../auth.js";
+import { setupGoogleSignIn, getSession, storeSession, clearSession } from "../auth.js";
 
 function fakeStorage() {
   const m = new Map();
@@ -86,25 +86,6 @@ test("login con error genuino (aud incorrecta, etc.) llama onError, no onNeedsAl
   await gis._fireCredential("id-token-real");
   assert.equal(error, "aud incorrecta");
   assert.equal(needsAlta, null);
-});
-
-// ── alta ──
-test("submitAlta guarda la sesión devuelta y llama onSuccess", async () => {
-  const storage = fakeStorage();
-  let success = null;
-  const api = { altaResidente: async () => ({ ok: true, session: "sess-2", residente: { id: "r2", nombre: "Nuevo", rol: "residente" } }) };
-  await submitAlta({ api, identidad: { pendingToken: "ptok" }, datos: { nombre: "Nuevo", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, storage, onSuccess: (r) => (success = r), onError() {} });
-  assert.equal(success.residente.nombre, "Nuevo");
-  assert.equal(getSession(storage).session, "sess-2");
-});
-
-test("submitAlta con error del servidor llama onError y no toca el storage", async () => {
-  const storage = fakeStorage();
-  let error = null;
-  const api = { altaResidente: async () => ({ ok: false, error: "ese email ya está vinculado a un residente" }) };
-  await submitAlta({ api, identidad: { pendingToken: "ptok" }, datos: { nombre: "X", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, storage, onSuccess() {}, onError: (e) => (error = e) });
-  assert.match(error, /vinculad/i);
-  assert.equal(getSession(storage), null);
 });
 
 // ── nonce adelantado, refresco y GIS tardío (2026-09-04) ──
@@ -242,40 +223,53 @@ test("cada repintado del botón de Google vacía el contenedor antes (el renderB
   assert.equal(buttonEl.children.length, 1, "un solo botón tras dos refrescos");
 });
 
-import { pedirAccesoInvitado } from "../auth.js";
+import { pedirAcceso } from "../auth.js";
 
 function almacen() { const m = {}; return { setItem: (k, v) => { m[k] = v; }, getItem: (k) => m[k] ?? null, removeItem: (k) => { delete m[k]; }, m }; }
 
-test("pedirAccesoInvitado: espera mientras está PENDIENTE y entra cuando la aprueban (V-53)", async () => {
+test("pedirAcceso: espera mientras está PENDIENTE y entra cuando la aprueban (V-53)", async () => {
   const respuestas = [{ ok: true, estado: "PENDIENTE" }, { ok: true, estado: "PENDIENTE" }, { ok: true, estado: "APROBADA", session: "S", residente: { id: "invitado", nombre: "Invitado", rol: "invitado" }, residentes: [] }];
   const api = { solicitarInvitado: async () => ({ ok: true, solicitudToken: "t", expiraEn: 99 }), estadoSolicitudInvitado: async () => respuestas.shift() };
   let entro = null;
-  const fin = await pedirAccesoInvitado({ api, pendingToken: "p", storage: almacen(), onSuccess: (r) => { entro = r; }, onError: () => assert.fail(), esperar: async () => {} });
+  const fin = await pedirAcceso({ api, iniciar: () => api.solicitarInvitado("p"), storage: almacen(), onSuccess: (r) => { entro = r; }, onError: () => assert.fail(), esperar: async () => {} });
   assert.equal(fin, "APROBADA");
   assert.equal(entro.session, "S");
 });
 
-test("pedirAccesoInvitado: rechazo y caducidad terminan la espera sin sesión", async () => {
+test("pedirAcceso: rechazo y caducidad terminan la espera sin sesión", async () => {
   for (const estado of ["RECHAZADA", "CADUCADA"]) {
     const api = { solicitarInvitado: async () => ({ ok: true, solicitudToken: "t" }), estadoSolicitudInvitado: async () => ({ ok: true, estado }) };
-    const fin = await pedirAccesoInvitado({ api, pendingToken: "p", storage: almacen(), onSuccess: () => assert.fail(), onError: () => assert.fail(), esperar: async () => {} });
+    const fin = await pedirAcceso({ api, iniciar: () => api.solicitarInvitado("p"), storage: almacen(), onSuccess: () => assert.fail(), onError: () => assert.fail(), esperar: async () => {} });
     assert.equal(fin, estado);
   }
 });
 
-test("pedirAccesoInvitado: un fallo de red puntual no tira la solicitud, y cancelar corta la espera", async () => {
+test("pedirAcceso: un fallo de red puntual no tira la solicitud, y cancelar corta la espera", async () => {
   let n = 0;
   const api = { solicitarInvitado: async () => ({ ok: true, solicitudToken: "t" }), estadoSolicitudInvitado: async () => (++n === 1 ? { ok: false, error: "red" } : { ok: true, estado: "PENDIENTE" }) };
   let vueltas = 0;
-  const fin = await pedirAccesoInvitado({ api, pendingToken: "p", storage: almacen(), onSuccess: () => assert.fail(), onError: () => assert.fail(), esperar: async () => { vueltas++; }, cancelado: () => vueltas >= 3 });
+  const fin = await pedirAcceso({ api, iniciar: () => api.solicitarInvitado("p"), storage: almacen(), onSuccess: () => assert.fail(), onError: () => assert.fail(), esperar: async () => { vueltas++; }, cancelado: () => vueltas >= 3 });
   assert.equal(fin, "CANCELADA");
   assert.ok(n >= 2);
 });
 
-test("pedirAccesoInvitado: si la solicitud se rechaza de entrada, avisa del error", async () => {
+test("pedirAcceso: si la solicitud se rechaza de entrada, avisa del error", async () => {
   const api = { solicitarInvitado: async () => ({ ok: false, error: "pendingToken inválido o caducado" }) };
   let msg = null;
-  const fin = await pedirAccesoInvitado({ api, pendingToken: "p", storage: almacen(), onSuccess: () => assert.fail(), onError: (e) => { msg = e; }, esperar: async () => {} });
+  const fin = await pedirAcceso({ api, iniciar: () => api.solicitarInvitado("p"), storage: almacen(), onSuccess: () => assert.fail(), onError: (e) => { msg = e; }, esperar: async () => {} });
   assert.equal(fin, "ERROR");
   assert.match(msg, /caducado/);
+});
+
+test("pedirAcceso con un alta: al aprobarse guarda la sesión del residente recién creado (V-54)", async () => {
+  const storage = almacen();
+  const api = {
+    solicitarAlta: async (_id, datos) => ({ ok: true, solicitudToken: "t", expiraEn: 1, datos }),
+    estadoSolicitudInvitado: async () => ({ ok: true, estado: "APROBADA", session: "S-RES", residente: { id: "r9", nombre: "Nueva", rol: "residente" }, residentes: [] }),
+  };
+  let entro = null;
+  const fin = await pedirAcceso({ api, iniciar: () => api.solicitarAlta("ptok", { nombre: "Nueva" }), storage, onSuccess: (r) => { entro = r; }, onError: () => assert.fail(), esperar: async () => {} });
+  assert.equal(fin, "APROBADA");
+  assert.equal(entro.residente.nombre, "Nueva");
+  assert.equal(JSON.parse(storage.m.guardias_session).session, "S-RES");
 });
