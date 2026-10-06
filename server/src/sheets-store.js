@@ -37,6 +37,19 @@ export function makeStore({ ss, withLock: withLockCrudo, newId }) {
     });
   };
 
+  // Memoización de `ss.read` por hoja, válida mientras viva ESTE store (2026-10-06). En Apps Script
+  // el store se construye por petición (`sheetsStore_()` desde `deps_()`), así que nunca sirve un
+  // dato de otra ejecución: solo evita que una misma petición relea la hoja entera varias veces
+  // (`marcarValidado` leía `periodos`, `residentes` y `voluntarios3P` dos veces cada una — 12
+  // lecturas de hoja completa por validar, y cada `getValues` es un viaje a Sheets). Cada escritura
+  // de este store invalida la hoja que toca; se cachean las FILAS crudas, no los registros, porque
+  // los llamadores ordenan y mutan los registros que reciben.
+  const lecturas = new Map();
+  function leer(nombre) {
+    if (!lecturas.has(nombre)) lecturas.set(nombre, ss.read(nombre));
+    return lecturas.get(nombre);
+  }
+
   function table(nameOrTable) {
     const t = typeof nameOrTable === "string" ? TABLES[nameOrTable] : nameOrTable;
     if (!t) throw new Error(`tabla desconocida: ${nameOrTable}`);
@@ -58,8 +71,9 @@ export function makeStore({ ss, withLock: withLockCrudo, newId }) {
     const t = table(nameOrTable);
     if (!records.length) return [];
     return withLock(() => {
-      if (ss.read(t.name).length === 0) ss.append(t.name, [headerOf(t)]); // cabecera si falta
+      if (leer(t.name).length === 0) ss.append(t.name, [headerOf(t)]); // cabecera si falta
       const conId = records.map((r) => ({ ...r, id: r.id || newId() }));
+      lecturas.delete(t.name);
       ss.append(t.name, conId.map((r) => recordToRow(t, r)));
       return conId.map((r) => r.id);
     });
@@ -73,7 +87,7 @@ export function makeStore({ ss, withLock: withLockCrudo, newId }) {
   /** Lee todos los registros de una tabla normalizada. */
   function readRecords(nameOrTable) {
     const t = table(nameOrTable);
-    return rowsToRecords(t, ss.read(t.name));
+    return rowsToRecords(t, leer(t.name));
   }
 
   /**
@@ -104,6 +118,8 @@ export function makeStore({ ss, withLock: withLockCrudo, newId }) {
   function rebuildSheet(name, rows) {
     return withLock(() => {
       const tmp = TMP_PREFIX + name;
+      lecturas.delete(name);
+      lecturas.delete(tmp);
       if (ss.exists(tmp)) ss.deleteSheet(tmp); // limpia residuo de una caída anterior
       ss.createSheet(tmp);
       ss.overwrite(tmp, rows);

@@ -222,6 +222,19 @@ function makeStore({ ss, withLock: withLockCrudo, newId }) {
     });
   };
 
+  // Memoización de `ss.read` por hoja, válida mientras viva ESTE store (2026-10-06). En Apps Script
+  // el store se construye por petición (`sheetsStore_()` desde `deps_()`), así que nunca sirve un
+  // dato de otra ejecución: solo evita que una misma petición relea la hoja entera varias veces
+  // (`marcarValidado` leía `periodos`, `residentes` y `voluntarios3P` dos veces cada una — 12
+  // lecturas de hoja completa por validar, y cada `getValues` es un viaje a Sheets). Cada escritura
+  // de este store invalida la hoja que toca; se cachean las FILAS crudas, no los registros, porque
+  // los llamadores ordenan y mutan los registros que reciben.
+  const lecturas = new Map();
+  function leer(nombre) {
+    if (!lecturas.has(nombre)) lecturas.set(nombre, ss.read(nombre));
+    return lecturas.get(nombre);
+  }
+
   function table(nameOrTable) {
     const t = typeof nameOrTable === "string" ? TABLES[nameOrTable] : nameOrTable;
     if (!t) throw new Error(`tabla desconocida: ${nameOrTable}`);
@@ -243,8 +256,9 @@ function makeStore({ ss, withLock: withLockCrudo, newId }) {
     const t = table(nameOrTable);
     if (!records.length) return [];
     return withLock(() => {
-      if (ss.read(t.name).length === 0) ss.append(t.name, [headerOf(t)]); // cabecera si falta
+      if (leer(t.name).length === 0) ss.append(t.name, [headerOf(t)]); // cabecera si falta
       const conId = records.map((r) => ({ ...r, id: r.id || newId() }));
+      lecturas.delete(t.name);
       ss.append(t.name, conId.map((r) => recordToRow(t, r)));
       return conId.map((r) => r.id);
     });
@@ -258,7 +272,7 @@ function makeStore({ ss, withLock: withLockCrudo, newId }) {
   /** Lee todos los registros de una tabla normalizada. */
   function readRecords(nameOrTable) {
     const t = table(nameOrTable);
-    return rowsToRecords(t, ss.read(t.name));
+    return rowsToRecords(t, leer(t.name));
   }
 
   /**
@@ -289,6 +303,8 @@ function makeStore({ ss, withLock: withLockCrudo, newId }) {
   function rebuildSheet(name, rows) {
     return withLock(() => {
       const tmp = TMP_PREFIX + name;
+      lecturas.delete(name);
+      lecturas.delete(tmp);
       if (ss.exists(tmp)) ss.deleteSheet(tmp); // limpia residuo de una caída anterior
       ss.createSheet(tmp);
       ss.overwrite(tmp, rows);
@@ -1770,7 +1786,7 @@ function handleRequest(rawBody, deps) {
 
       case "marcarValidado":
         return authed(req, deps, (session) => {
-          const denegado = requireCicloPermiso(deps, session, "validar el cuadrante");
+          const denegado = requireValidarPermiso(deps, session);
           if (denegado) return denegado;
           // Bajo el lock de escritura (2026-09-04): entre leer el mes, validarlo y escribir VALIDADO
           // otro residente podía guardar una celda, y el mes quedaba VALIDADO con una guardia que
@@ -2484,12 +2500,28 @@ function promptData(deps, mes, anio, snap) {
 // devolver `false` sin que nadie tenga que acordarse de retirar el bloque a mano — una excepción
 // que solo se revierte si alguien se acuerda no sobrevive los diez años que el proyecto exige de
 // sí mismo.
-const EMAIL_ACCESO_DESARROLLADOR = "agustinlagioiosa@gmail.com";
+// Desde V-52 son DOS administradores (el autor y Quique); ver `requireValidarPermiso`.
+const EMAILS_ACCESO_DESARROLLADOR = ["agustinlagioiosa@gmail.com", "quiquemm14@gmail.com"];
 const FECHA_LIMITE_ACCESO_DESARROLLADOR = "2027-03-31";
 function esAccesoDesarrollador(deps, session) {
   if (deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return false;
   const residente = allResidentes(deps).find((r) => r.id === session.sub);
-  return Boolean(residente) && residente.email === EMAIL_ACCESO_DESARROLLADOR;
+  return Boolean(residente) && EMAILS_ACCESO_DESARROLLADOR.includes(residente.email);
+}
+
+/**
+ * Permiso para marcar un mes como VALIDADO (decisión V-52, 2026-10-06, a pedido del autor
+ * mientras la app se estabiliza en producción): mientras dure la ventana de acceso de
+ * desarrollador SOLO los administradores validan; el Responsable y los Mayores siguen pudiendo
+ * publicar/despublicar y el resto del ciclo (`requireCicloPermiso`). Pasada
+ * `FECHA_LIMITE_ACCESO_DESARROLLADOR` la restricción cae sola y vuelve la regla de V-16: un
+ * servicio que depende de que alguien con un email concreto siga ahí incumple el criterio de
+ * sobrevivir sin administrador, y nadie tendría que acordarse de retirarla.
+ */
+function requireValidarPermiso(deps, session) {
+  if (deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return requireCicloPermiso(deps, session, "validar el cuadrante");
+  if (esAccesoDesarrollador(deps, session)) return null;
+  return { ok: false, error: "por ahora solo los administradores pueden validar el cuadrante" };
 }
 
 /**

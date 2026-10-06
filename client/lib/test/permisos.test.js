@@ -95,3 +95,13 @@ test("V-49: el acceso de desarrollador destraba puedeMoverCiclo entero, no solo 
 test("V-49: sin el acceso de desarrollador, puedeMoverCiclo sigue las reglas de siempre", () => {
   assert.equal(puedeMoverCiclo({ ...PEQUENO, accesoDesarrollador: false }), false);
 });
+
+test("puedeValidarCuadrante: en la ventana solo los administradores; pasada, el permiso del ciclo (V-52)", async () => {
+  const { puedeValidarCuadrante } = await import("../permisos.js");
+  const hoy = "2026-10-06";
+  assert.equal(puedeValidarCuadrante({ email: "agustinlagioiosa@gmail.com", puedeMoverCiclo: false, hoy }), true);
+  assert.equal(puedeValidarCuadrante({ email: "quiquemm14@gmail.com", puedeMoverCiclo: false, hoy }), true);
+  assert.equal(puedeValidarCuadrante({ email: "resp@gmail.com", puedeMoverCiclo: true, hoy }), false, "ni el Responsable");
+  assert.equal(puedeValidarCuadrante({ email: "resp@gmail.com", puedeMoverCiclo: true, hoy: "2027-04-01" }), true, "caducada: vuelve V-16");
+  assert.equal(puedeValidarCuadrante({ email: "otro@gmail.com", puedeMoverCiclo: false, hoy: "2027-04-01" }), false);
+});

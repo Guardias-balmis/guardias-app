@@ -17,6 +17,8 @@ mano, cada vez que algo llega de verdad a producción.
 
 `Code.gs` sigue en la versión del 2026-09-05 (V-47): no ha cambiado desde entonces.
 
+**Pendiente de desplegar (2026-10-06):** `server-lib.gs` con V-52 (solo administradores validan) y la memoización de lecturas del store. Hasta pegarlo y crear la «Nueva versión», el servidor sigue dejando validar a Responsable/Mayores aunque el cliente ya oculte el botón.
+
 Con `domain.gs` y `server-lib.gs` al día no queda ningún cambio de backend pendiente de desplegar.
 Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
 `/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el

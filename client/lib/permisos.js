@@ -57,8 +57,18 @@ export function puedeGenerarCuadrante({ isResponsable, grupo, sinResponsable, ac
 // falta acordarse de retirar este bloque. Esto SOLO decide qué se ENSEÑA: el servidor vuelve a
 // comprobar el mismo email y la misma fecha por su cuenta en `requireCicloPermiso`, que es donde
 // de verdad no se puede falsear.
-const EMAIL_ACCESO_DESARROLLADOR = "agustinlagioiosa@gmail.com";
+const EMAILS_ACCESO_DESARROLLADOR = ["agustinlagioiosa@gmail.com", "quiquemm14@gmail.com"];
 const FECHA_LIMITE_ACCESO_DESARROLLADOR = "2027-03-31";
 export function esAccesoDesarrollador(email, hoy = todayISO()) {
-  return email === EMAIL_ACCESO_DESARROLLADOR && hoy <= FECHA_LIMITE_ACCESO_DESARROLLADOR;
+  return EMAILS_ACCESO_DESARROLLADOR.includes(email) && hoy <= FECHA_LIMITE_ACCESO_DESARROLLADOR;
+}
+
+/**
+ * Si se enseña «Validar» (decisión V-52): mientras dure la ventana de administradores, solo ellos;
+ * pasada la fecha límite vuelve el permiso del ciclo (V-16). Espejo de `requireValidarPermiso`
+ * en el servidor, que es quien manda.
+ */
+export function puedeValidarCuadrante({ email, puedeMoverCiclo, hoy = todayISO() }) {
+  if (hoy > FECHA_LIMITE_ACCESO_DESARROLLADOR) return Boolean(puedeMoverCiclo);
+  return esAccesoDesarrollador(email, hoy);
 }

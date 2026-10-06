@@ -10,7 +10,7 @@ import { validateMonth, rotationHistoryStart, buildMonthContext } from "./v2/dom
 import { canEdit, canValidate, canPublish, canUnpublish, stateAfterEdit, equityWarnings } from "./v2/domain/cuadrante.js";
 import { closeViolations } from "./client/lib/closes.js";
 import { thirdPostViolations } from "./client/lib/thirdpost.js";
-import { puedeMoverCiclo as reglaCiclo, esAccesoDesarrollador } from "./client/lib/permisos.js";
+import { puedeMoverCiclo as reglaCiclo, esAccesoDesarrollador, puedeValidarCuadrante } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 // Aviso de descanso (INV-15) en el instante de escribir la celda. Existe sobre todo por el 3P:
 // `schedule.js` no lo reparte, así que siempre lo pone una persona encima de un mes ya generado,
@@ -201,6 +201,8 @@ function CalendarScreen() {
   // Mayor. Aquí solo decide qué botones se ven; quien manda es requireCicloPermiso en el router.
   const soyMayor = grupo === "MAYOR";
   const puedeMoverCiclo = reglaCiclo({ isResponsable, grupo, sinResponsable, accesoDesarrollador: esAccesoDesarrollador(myResidente?.email) });
+  // V-52: validar es, por ahora, cosa de los administradores (el servidor lo vuelve a comprobar).
+  const puedeValidar = puedeValidarCuadrante({ email: myResidente?.email, puedeMoverCiclo });
   const bloqueadoPorPublicado = !canEdit(estado) || estadoError || cargaError;
 
   useEffect(() => {
@@ -575,19 +577,19 @@ function CalendarScreen() {
     // `!r3P.ok` cuenta igual que `!rCierres.ok`: lo que no se ha podido comprobar tampoco se da
     // por bueno en silencio, y quien firma el cuadrante tiene que enterarse de que INV-8 quedó
     // sin mirar antes de que el mes pase a VALIDADO.
-    if (canValidate(v) && puedeMoverCiclo && estado !== "PUBLICADO" && cambios.length === 0 && (avisosEquidad.length > 0 || !rCierres.ok || !r3P.ok) && !forzar) {
+    if (canValidate(v) && puedeValidar && estado !== "PUBLICADO" && cambios.length === 0 && (avisosEquidad.length > 0 || !rCierres.ok || !r3P.ok) && !forzar) {
       if (avisosEquidad.length > 0) setEquidadPorConfirmar(avisosEquidad.length);
       return;
     }
 
     // Con celdas sin guardar no se marca VALIDADO (ver arriba), pero antes tampoco se decía: la
     // pantalla enseñaba «Sin violaciones» y el mes seguía en Borrador sin explicación.
-    if (canValidate(v) && puedeMoverCiclo && estado !== "PUBLICADO" && cambios.length > 0) {
+    if (canValidate(v) && puedeValidar && estado !== "PUBLICADO" && cambios.length > 0) {
       showToast(`Sin errores. Guarda los ${cambios.length} cambios pendientes para marcar el mes como VALIDADO`);
       return;
     }
 
-    if (canValidate(v) && puedeMoverCiclo && estado !== "PUBLICADO" && cambios.length === 0) {
+    if (canValidate(v) && puedeValidar && estado !== "PUBLICADO" && cambios.length === 0) {
       const rVal = await app.api.marcarValidado(anio, mes);
       if (rVal.ok) { setEstado(rVal.estado); showToast("Cuadrante VALIDADO ✓"); }
       else {
@@ -693,7 +695,9 @@ function CalendarScreen() {
           <button style={pillBtn(COLOR.grayDark)} onClick={deshacer} disabled={busy || bloqueadoPorPublicado || !puedeDeshacer} title="Deshace la última celda que tocaste">
             ↩️ Deshacer
           </button>
-          <button style={pillBtn(COLOR.greenMid)} onClick={() => validar()} disabled={busy}>{validando ? "Validando…" : "✅ Validar"}</button>
+          {puedeValidar && (
+            <button style={pillBtn(COLOR.greenMid)} onClick={() => validar()} disabled={busy}>{validando ? "Validando…" : "✅ Validar"}</button>
+          )}
           {puedeMoverCiclo && canPublish(estado) && (
             <button style={pillBtn(COLOR.blueDark)} onClick={publicar} disabled={busy}>
               {cambiandoEstado ? "Publicando…" : "📢 Publicar"}
@@ -707,7 +711,7 @@ function CalendarScreen() {
         </div>
         {sinResponsable && soyMayor && (
           <div style={{ fontSize: 12, color: COLOR.orange, background: COLOR.orangeLight, borderRadius: 6, padding: "6px 10px", marginBottom: 10 }}>
-            ⚖️ No hay Responsable del contaje designado para este periodo. Hasta que se decida, cualquier R3 o R4 puede validar y publicar — decídelo en ⚙️ → Responsable.
+            ⚖️ No hay Responsable del contaje designado para este periodo. Hasta que se decida, cualquier R3 o R4 puede publicar — decídelo en ⚙️ → Responsable.
           </div>
         )}
         {!estadoError && !cargaError && bloqueadoPorPublicado && (
@@ -815,7 +819,7 @@ function CalendarScreen() {
               </div>
               {/* Solo mientras quede algo que confirmar: si el mes ya está VALIDADO, el aviso
                   sigue siendo cierto (y visible) pero el botón ya no tiene nada que hacer. */}
-              {estado === "BORRADOR" && (
+              {estado === "BORRADOR" && puedeValidar && (
                 <button style={pillBtn(COLOR.greenMid)} onClick={() => validar(true)} disabled={busy}>
                   {validando ? "Validando…" : "✅ Validar de todas formas"}
                 </button>

@@ -765,3 +765,22 @@ test("la acción `validar` cambia el veredicto-a-suerte de INV-5 por el error qu
   assert.doesNotMatch(i5[0].detalle, /sobre bloqueo/, "no debe juzgar la asignación con una fecha que no se puede leer");
   assert.ok(r.bloqueantes >= 1);
 });
+
+// V-52: mientras dura la ventana de administradores solo ellos validan; pasada, vuelve V-16.
+test("marcarValidado (V-52): en la ventana solo valida un administrador, ni el Responsable; caducada, el Responsable", () => {
+  const ADMIN = { id: "adm-1", nombre: "Quique", email: "quiquemm14@gmail.com", fechaInicio: "2026-05-27", fechaFin: "2030-05-26" };
+  const mk = (today) => {
+    const deps = stubClean(makeDeps({ today }));
+    deps.ss.append("residentes", [recordToRow(TABLES.residentes, ADMIN)]);
+    return deps;
+  };
+  const dentro = mk("2026-10-06");
+  const rResp = call({ action: "marcarValidado", session: loggedInAs(dentro, "resp@gmail.com"), mes: 10, anio: 2026 }, dentro);
+  assert.equal(rResp.ok, false);
+  assert.match(rResp.error, /administradores/);
+  const rAdm = call({ action: "marcarValidado", session: loggedInAs(dentro, "quiquemm14@gmail.com"), mes: 10, anio: 2026 }, dentro);
+  assert.equal(rAdm.ok, true);
+
+  const fuera = mk("2027-07-16");
+  assert.equal(call({ action: "marcarValidado", session: loggedInAs(fuera, "resp@gmail.com"), mes: 7, anio: 2027 }, fuera).ok, true);
+});
