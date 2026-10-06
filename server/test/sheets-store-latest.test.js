@@ -62,3 +62,18 @@ test("readLatest: preserva el orden relativo de primera aparición de cada clave
   const latest = st.readLatest("asignaciones", (r) => `${r.fecha}|${r.residenteId}`);
   assert.deepEqual(latest.map((r) => r.fecha), ["2026-06-02", "2026-06-01"]);
 });
+
+test("lecturas memoizadas por store: una hoja se lee una vez, y una escritura propia la invalida", () => {
+  const ss = fakeSS();
+  let lecturas = 0;
+  const leer = ss.read;
+  ss.read = (nombre) => { lecturas++; return leer(nombre); };
+  const s = store(ss);
+  s.appendRecord("residentes", { nombre: "Ana", email: "ana@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" });
+  lecturas = 0;
+  assert.equal(s.readRecords("residentes").length, 1);
+  assert.equal(s.readLatest("residentes", (r) => r.id).length, 1);
+  assert.equal(lecturas, 1, "dos lecturas de la misma hoja, un solo viaje");
+  s.appendRecord("residentes", { nombre: "Bea", email: "bea@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" });
+  assert.equal(s.readRecords("residentes").length, 2, "la escritura propia no deja ver datos viejos");
+});

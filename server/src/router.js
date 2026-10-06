@@ -788,7 +788,7 @@ export function handleRequest(rawBody, deps) {
 
       case "marcarValidado":
         return authed(req, deps, (session) => {
-          const denegado = requireCicloPermiso(deps, session, "validar el cuadrante");
+          const denegado = requireValidarPermiso(deps, session);
           if (denegado) return denegado;
           // Bajo el lock de escritura (2026-09-04): entre leer el mes, validarlo y escribir VALIDADO
           // otro residente podía guardar una celda, y el mes quedaba VALIDADO con una guardia que
@@ -1502,12 +1502,28 @@ function promptData(deps, mes, anio, snap) {
 // devolver `false` sin que nadie tenga que acordarse de retirar el bloque a mano — una excepción
 // que solo se revierte si alguien se acuerda no sobrevive los diez años que el proyecto exige de
 // sí mismo.
-const EMAIL_ACCESO_DESARROLLADOR = "agustinlagioiosa@gmail.com";
+// Desde V-52 son DOS administradores (el autor y Quique); ver `requireValidarPermiso`.
+const EMAILS_ACCESO_DESARROLLADOR = ["agustinlagioiosa@gmail.com", "quiquemm14@gmail.com"];
 const FECHA_LIMITE_ACCESO_DESARROLLADOR = "2027-03-31";
 function esAccesoDesarrollador(deps, session) {
   if (deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return false;
   const residente = allResidentes(deps).find((r) => r.id === session.sub);
-  return Boolean(residente) && residente.email === EMAIL_ACCESO_DESARROLLADOR;
+  return Boolean(residente) && EMAILS_ACCESO_DESARROLLADOR.includes(residente.email);
+}
+
+/**
+ * Permiso para marcar un mes como VALIDADO (decisión V-52, 2026-10-06, a pedido del autor
+ * mientras la app se estabiliza en producción): mientras dure la ventana de acceso de
+ * desarrollador SOLO los administradores validan; el Responsable y los Mayores siguen pudiendo
+ * publicar/despublicar y el resto del ciclo (`requireCicloPermiso`). Pasada
+ * `FECHA_LIMITE_ACCESO_DESARROLLADOR` la restricción cae sola y vuelve la regla de V-16: un
+ * servicio que depende de que alguien con un email concreto siga ahí incumple el criterio de
+ * sobrevivir sin administrador, y nadie tendría que acordarse de retirarla.
+ */
+function requireValidarPermiso(deps, session) {
+  if (deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return requireCicloPermiso(deps, session, "validar el cuadrante");
+  if (esAccesoDesarrollador(deps, session)) return null;
+  return { ok: false, error: "por ahora solo los administradores pueden validar el cuadrante" };
 }
 
 /**

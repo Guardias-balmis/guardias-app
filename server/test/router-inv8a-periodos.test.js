@@ -41,7 +41,7 @@ function fakeSS(rows = {}) {
   };
 }
 // A 2026-12-01: ANA R3 (MAYOR), BRUNO R2 (PEQUENO).
-const ANA = { id: "ana", nombre: "Ana", email: "ana@gmail.com", fechaInicio: "2024-05-25", fechaFin: "2028-05-24" };
+const ANA = { id: "ana", nombre: "Ana", email: "quiquemm14@gmail.com", fechaInicio: "2024-05-25", fechaFin: "2028-05-24" };
 const BRUNO = { id: "bruno", nombre: "Bruno", email: "bruno@gmail.com", fechaInicio: "2025-05-25", fechaFin: "2029-05-24" };
 let idCounter = 0;
 
@@ -74,7 +74,7 @@ function makeDeps({ today = "2026-12-01", voluntarios3P = [] } = {}) {
     consumeNonce: (n) => nonces.delete(n),
     fetchTokeninfo: () => ({
       aud: CLIENT_ID, iss: "https://accounts.google.com",
-      email: "ana@gmail.com", email_verified: "true", sub: "g-1", exp: String(2_000_000), nonce: [...nonces][0],
+      email: "quiquemm14@gmail.com", email_verified: "true", sub: "g-1", exp: String(2_000_000), nonce: [...nonces][0],
     }),
   };
 }
