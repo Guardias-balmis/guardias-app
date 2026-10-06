@@ -88,6 +88,12 @@ export const TABLES = {
   // fila. `tipo` es el identificador que lee el dominio (no `INV-n`: un mismo invariante podría
   // en el futuro tener más de un tipo de excepción), y añadir uno nuevo exige cablearlo en
   // `validateMonth`/`buildMonthContext` para que tenga efecto — la tabla por sí sola no hace nada.
+  // Solicitudes de acceso (V-53): `tipo` INVITADO (solo lectura) o ALTA (cuenta de residente nueva;
+  // `nombre`/`fechaInicio`/`fechaFin` son los datos del alta, que solo se materializan si se aprueba). Append-only por `id` como el resto (la última fila
+  // gana): PENDIENTE → APROBADA | RECHAZADA → USADA. `solicitadoEn`/`decididoEn` son epoch en
+  // segundos (no `date`: la ventana de aprobación es de 5 minutos). Guarda el email de quien pidió
+  // entrar —es la traza de quién miró el cuadrante o se dio de alta— y NO crea ningún residente por sí sola.
+  solicitudesInvitado: { name: "solicitudesInvitado", columns: [col("id"), col("email"), col("solicitadoEn", "number"), col("estado"), col("decididoPor"), col("decididoEn", "number"), col("tipo"), col("nombre"), col("fechaInicio", "date"), col("fechaFin", "date")] },
   excepciones: { name: "excepciones", columns: [col("id"), col("tipo"), col("desde", "date"), col("hasta", "date"), col("justificacion"), col("registradaPor"), col("fecha", "date"), col("activo", "bool")] },
 };
 

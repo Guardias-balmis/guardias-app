@@ -53,6 +53,10 @@ function deps_() {
     issueNonce: issueNonce_,
     consumeNonce: consumeNonce_,
     fetchTokeninfo: fetchTokeninfo_,
+    // Aviso por correo a los administradores cuando alguien pide entrar como invitado (V-53). Es solo
+    // un aviso: la aprobación se hace dentro de la app. Necesita el permiso de Gmail/MailApp
+    // (`script.send_mail`): la PRIMERA vez que se despliegue con esto, Apps Script pide autorizarlo.
+    sendMail: function (para, asunto, cuerpo) { MailApp.sendEmail(para.join(","), asunto, cuerpo); },
     // Puerto de generación (V-45). El núcleo del generador (prompt, parseo y ciclo de reintentos)
     // es puro y vive en el bundle; esto es solo el cable a Google.
     llm: llm_(),

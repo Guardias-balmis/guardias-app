@@ -36,7 +36,7 @@ export function getSession(storage = sessionStorage) {
   }
 }
 /**
- * Guarda SOLO lo que la sesión necesita (token + perfil mínimo). `login`/`altaResidente`
+ * Guarda SOLO lo que la sesión necesita (token + perfil mínimo). `login`/`estadoSolicitudInvitado`
  * devuelven además la lista de residentes para ahorrarle al arranque una ida y vuelta; esa
  * lista es estado de la app, no de la sesión, y no se persiste aquí.
  */
@@ -161,15 +161,31 @@ export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage 
 }
 
 /**
- * Envía el formulario de alta autoservicio. `identidad` es {idToken,nonce} o {pendingToken}
- * (ver router.js handleAlta). Guarda la sesión resultante igual que un login.
+ * Pide acceso (V-53 invitado, V-54 alta de residente) y espera a que un administrador lo apruebe
+ * (5 min). `iniciar()` lanza la solicitud (`api.solicitarInvitado(pendingToken)` o
+ * `api.solicitarAlta(pendingToken, datos)`) y devuelve `{ok, solicitudToken, expiraEn}`. Consulta
+ * cada `intervaloMs`; al aprobarse guarda la sesión igual que un login (en un alta, la del
+ * residente recién creado). `cancelado()` corta la espera (el usuario pulsó Cancelar o desmontó la
+ * pantalla). `onEstado` recibe cada consulta, para pintar la espera con el `expiraEn` del servidor.
+ *
+ * Devuelve el estado final: "APROBADA" | "RECHAZADA" | "CADUCADA" | "CANCELADA" | "ERROR".
  */
-export async function submitAlta({ api, identidad, datos, storage = sessionStorage, onSuccess, onError }) {
-  const r = await api.altaResidente(identidad, datos);
-  if (!r.ok) {
-    onError(r.error);
-    return;
+export async function pedirAcceso({
+  api, iniciar, storage = sessionStorage, onSuccess, onError, onEstado = () => {},
+  intervaloMs = 4000, esperar = (ms) => new Promise((r) => setTimeout(r, ms)), cancelado = () => false,
+}) {
+  const sol = await iniciar();
+  if (!sol.ok) { onError(sol.error); return "ERROR"; }
+  onEstado({ estado: "PENDIENTE", expiraEn: sol.expiraEn });
+  while (!cancelado()) {
+    await esperar(intervaloMs);
+    if (cancelado()) break;
+    const r = await api.estadoSolicitudInvitado(sol.solicitudToken);
+    // Un fallo de red puntual no tira la solicitud: se sigue preguntando hasta que caduque.
+    if (!r.ok) continue;
+    if (r.estado === "APROBADA") { storeSession(r, storage); onSuccess(r); return "APROBADA"; }
+    if (r.estado === "RECHAZADA" || r.estado === "CADUCADA") { onEstado(r); return r.estado; }
+    onEstado(r);
   }
-  storeSession(r, storage);
-  onSuccess(r);
+  return "CANCELADA";
 }

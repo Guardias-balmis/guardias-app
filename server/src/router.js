@@ -78,8 +78,35 @@ export function handleRequest(rawBody, deps) {
       case "login":
         return handleLogin(req, deps);
 
+      // Desde V-54 el alta ya no es autoservicio: se SOLICITA y la aprueba un administrador. Esta
+      // acción se queda para que un cliente viejo reciba un motivo y no un «acción desconocida».
       case "altaResidente":
-        return handleAlta(req, deps);
+        return { ok: false, error: "el alta de un residente requiere la aprobación de un administrador: actualiza la página" };
+
+      case "solicitarAlta":
+        return handleSolicitarAlta(req, deps);
+
+      // Solicitudes de acceso (V-53 invitado, V-54 alta de residente): solo con la aprobación de un
+      // administrador dentro de los 5 minutos siguientes a la solicitud.
+      case "solicitarInvitado":
+        return handleSolicitarInvitado(req, deps);
+
+      case "estadoSolicitudInvitado":
+        return handleEstadoSolicitudInvitado(req, deps);
+
+      case "listSolicitudesInvitado":
+        return authed(req, deps, (session) => {
+          const denegado = requireValidarPermiso(deps, session, "gestionar las solicitudes de acceso");
+          if (denegado) return denegado;
+          return { ok: true, solicitudes: solicitudesPendientes(deps) };
+        });
+
+      case "resolverSolicitudInvitado":
+        return authed(req, deps, (session) => {
+          const denegado = requireValidarPermiso(deps, session, "gestionar las solicitudes de acceso");
+          if (denegado) return denegado;
+          return handleResolverSolicitud(req, deps, session);
+        });
 
       case "whoami":
         return authed(req, deps, (session) => ({ ok: true, sub: session.sub, rol: session.rol }));
@@ -102,7 +129,7 @@ export function handleRequest(rawBody, deps) {
         });
 
       case "listResidentes":
-        return authed(req, deps, () => ({ ok: true, residentes: allResidentes(deps) }));
+        return authed(req, deps, (session) => ({ ok: true, residentes: paraSesion(allResidentes(deps), session) }));
 
       // Corregir las fechas de un residente. Hasta ahora `fechaInicio`/`fechaFin` solo se escribían
       // en el alta (`handleAlta`) y no había forma de tocarlas después, lo que dejaba sin salida
@@ -892,12 +919,28 @@ function handleLogin(req, deps) {
 }
 
 /**
- * Alta autoservicio (DoD-1: "un R1 nuevo se da de alta solo"). Verifica identidad de dos
- * formas posibles: (a) un `idToken`+`nonce` frescos (como login), o (b) un `pendingToken`
- * emitido por un login previo que falló solo por "email no vinculado" — evita un segundo
- * popup de Google. El nivel R1-R4 no se pide: se deriva de `fechaInicio`/`fechaFin` (S-2).
+ * Datos de un alta, validados. Mismas reglas que tenía el alta autoservicio (DoD-1): el nivel R1-R4
+ * no se pide, se deriva de `fechaInicio`/`fechaFin` (S-2), y las fechas pasan por el `validRango` de
+ * `editarResidente` (V-22) porque una que no sea ISO no falla aquí sino después y en todas partes
+ * (`periodsOfResident` lanza al derivar el nivel de TODOS los residentes). El nombre se vuelca a las
+ * pestañas publicadas, donde una celda que empiece por «=» sería una fórmula.
  */
-function handleAlta(req, deps) {
+function datosDeAlta(req, deps) {
+  if (!req.nombre || !String(req.nombre).trim() || !req.fechaInicio || !req.fechaFin) return { ok: false, error: "nombre, fechaInicio y fechaFin son obligatorios" };
+  const malRango = validRango({ desde: req.fechaInicio, hasta: req.fechaFin }, deps);
+  if (malRango.ok === false) return { ok: false, error: "fechas de residencia inválidas: " + malRango.error };
+  const nombre = String(req.nombre).trim();
+  if (nombre.startsWith("=")) return { ok: false, error: "el nombre no puede empezar por «=»" };
+  return { ok: true, nombre, fechaInicio: req.fechaInicio, fechaFin: req.fechaFin };
+}
+
+/**
+ * Pide el alta de una cuenta de residente (V-54). La identidad llega como un `idToken`+`nonce` frescos
+ * o como el `pendingToken` de un login que falló solo por «email no vinculado» (sin repetir Google).
+ * NO crea nada: deja una solicitud ALTA que un administrador tiene que aprobar en 5 minutos; el
+ * residente se crea al aprobarla (`handleResolverSolicitud`).
+ */
+function handleSolicitarAlta(req, deps) {
   let email;
   if (req.pendingToken) {
     const s = verifySession(req.pendingToken, { now: deps.now, secret: deps.sessionSecret, crypto: deps.crypto });
@@ -908,31 +951,11 @@ function handleAlta(req, deps) {
     if (!v.ok) return { ok: false, error: v.reason };
     email = v.email;
   }
-
-  if (!req.nombre || !String(req.nombre).trim() || !req.fechaInicio || !req.fechaFin) return { ok: false, error: "nombre, fechaInicio y fechaFin son obligatorios" };
-  // Mismo `validRango` que `editarResidente` (V-22). Sin esto entraba cualquier cadena, y una
-  // fecha que no es ISO en `residentes` no falla aquí: falla DESPUÉS y en todas partes, porque
-  // `periodsOfResident` lanza y cada pantalla deriva el nivel de TODOS los residentes al pintar —
-  // un alta con "31/05/2026" dejaba Inicio y el cuadrante en blanco para el equipo entero.
-  const malRango = validRango({ desde: req.fechaInicio, hasta: req.fechaFin }, deps);
-  if (malRango.ok === false) return { ok: false, error: "fechas de residencia inválidas: " + malRango.error };
-
-  const nombre = String(req.nombre).trim();
-  // El nombre se vuelca también en las pestañas publicadas (`projection.js`), donde `setValues` sí
-  // interpreta como FÓRMULA cualquier celda que empiece por «=» (en las tablas de datos lo evita el
-  // apóstrofe de `sheets-schema.js`, pero la proyección escribe texto y fórmulas mezclados y no
-  // puede prefijarlo todo). Ningún nombre de persona empieza por «=».
-  if (nombre.startsWith("=")) return { ok: false, error: "el nombre no puede empezar por «=»" };
-
-  // Comprobar-y-escribir bajo el lock: dos altas simultáneas del mismo email (dos pestañas, doble
-  // clic con red lenta) pasaban ambas la comprobación y dejaban dos residentes para siempre.
+  const datos = datosDeAlta(req, deps);
+  if (datos.ok === false) return datos;
   return atomico(deps, () => {
-    const yaExiste = allResidentes(deps).some((r) => emailNormalizado(r.email) === email);
-    if (yaExiste) return { ok: false, error: "ese email ya está vinculado a un residente" };
-
-    const id = deps.store.appendRecord("residentes", { nombre, email, fechaInicio: req.fechaInicio, fechaFin: req.fechaFin });
-    // Como en `handleLogin`: la lista completa (con el recién dado de alta) viaja con la sesión.
-    return { ...sessionFor({ id, nombre }, deps), residentes: allResidentes(deps) };
+    if (allResidentes(deps).some((r) => emailNormalizado(r.email) === email)) return { ok: false, error: "ese email ya está vinculado a un residente" };
+    return crearSolicitud(deps, email, "ALTA", { nombre: datos.nombre, fechaInicio: datos.fechaInicio, fechaFin: datos.fechaFin });
   });
 }
 
@@ -1520,10 +1543,10 @@ function esAccesoDesarrollador(deps, session) {
  * servicio que depende de que alguien con un email concreto siga ahí incumple el criterio de
  * sobrevivir sin administrador, y nadie tendría que acordarse de retirarla.
  */
-function requireValidarPermiso(deps, session) {
-  if (deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return requireCicloPermiso(deps, session, "validar el cuadrante");
+function requireValidarPermiso(deps, session, accion = "validar el cuadrante") {
+  if (deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return requireCicloPermiso(deps, session, accion);
   if (esAccesoDesarrollador(deps, session)) return null;
-  return { ok: false, error: "por ahora solo los administradores pueden validar el cuadrante" };
+  return { ok: false, error: `por ahora solo los administradores pueden ${accion}` };
 }
 
 /**
@@ -1970,7 +1993,150 @@ function authed(req, deps, fn) {
   if (typeof s.payload.sub !== "string" || !s.payload.sub) {
     return { ok: false, error: "el token no identifica a ningún residente (¿es un token de alta?)" };
   }
+  // Perfil de invitado (V-53): por DEFECTO NEGADO. Lo que no está en `INVITADO_ACCIONES` se rechaza
+  // aquí, en el único sitio por el que pasa toda acción con sesión, en vez de añadir una guarda a
+  // cada `case` — una acción nueva (de escritura o de lectura sensible) queda cerrada al invitado
+  // sin que nadie tenga que acordarse de él.
+  if (s.payload.rol === ROL_INVITADO && !INVITADO_ACCIONES.has(req.action)) {
+    return { ok: false, error: "el perfil de invitado es de solo lectura" };
+  }
   return fn(s.payload);
+}
+
+// ── Perfil de invitado (V-53) ──────────────────────────────────────────────────────────────────
+// Pensado para tutores u otras personas que quieren MIRAR el cuadrante sin darse de alta. Se
+// pide con una cuenta de Google verificada (el `pendingToken` de un login con email no vinculado),
+// un administrador la aprueba en menos de 5 min y la sesión lleva `rol: "invitado"` firmado: el cliente no puede
+// ascenderse. No se crea ningún residente; solo queda la fila de la solicitud, y el email no viaja en el
+// token. Ve el cuadrante, el equipo y el estado del ciclo; NO ve ausencias (bajas médicas incluidas),
+// preferencias, imaginaria ni los emails de los residentes.
+const ROL_INVITADO = "invitado";
+const INVITADO_TTL = 2 * 60 * 60; // 2 h: una consulta, no una jornada
+const INVITADO_ACCIONES = new Set([
+  "whoami", "listResidentes", "listAsignaciones", "listAsignacionesRango", "listFestivosRango",
+  "estadoCuadrante", "estadoResponsable", "listResponsables",
+]);
+
+/** A un invitado se le quitan los emails de la lista de residentes; al resto se le deja igual. */
+function paraSesion(residentes, session) {
+  if (!session || session.rol !== ROL_INVITADO) return residentes;
+  return residentes.map(({ email, ...resto }) => resto);
+}
+
+const SOLICITUD_TTL = 300; // 5 min: lo que dura la solicitud para ser aprobada y canjeada
+
+/** Último estado de cada solicitud (append-only: la última fila de cada `id` gana). */
+function allSolicitudes(deps) {
+  return deps.store.readLatest("solicitudesInvitado", (r) => r.id);
+}
+
+/** Las que siguen PENDIENTES y dentro de su ventana de 5 min: lo que un administrador puede decidir. */
+function solicitudesPendientes(deps) {
+  return allSolicitudes(deps)
+    .filter((r) => r.estado === "PENDIENTE" && deps.now - r.solicitadoEn <= SOLICITUD_TTL)
+    .map((r) => ({ id: r.id, email: r.email, tipo: r.tipo || "INVITADO", nombre: r.nombre, fechaInicio: r.fechaInicio, fechaFin: r.fechaFin, solicitadoEn: r.solicitadoEn, expiraEn: r.solicitadoEn + SOLICITUD_TTL }));
+}
+
+/**
+ * Pide entrar como invitado. La identidad ya está verificada con Google (el `pendingToken` solo lo
+ * emite un login que pasó aud/iss/email_verified/exp), pero NO basta para ver datos del servicio:
+ * un administrador tiene que aprobarla.
+ */
+function handleSolicitarInvitado(req, deps) {
+  const s = verifySession(req.pendingToken, { now: deps.now, secret: deps.sessionSecret, crypto: deps.crypto });
+  if (!s.valid || !s.payload.pending) return { ok: false, error: "pendingToken inválido o caducado" };
+  return atomico(deps, () => crearSolicitud(deps, s.payload.email, "INVITADO", {}));
+}
+
+/**
+ * Alta de una solicitud (INVITADO o ALTA). Una pendiente del mismo email y tipo se reutiliza, para
+ * que pulsar el botón varias veces no inunde de correos a los administradores.
+ */
+function crearSolicitud(deps, email, tipo, datos) {
+  let sol = allSolicitudes(deps).find((r) => r.email === email && (r.tipo || "INVITADO") === tipo && r.estado === "PENDIENTE" && deps.now - r.solicitadoEn <= SOLICITUD_TTL);
+  if (!sol) {
+    const id = deps.store.appendRecord("solicitudesInvitado", { email, solicitadoEn: deps.now, estado: "PENDIENTE", tipo, ...datos });
+    sol = { id, email, solicitadoEn: deps.now };
+    avisarAdministradores(deps, email, tipo, datos);
+  }
+  // El token de la solicitud solo sirve para preguntar por ELLA y canjearla: no es una sesión.
+  const solicitudToken = issueSession({ solicitud: sol.id, email }, {
+    now: deps.now, ttlSeconds: Math.max(1, sol.solicitadoEn + SOLICITUD_TTL - deps.now), secret: deps.sessionSecret, crypto: deps.crypto,
+  });
+  return { ok: true, solicitudToken, expiraEn: sol.solicitadoEn + SOLICITUD_TTL };
+}
+
+/**
+ * El correo es solo el AVISO: la aprobación se hace dentro de la app, donde el administrador ya
+ * está autenticado. Un enlace de aprobación en un correo se puede reenviar o abrir sin querer, y
+ * obligaría a una entrada GET que hoy el Web App no tiene. Si el envío falla, la solicitud sigue
+ * visible en Inicio del administrador: un correo caído no puede dejar a nadie sin poder aprobar.
+ * Pasada la ventana de administradores no se avisa a nadie por correo (decide el ciclo normal).
+ */
+function avisarAdministradores(deps, email, tipo, datos) {
+  if (typeof deps.sendMail !== "function" || deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return;
+  const que = tipo === "ALTA"
+    ? `${email} ha pedido darse de alta como residente (${datos.nombre}, del ${datos.fechaInicio} al ${datos.fechaFin}).`
+    : `${email} ha pedido entrar como invitado (solo lectura).`;
+  try {
+    deps.sendMail(
+      EMAILS_ACCESO_DESARROLLADOR,
+      tipo === "ALTA" ? "Guardias · solicitud de alta de residente" : "Guardias · solicitud de acceso como invitado",
+      `${que}\n\n` +
+      "Para aprobarla o rechazarla, entra en la app → Inicio → «Solicitudes de acceso».\n" +
+      "La solicitud caduca a los 5 minutos; si no la apruebas, tendrá que volver a pedirla.",
+    );
+  } catch (e) { /* el aviso es una comodidad: la solicitud ya está en la tabla y en Inicio */ }
+}
+
+function handleResolverSolicitud(req, deps, session) {
+  if (typeof req.id !== "string" || !req.id) return { ok: false, error: "id obligatorio" };
+  if (typeof req.aprobar !== "boolean") return { ok: false, error: "aprobar debe ser true o false" };
+  return atomico(deps, () => {
+    const sol = allSolicitudes(deps).find((r) => r.id === req.id);
+    if (!sol) return { ok: false, error: "la solicitud no existe" };
+    if (sol.estado !== "PENDIENTE") return { ok: false, error: `la solicitud ya está ${sol.estado.toLowerCase()}` };
+    if (deps.now - sol.solicitadoEn > SOLICITUD_TTL) return { ok: false, error: "la solicitud ha caducado (pasaron más de 5 minutos)" };
+    // Aprobar un ALTA es lo que crea al residente (nunca antes), bajo el mismo lock que la decisión:
+    // dos aprobaciones o un alta paralela del mismo email no pueden dejar dos residentes.
+    if (req.aprobar && sol.tipo === "ALTA") {
+      if (allResidentes(deps).some((r) => emailNormalizado(r.email) === sol.email)) return { ok: false, error: "ese email ya está vinculado a un residente" };
+      deps.store.appendRecord("residentes", { nombre: sol.nombre, email: sol.email, fechaInicio: sol.fechaInicio, fechaFin: sol.fechaFin });
+    }
+    deps.store.appendRecord("solicitudesInvitado", { ...sol, estado: req.aprobar ? "APROBADA" : "RECHAZADA", decididoPor: session.sub, decididoEn: deps.now });
+    return { ok: true, id: sol.id, estado: req.aprobar ? "APROBADA" : "RECHAZADA" };
+  });
+}
+
+/**
+ * El invitado pregunta por su solicitud. Si está APROBADA y dentro de los 5 minutos, se canjea por
+ * una sesión de invitado (UNA vez: la fila pasa a USADA). No escribe ningún residente.
+ */
+function handleEstadoSolicitudInvitado(req, deps) {
+  const t = verifySession(req.solicitudToken, { now: deps.now, secret: deps.sessionSecret, crypto: deps.crypto });
+  if (!t.valid || typeof t.payload.solicitud !== "string") return { ok: true, estado: "CADUCADA" };
+  return atomico(deps, () => {
+    const sol = allSolicitudes(deps).find((r) => r.id === t.payload.solicitud);
+    if (!sol) return { ok: true, estado: "CADUCADA" };
+    if (sol.estado === "RECHAZADA" || sol.estado === "USADA") return { ok: true, estado: sol.estado === "USADA" ? "CADUCADA" : "RECHAZADA" };
+    if (deps.now - sol.solicitadoEn > SOLICITUD_TTL) return { ok: true, estado: "CADUCADA" };
+    if (sol.estado === "PENDIENTE") return { ok: true, estado: "PENDIENTE", expiraEn: sol.solicitadoEn + SOLICITUD_TTL };
+    deps.store.appendRecord("solicitudesInvitado", { ...sol, estado: "USADA" });
+    if (sol.tipo === "ALTA") {
+      // El residente lo creó la aprobación: se entra como él, con la misma sesión que un login.
+      const residente = allResidentes(deps).find((r) => emailNormalizado(r.email) === sol.email);
+      if (!residente) return { ok: false, error: "el residente aprobado no existe" };
+      return { ...sessionFor(residente, deps), estado: "APROBADA", residentes: allResidentes(deps) };
+    }
+    const session = issueSession({ sub: ROL_INVITADO, rol: ROL_INVITADO }, {
+      now: deps.now, ttlSeconds: Math.min(deps.sessionTtl, INVITADO_TTL), secret: deps.sessionSecret, crypto: deps.crypto,
+    });
+    return {
+      ok: true, estado: "APROBADA", session,
+      residente: { id: ROL_INVITADO, nombre: "Invitado", rol: ROL_INVITADO },
+      residentes: paraSesion(allResidentes(deps), { rol: ROL_INVITADO }),
+    };
+  });
 }
 
 /**

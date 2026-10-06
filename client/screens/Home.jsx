@@ -4,7 +4,7 @@ import { COLOR, ANOS, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js
 import { periodsOfResident, levelOn } from "./v2/domain/residents.js";
 import { todayISO } from "./client/lib/dates.js";
 import { S } from "./client/lib/design-tokens.js";
-import { puedeMoverCiclo, puedeGenerarCuadrante, esAccesoDesarrollador } from "./client/lib/permisos.js";
+import { puedeMoverCiclo, puedeGenerarCuadrante, esAccesoDesarrollador, puedeValidarCuadrante } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 
 const { useState, useEffect } = React;
@@ -20,6 +20,55 @@ function nivelDe(residente) {
   return levelOn(periodsOfResident(residente), todayISO());
 }
 
+
+/**
+ * Solicitudes de acceso como invitado (V-53). Solo la ven quienes pueden decidirlas (los
+ * administradores durante la ventana de V-52; el permiso del ciclo después) y solo cuando hay
+ * alguna pendiente. Cada solicitud caduca a los 5 minutos: se consulta cada 20 s mientras Inicio
+ * está abierto, y el correo que recibe el administrador es solo el aviso para venir aquí.
+ */
+function SolicitudesAcceso({ api, showToast }) {
+  const [lista, setLista] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const cargar = async () => {
+    const r = await api.listSolicitudesInvitado();
+    if (r.ok) setLista(r.solicitudes);
+  };
+  useEffect(() => {
+    cargar();
+    const t = setInterval(cargar, 20000);
+    return () => clearInterval(t);
+  }, []);
+  const decidir = async (sol, aprobar) => {
+    setBusy(true);
+    const r = await api.resolverSolicitudInvitado(sol.id, aprobar);
+    setBusy(false);
+    if (r.ok) showToast(aprobar ? (sol.tipo === "ALTA" ? `Alta de ${sol.nombre} aprobada ✓` : `${sol.email} puede entrar como invitado ✓`) : "Solicitud rechazada");
+    else showToast(r.error, "err");
+    cargar();
+  };
+  if (lista.length === 0) return null;
+  return (
+    <Card title="🔔 Solicitudes de acceso">
+      <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
+        Alguien pide entrar: como invitado (solo lectura) o con una cuenta de residente nueva. Cada solicitud caduca a los 5 minutos.
+      </div>
+      {lista.map((sol) => (
+        <div key={sol.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 13, wordBreak: "break-word", lineHeight: 1.4 }}>
+            <strong>{sol.tipo === "ALTA" ? "Alta de residente" : "Invitado"}</strong>
+            {sol.tipo === "ALTA" && <> · {sol.nombre} ({sol.fechaInicio} → {sol.fechaFin})</>}
+            <br /><span style={{ color: COLOR.grayDark }}>{sol.email}</span>
+          </span>
+          <span style={{ display: "flex", gap: 6 }}>
+            <Btn onClick={() => decidir(sol, true)} disabled={busy}>Aprobar</Btn>
+            <Btn onClick={() => decidir(sol, false)} disabled={busy} color={COLOR.grayMid} textColor={COLOR.grayDark}>Rechazar</Btn>
+          </span>
+        </div>
+      ))}
+    </Card>
+  );
+}
 
 /**
  * Imaginaria (INV-13, decisión V-20). Vive en Inicio porque es lo que hace falta a las ocho de
@@ -452,6 +501,7 @@ function HomeScreen() {
   const accesoDesarrollador = esAccesoDesarrollador(myResidente?.email);
   const puedoRegistrarImaginaria = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador });
   const puedoGenerar = puedeGenerarCuadrante({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador, estado: estadoMes });
+  const puedoAprobarInvitados = puedeValidarCuadrante({ email: myResidente?.email, puedeMoverCiclo: puedoRegistrarImaginaria });
   const puedoOfrecerme = proximoMandato && !proximoMandato.mandato
     && proximoMandato.elegibles.includes(myResidente?.id) && !proximoMandato.meHeOfrecido;
   const hoy = new Date();
@@ -575,7 +625,9 @@ function HomeScreen() {
         estadoError={estadoError} reintentar={() => setReintento((n) => n + 1)}
         comprobando={estadoMes === null && (app.isResponsable || app.grupo === "MAYOR" || accesoDesarrollador)} />
 
-      <Imaginaria api={app.api} residentes={residentes} showToast={app.showToast} puedoRegistrar={puedoRegistrarImaginaria} />
+      {puedoAprobarInvitados && !app.esInvitado && <SolicitudesAcceso api={app.api} showToast={app.showToast} />}
+
+      {!app.esInvitado && <Imaginaria api={app.api} residentes={residentes} showToast={app.showToast} puedoRegistrar={puedoRegistrarImaginaria} />}
 
       <QuickCard icon="📊" label="Ver cuadrante completo" onClick={() => setTab("calendar")} color={COLOR.greenMid} />
     </div>

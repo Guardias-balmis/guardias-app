@@ -141,7 +141,7 @@ function nombreMesDe(anio, mes) {
 
 function CalendarScreen() {
   const app = window.useApp();
-  const { anio, mes, setAnio, setMes, residentes, showToast, isResponsable, grupo, myResidente } = app;
+  const { anio, mes, setAnio, setMes, residentes, showToast, isResponsable, grupo, myResidente, esInvitado } = app;
 
   const [asignaciones, setAsignaciones] = useState({}); // {[residenteId]: {[fecha]: codigo}}
   const [origenes, setOrigenes] = useState({});         // {[residenteId]: {[fecha]: "CEDIDA"|"COMPRADA"}} (INV-4)
@@ -203,7 +203,7 @@ function CalendarScreen() {
   const puedeMoverCiclo = reglaCiclo({ isResponsable, grupo, sinResponsable, accesoDesarrollador: esAccesoDesarrollador(myResidente?.email) });
   // V-52: validar es, por ahora, cosa de los administradores (el servidor lo vuelve a comprobar).
   const puedeValidar = puedeValidarCuadrante({ email: myResidente?.email, puedeMoverCiclo });
-  const bloqueadoPorPublicado = !canEdit(estado) || estadoError || cargaError;
+  const bloqueadoPorPublicado = !canEdit(estado) || estadoError || cargaError || esInvitado;
 
   useEffect(() => {
     let cancelled = false;
@@ -687,14 +687,18 @@ function CalendarScreen() {
 
       <Card title="📅 Cuadrante mensual" accent={COLOR.turquoise}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {!esInvitado && (
           <button style={pillBtn(COLOR.blue)} onClick={guardar} disabled={busy || bloqueadoPorPublicado}>
             {guardando ? "Guardando…" : `💾 Guardar${cambios.length ? ` (${cambios.length})` : ""}`}
           </button>
+          )}
           {/* Deshace la última celda tocada, guardada o no (decisión V-42) — no solo la del aviso
               de descanso, que ya tenía su propio botón desde V-36 para ESE caso concreto. */}
+          {!esInvitado && (
           <button style={pillBtn(COLOR.grayDark)} onClick={deshacer} disabled={busy || bloqueadoPorPublicado || !puedeDeshacer} title="Deshace la última celda que tocaste">
             ↩️ Deshacer
           </button>
+          )}
           {puedeValidar && (
             <button style={pillBtn(COLOR.greenMid)} onClick={() => validar()} disabled={busy}>{validando ? "Validando…" : "✅ Validar"}</button>
           )}
@@ -716,7 +720,7 @@ function CalendarScreen() {
         )}
         {!estadoError && !cargaError && bloqueadoPorPublicado && (
           <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10 }}>
-            Este cuadrante está publicado: no se puede editar{puedeMoverCiclo ? " — usa Despublicar para corregirlo." : "."}
+            {esInvitado ? "Perfil de invitado: solo lectura." : <>Este cuadrante está publicado: no se puede editar{puedeMoverCiclo ? " — usa Despublicar para corregirlo." : "."}</>}
           </div>
         )}
         {/* Decisión V-47: las guardias que un residente ya tiene comprometidas se apuntan aquí,

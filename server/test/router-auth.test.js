@@ -118,13 +118,13 @@ test("el pendingToken NO sirve como sesión: ni lecturas, ni escrituras, ni whoa
   assert.equal(deps.store.readRecords("asignaciones").length, 0);
 });
 
-test("el pendingToken SÍ sigue sirviendo para el alta autoservicio (DoD-1, no se rompe el flujo)", () => {
+test("el pendingToken SÍ sirve para pedir el alta (V-54): da una solicitud, no una sesión", () => {
   const deps = makeDeps();
   const pendingToken = loginComo(deps, "nueva@gmail.com").pendingToken;
-  const r = call({ action: "altaResidente", pendingToken, nombre: "Nueva", fechaInicio: "2027-05-26", fechaFin: "2031-05-25" }, deps);
+  const r = call({ action: "solicitarAlta", pendingToken, nombre: "Nueva", fechaInicio: "2027-05-26", fechaFin: "2031-05-25" }, deps);
   assert.equal(r.ok, true);
-  assert.ok(r.session, "el alta devuelve una sesión de verdad");
-  assert.equal(call({ action: "whoami", session: r.session }, deps).ok, true);
+  assert.equal(r.session, undefined, "hasta que un administrador la apruebe no hay sesión");
+  assert.ok(r.solicitudToken);
 });
 
 test("guardarPreferencias ignora residenteId, anio/mes e id que mande el cliente", () => {
@@ -180,27 +180,26 @@ test("login devuelve además la lista de residentes (la misma que listResidentes
   assert.deepEqual(r.residentes, call({ action: "listResidentes", session: r.session }, deps).residentes);
 });
 
-test("el alta rechaza fechas que no son ISO: una fecha ilegible en `residentes` deja en blanco todas las pantallas del equipo", () => {
+test("la solicitud de alta rechaza fechas que no son ISO: una fecha ilegible en `residentes` deja en blanco todas las pantallas del equipo", () => {
   const deps = makeDeps();
   const pendingToken = loginComo(deps, "nueva@gmail.com").pendingToken;
   assert.ok(pendingToken);
   for (const [fechaInicio, fechaFin] of [["31/05/2026", "2030-05-24"], ["2026-05-25", "2030-02-30"], ["2030-05-24", "2026-05-25"]]) {
-    const r = call({ action: "altaResidente", pendingToken, nombre: "Nueva", fechaInicio, fechaFin }, deps);
+    const r = call({ action: "solicitarAlta", pendingToken, nombre: "Nueva", fechaInicio, fechaFin }, deps);
     assert.equal(r.ok, false, `${fechaInicio} → ${fechaFin}`);
     assert.match(r.error, /fechas de residencia inválidas/);
   }
   assert.equal(deps.store.readRecords("residentes").length, 2, "no se escribió ninguna fila");
 });
 
-test("el alta rechaza un nombre en blanco y devuelve la lista con el recién dado de alta cuando todo va bien", () => {
+test("la solicitud de alta rechaza un nombre en blanco y recorta el nombre cuando todo va bien", () => {
   const deps = makeDeps();
   const pendingToken = loginComo(deps, "nueva@gmail.com").pendingToken;
-  assert.equal(call({ action: "altaResidente", pendingToken, nombre: "   ", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps).ok, false);
-  const r = call({ action: "altaResidente", pendingToken, nombre: "  Nueva Residente ", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
+  assert.equal(call({ action: "solicitarAlta", pendingToken, nombre: "   ", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps).ok, false);
+  const r = call({ action: "solicitarAlta", pendingToken, nombre: "  Nueva Residente ", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" }, deps);
   assert.equal(r.ok, true);
-  assert.equal(r.residente.nombre, "Nueva Residente");
-  assert.equal(r.residentes.length, 3);
-  assert.ok(r.residentes.some((x) => x.email === "nueva@gmail.com"));
+  assert.equal(deps.store.readRecords("solicitudesInvitado")[0].nombre, "Nueva Residente");
+  assert.equal(deps.store.readRecords("residentes").length, 2, "no se crea el residente hasta que se apruebe");
 });
 
 // ── guardarPreferencias valida campo a campo (2026-09-04): la tabla es append-only y el prompt la lee literal ──
