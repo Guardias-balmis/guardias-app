@@ -20,6 +20,8 @@ mano, cada vez que algo llega de verdad a producción.
 
 `Code.gs` cambió el 2026-10-06 (añade `sendMail` con `MailApp`, V-53) y el 2026-10-07 (versión 18: `flush()` antes de soltar el lock, PR #57); antes seguía en la versión del 2026-09-05 (V-47).
 
+**Pendiente de desplegar (PR #64, arreglo de «Solicitudes de acceso», 2026-10-07):** `server-lib.gs` **y `Code.gs`** (`domain.gs` no cambia; sin permisos nuevos). `doGet` deja de responder `{ok:true, nonce}` (`router.js:handleGet`, que solo existe en el `server-lib.gs` nuevo: por eso van juntos). Un POST que Google convertía en GET por el camino pasaba por respuesta buena sin haberse ejecutado: una lectura llegaba sin su lista —el `TypeError` que tumbaba la tarjeta de Inicio— y una escritura se daba por guardada. El orden da igual: el cliente nuevo ya trata ese `ok:true` sin lista como error. Para comprobarlo: abrir la URL `/exec` en el navegador y ver `{"ok":false,"error":"la petición llegó sin datos (GET)…"}` (ver la verificación E2E).
+
 Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
 `/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el
 cliente está hablando con un backend que ya no es este (DR-4).
@@ -192,7 +194,7 @@ una implementación nueva con URL distinta (DR-4) — no hay forma de que salga 
 después de un `npm run deploy` que lo modifique, repetir a mano la verificación E2E de abajo.
 
 ## Verificación E2E (los puntos 🧪 del ADR-002)
-- `GET /exec` → responde `{ok:true, nonce:...}` (cadena CORS 302→GET, `res.json()` legible).
+- `GET /exec` (abrir la URL en el navegador) → responde `{ok:false, error:"la petición llegó sin datos (GET)…"}`: es JSON legible, así que la implementación está viva y con acceso «Cualquier usuario». Desde el 2026-10-07 un GET nunca es `ok:true` (`router.js:handleGet`): la app lo pide todo por POST, y un GET solo puede ser un POST que Google convirtió por el camino. Si en vez de JSON sale una página de inicio de sesión de Google, el acceso de la implementación no es «Cualquier usuario».
 - Login GIS → `POST` con el ID token → `{ok:true, session}`; reintento con el mismo nonce → falla.
 - `validar` con un cuadrante de prueba → devuelve las mismas violaciones que el cliente.
 - Matar el proceso a media `rebuildSheet` y confirmar que el siguiente intento se autorrepara.

@@ -66,6 +66,19 @@ const ASIG_PUESTOS = new Set(["MAYOR", "PEQUENO", "TERCERO"]);
  * @param {object} deps  { now, today, clientId, sessionSecret, sessionTtl, crypto,
  *                         store, domain, issueNonce, consumeNonce, fetchTokeninfo }
  */
+/**
+ * Respuesta de `doGet` (Code.gs). El cliente lo pide TODO por POST —también el nonce, con
+ * `getNonce`—, así que a `doGet` solo llega un POST que Google ha convertido en GET por el camino
+ * (un 301/302 cambia el método y tira el cuerpo, según el estándar Fetch) o alguien que abre la URL
+ * `/exec` en el navegador. Hasta el 2026-10-07 respondía `{ok:true, nonce}`: una lectura recibía
+ * `ok:true` sin su lista —el `.length` de undefined que tumbó «Solicitudes de acceso» en
+ * producción— y una escritura se daba por hecha sin haberse ejecutado. Un GET no puede ser nunca
+ * la respuesta a lo que pidió la app, así que es un error explícito.
+ */
+export function handleGet() {
+  return { ok: false, error: "la petición llegó sin datos (GET): la app solo usa POST; vuelve a intentarlo" };
+}
+
 export function handleRequest(rawBody, deps) {
   try {
     let req;

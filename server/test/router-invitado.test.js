@@ -444,3 +444,25 @@ test("el invitado no puede fechar una baja larga por el hueco entre periodos for
     assert.equal(levelOn(ana.periodos, d), levelOn(real.periodos, d), `mismo nivel el ${d}`);
   }
 });
+
+// Contrato que el cliente da por hecho (2026-10-07, fallo de «Solicitudes de acceso» en producción):
+// `ok:true` trae SIEMPRE el array, y un fallo del almacén vuelve como `{ok:false}` —si `handleRequest`
+// lanzara, `doPost` no llegaría a `ContentService` y Apps Script contestaría con su página HTML—.
+test("listSolicitudesInvitado: sin ninguna solicitud (ni la tabla existe) devuelve ok:true con [], nunca undefined", () => {
+  const deps = makeDeps();
+  const adm = loggedInAs(deps, "quiquemm14@gmail.com");
+  const r = call({ action: "listSolicitudesInvitado", session: adm }, deps);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.solicitudes, []);
+});
+
+test("listSolicitudesInvitado: si la hoja falla, {ok:false, error} — handleRequest no lanza", () => {
+  const deps = makeDeps();
+  const adm = loggedInAs(deps, "quiquemm14@gmail.com");
+  deps.store.readLatest = () => { throw new Error("Service Spreadsheets timed out while accessing document"); };
+  let r;
+  assert.doesNotThrow(() => { r = call({ action: "listSolicitudesInvitado", session: adm }, deps); });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /timed out/);
+  assert.equal(r.solicitudes, undefined);
+});

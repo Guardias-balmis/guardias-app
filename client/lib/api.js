@@ -42,7 +42,9 @@ const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Llama al backend. Nunca lanza: cualquier fallo (red, HTTP, JSON) se devuelve como
- * `{ok:false, error}` para que la UI lo trate igual que un rechazo de negocio del servidor.
+ * `{ok:false, error}` para que la UI lo trate igual que un rechazo de negocio del servidor. Lo que
+ * devuelve es SIEMPRE un objeto: nunca `undefined`, `null`, un array ni el
+ * cuerpo crudo de una página de error.
  *
  * Reintenta los fallos de TRANSPORTE de las acciones idempotentes, y esto no es defensa
  * especulativa: el `/exec` de Apps Script no contesta directo, responde **302 a un enlace temporal
@@ -64,12 +66,24 @@ export async function callBackend(execUrl, payload, { fetchImpl = fetch, esperar
     if (i > 0) await esperar(REINTENTOS_MS[i - 1]);
     try {
       const res = await fetchImpl(execUrl, buildRequestInit(payload));
-      if (res.ok) return await res.json();
+      if (res.ok) {
+        const datos = await res.json();
+        // Solo un objeto es una respuesta del router (`{ok, …}`). Un `null` o un array llegaba tal
+        // cual a la pantalla, que leía `r.ok` de él y reventaba fuera de toda red.
+        if (datos && typeof datos === "object" && !Array.isArray(datos)) return datos;
+        ultimo = { ok: false, error: "el servidor de Google devolvió una respuesta que no es de esta app" };
+        continue;
+      }
       // Se dice que es de Google y no un número pelado: el residente no puede hacer nada con un
       // «HTTP 404», y este no es culpa suya ni de sus datos.
       ultimo = { ok: false, error: `el servidor de Google no respondió bien (HTTP ${res.status})` };
     } catch (e) {
-      ultimo = { ok: false, error: String((e && e.message) || e) };
+      // Una página HTML en vez de JSON: es lo que devuelve Apps Script cuando falla él (cuota,
+      // ejecución abortada) aunque el estado sea 200. Es un fallo de transporte como el 404 —se
+      // reintenta igual—, y el texto del parser («Unexpected token '<'…») no le dice nada a nadie.
+      ultimo = e instanceof SyntaxError
+        ? { ok: false, error: "el servidor de Google devolvió una página de error en vez de datos" }
+        : { ok: false, error: String((e && e.message) || e) };
     }
   }
   return ultimo;
@@ -89,6 +103,39 @@ export function isSessionError(error) {
 }
 
 /**
+ * La lista que trae cada lectura (2026-10-07). Las pantallas hacen `if (r.ok) setX(r.lista)` y luego
+ * `.length`/`.map`: un `ok:true` sin la lista dejaba el estado en `undefined` y tumbaba la pantalla
+ * en el render —pasó en producción con «Solicitudes de acceso» de Inicio—. Aquí se garantiza una
+ * vez para todas: `ok:true` trae SIEMPRE un array en ese campo (vacío si no hay nada), y si no lo
+ * trae es `{ok:false, error}`, que cada pantalla ya sabe enseñar.
+ *
+ * Solo campos que el servidor manda desde que existe la acción. Uno añadido después (como
+ * `coberturas` en `colaImaginaria`) NO va aquí: contra un `/exec` anterior —el servidor se
+ * despliega a mano— faltaría con toda normalidad, y lo correcto es leerlo con `|| []`.
+ */
+const CAMPO_LISTA = {
+  listSolicitudesInvitado: "solicitudes",
+  listResidentes: "residentes",
+  listAsignaciones: "asignaciones",
+  listAsignacionesRango: "asignaciones",
+  listPreferencias: "preferencias",
+  misBloqueos: "bloqueos",
+  listBloqueos: "bloqueos",
+  listBloqueosRango: "bloqueos",
+  listFestivosRango: "festivos",
+  listEventos: "eventos",
+  listExcepciones: "excepciones",
+  colaImaginaria: "cola",
+  listResponsables: "mandatos",
+};
+
+function exigirLista(action, r) {
+  const campo = CAMPO_LISTA[action];
+  if (!campo || !r || r.ok !== true || Array.isArray(r[campo])) return r;
+  return { ok: false, error: `respuesta incompleta del servidor: falta la lista de ${campo}` };
+}
+
+/**
  * Fábrica de la API tipada. `getSession()` se invoca en cada llamada (no se cachea el
  * valor) para que un logout a mitad de sesión no reenvíe un token viejo.
  *
@@ -101,7 +148,7 @@ export function isSessionError(error) {
 export function makeApi(execUrl, { fetchImpl = fetch, getSession, onSessionInvalid } = {}) {
   const call = (payload) => callBackend(execUrl, payload, { fetchImpl });
   const authed = async (action, extra = {}) => {
-    const r = await call({ action, session: getSession(), ...extra });
+    const r = exigirLista(action, await call({ action, session: getSession(), ...extra }));
     if (r && r.ok === false && onSessionInvalid && isSessionError(r.error)) onSessionInvalid(r.error);
     return r;
   };

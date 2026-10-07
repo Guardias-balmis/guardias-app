@@ -264,3 +264,100 @@ test("generarCuadranteIA solo manda `fase` cuando no es la de siempre (P-17/V-59
   await api.generarCuadranteIA(2027, 7, "completar", "extras");
   assert.equal(JSON.parse(fetchImpl.calls[1].init.body).fase, "extras");
 });
+
+// ── Contrato de las respuestas (2026-10-07, aviso del autor: «TypeError: Cannot read properties of
+// undefined (reading 'length')» en SolicitudesAcceso, junto a un 404 de
+// script.googleusercontent.com/macros/echo). La pantalla hacía `if (r.ok) setLista(r.solicitudes)`:
+// basta un `ok:true` sin la lista para que el render reviente. El adaptador garantiza ahora que
+// `ok:true` trae SIEMPRE el array, y que todo lo demás es `{ok:false, error}` con un texto legible.
+
+// El salto del `/exec` a script.googleusercontent.com que termina en 404 (V-26): página HTML de Google.
+const respuesta404 = { status: 404, body: "<!DOCTYPE html><html>404. That’s an error.</html>" };
+// Lo que `res.json()` hace en un navegador con una página HTML en vez de JSON.
+function fetchHtml(status = 200) {
+  const calls = [];
+  const fn = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: status < 400, status, json: async () => { throw new SyntaxError("Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON"); } };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test("404 de Google en el salto del /exec: tras los reintentos, {ok:false} con un error legible — nunca undefined", async () => {
+  const fetchImpl = fetchSecuencia(respuesta404, respuesta404, respuesta404);
+  const r = await callBackend("https://exec.example/x", { action: "listSolicitudesInvitado", session: "s" }, { fetchImpl, esperar: sinEsperar });
+  assert.equal(fetchImpl.calls.length, 3, "es una lectura: se reintenta");
+  assert.equal(r.ok, false);
+  assert.equal(typeof r.error, "string");
+  assert.match(r.error, /404/);
+});
+
+test("HTML en vez de JSON (página de error de Apps Script con 200): {ok:false} que lo dice, no el SyntaxError del parser", async () => {
+  const fetchImpl = fetchHtml(200);
+  const r = await callBackend("https://exec.example/x", { action: "listSolicitudesInvitado", session: "s" }, { fetchImpl, esperar: sinEsperar });
+  assert.equal(r.ok, false);
+  assert.equal(fetchImpl.calls.length, 3, "una página en vez de datos es un fallo de transporte: se reintenta como el 404");
+  assert.match(r.error, /servidor de Google/);
+  assert.doesNotMatch(r.error, /Unexpected token|is not valid JSON/, "el residente no puede hacer nada con el texto del parser");
+});
+
+test("un JSON que no es un objeto ({ok,…}) no se entrega tal cual: {ok:false}", async () => {
+  for (const body of [null, "hola", 42, [1, 2]]) {
+    const r = await callBackend("https://exec.example/x", { action: "x" }, { fetchImpl: fakeFetch(200, body) });
+    assert.equal(r.ok, false, `cuerpo ${JSON.stringify(body)}`);
+    assert.equal(typeof r.error, "string");
+  }
+});
+
+test("listSolicitudesInvitado: respuesta válida → ok:true con su array, tal cual", async () => {
+  const solicitudes = [{ id: "s1", email: "x@y.com", tipo: "INVITADO" }];
+  const api = makeApi("https://exec.example/x", { fetchImpl: fakeFetch(200, { ok: true, solicitudes }), getSession: () => "s" });
+  const r = await api.listSolicitudesInvitado();
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.solicitudes, solicitudes);
+});
+
+test("listSolicitudesInvitado: ok:true SIN el array (o con otra cosa) es un error explícito, nunca una lista undefined", async () => {
+  for (const body of [{ ok: true }, { ok: true, solicitudes: null }, { ok: true, solicitudes: "x" }]) {
+    const api = makeApi("https://exec.example/x", { fetchImpl: fakeFetch(200, body), getSession: () => "s" });
+    const r = await api.listSolicitudesInvitado();
+    assert.equal(r.ok, false, `cuerpo ${JSON.stringify(body)}`);
+    assert.match(r.error, /solicitudes/);
+  }
+});
+
+test("listSolicitudesInvitado con el backend caído (404) o devolviendo HTML: {ok:false, error}, sin campo solicitudes", async () => {
+  for (const fetchImpl of [fetchSecuencia(respuesta404, respuesta404, respuesta404), fetchHtml(200)]) {
+    const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "s" });
+    const r = await api.listSolicitudesInvitado();
+    assert.equal(r.ok, false);
+    assert.equal(typeof r.error, "string");
+    assert.equal(r.solicitudes, undefined);
+  }
+});
+
+test("el mismo contrato en todas las lecturas de listas: ok:true sin su array es {ok:false}", async () => {
+  const casos = [
+    ["listResidentes", [], "residentes"],
+    ["listAsignaciones", [2026, 10], "asignaciones"],
+    ["listAsignacionesRango", ["2026-10-01", "2026-10-31"], "asignaciones"],
+    ["listPreferencias", [2026, 10], "preferencias"],
+    ["misBloqueos", [2026, 10], "bloqueos"],
+    ["listBloqueos", [2026, 10], "bloqueos"],
+    ["listBloqueosRango", ["2026-10-01", "2026-10-31"], "bloqueos"],
+    ["listFestivosRango", ["2026-01-01", "2026-12-31"], "festivos"],
+    ["listEventos", [], "eventos"],
+    ["listExcepciones", [], "excepciones"],
+    ["colaImaginaria", ["PEQUENO", "2026-10-07"], "cola"],
+    ["listResponsables", [], "mandatos"],
+  ];
+  for (const [metodo, args, campo] of casos) {
+    const roto = makeApi("https://exec.example/x", { fetchImpl: fakeFetch(200, { ok: true }), getSession: () => "s" });
+    const r = await roto[metodo](...args);
+    assert.equal(r.ok, false, `${metodo} sin «${campo}»`);
+    assert.match(r.error, new RegExp(campo));
+    const sano = makeApi("https://exec.example/x", { fetchImpl: fakeFetch(200, { ok: true, [campo]: [] }), getSession: () => "s" });
+    assert.deepEqual(await sano[metodo](...args), { ok: true, [campo]: [] }, `${metodo} con su array vacío pasa tal cual`);
+  }
+});
