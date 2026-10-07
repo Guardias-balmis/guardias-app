@@ -53,7 +53,7 @@ function deps_() {
     issueNonce: issueNonce_,
     consumeNonce: consumeNonce_,
     fetchTokeninfo: fetchTokeninfo_,
-    // Aviso por correo a los administradores cuando alguien pide entrar como invitado (V-53). Es solo
+    // Aviso por correo a quien puede aprobar una solicitud de acceso (V-53, V-54, V-55). Es solo
     // un aviso: la aprobación se hace dentro de la app. Necesita el permiso de Gmail/MailApp
     // (`script.send_mail`): la PRIMERA vez que se despliegue con esto, Apps Script pide autorizarlo.
     sendMail: function (para, asunto, cuerpo) { MailApp.sendEmail(para.join(","), asunto, cuerpo); },
@@ -254,8 +254,16 @@ function ensureGrid_(sh, filas, columnas) {
 }
 
 // Escritor único serializado para los 15 usuarios (script lock, no user lock).
+// `SpreadsheetApp.flush()` ANTES de soltar el lock (2026-10-07), como pide la guía de LockService:
+// Apps Script agrupa las escrituras de la hoja y las aplica al acabar el script (o al leer), así que
+// sin él la siguiente ejecución que coge el lock podía leer la hoja todavía sin la última escritura
+// de esta —el sorteo que no ve el mandato recién escrito, el generador que no ve la celda recién
+// guardada— y su comprobar-y-escribir decidía con datos viejos aunque `sheets-store.js` relea todo
+// al entrar. El try anidado suelta el lock aunque `flush` lance.
 function withScriptLock_(fn) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
-  try { return fn(); } finally { lock.releaseLock(); }
+  try { return fn(); } finally {
+    try { SpreadsheetApp.flush(); } finally { lock.releaseLock(); }
+  }
 }

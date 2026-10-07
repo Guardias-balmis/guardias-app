@@ -1143,7 +1143,7 @@ function handleRequest(rawBody, deps) {
         });
 
       case "listResidentes":
-        return authed(req, deps, (session) => ({ ok: true, residentes: paraSesion(allResidentes(deps), session) }));
+        return authed(req, deps, (session) => ({ ok: true, residentes: paraSesion(allResidentes(deps), session, deps) }));
 
       // Corregir las fechas de un residente. Hasta ahora `fechaInicio`/`fechaFin` solo se escribían
       // en el alta (`handleAlta`) y no había forma de tocarlas después, lo que dejaba sin salida
@@ -3033,10 +3033,21 @@ const INVITADO_ACCIONES = new Set([
   "estadoCuadrante", "estadoResponsable", "listResponsables",
 ]);
 
-/** A un invitado se le quitan los emails de la lista de residentes; al resto se le deja igual. */
-function paraSesion(residentes, session) {
+/**
+ * A un invitado se le quitan los emails de la lista de residentes y se le tapan los huecos entre
+ * periodos formativos; al resto se le deja igual. Un hueco (S-3) es justo como tutoría registra que
+ * una baja larga retrasa la promoción (`guardarPeriodos`), así que el `end` de un periodo y el
+ * `start` del siguiente daban las fechas exactas de la ausencia. Tapado (cada `end` pasa a ser la
+ * víspera del siguiente `start`), el nivel derivado no cambia ningún día: `levelOn`/`periodOn` solo
+ * miran los `start` y el `end` del último periodo, y en un hueco ya conservaban el periodo anterior.
+ */
+function paraSesion(residentes, session, deps) {
   if (!session || session.rol !== ROL_INVITADO) return residentes;
-  return residentes.map(({ email, ...resto }) => resto);
+  return residentes.map(({ email, ...resto }) => (resto.periodos ? { ...resto, periodos: periodosSinHuecos(resto.periodos, deps) } : resto));
+}
+
+function periodosSinHuecos(periodos, deps) {
+  return periodos.map((p, i) => (i < periodos.length - 1 ? { ...p, end: deps.domain.addDays(periodos[i + 1].start, -1) } : p));
 }
 
 /**
@@ -3199,7 +3210,7 @@ function handleEstadoSolicitudInvitado(req, deps) {
     return {
       ok: true, estado: "APROBADA", session,
       residente: { id: ROL_INVITADO, nombre: "Invitado", rol: ROL_INVITADO },
-      residentes: paraSesion(allResidentes(deps), { rol: ROL_INVITADO }),
+      residentes: paraSesion(allResidentes(deps), { rol: ROL_INVITADO }, deps),
     };
   });
 }

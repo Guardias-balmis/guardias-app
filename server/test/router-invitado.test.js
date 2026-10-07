@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import nodeCrypto from "node:crypto";
 import { handleRequest } from "../src/router.js";
 import { absences } from "../../v2/domain/absences.js";
-import { groupOnDate } from "../../v2/domain/residents.js";
-import { parseISO } from "../../v2/domain/calendar.js";
+import { groupOnDate, levelOn } from "../../v2/domain/residents.js";
+import { parseISO, addDays } from "../../v2/domain/calendar.js";
 import { canEdit } from "../../v2/domain/cuadrante.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
@@ -42,7 +42,7 @@ function makeDeps({ residentes = [ANA, AGUS, ADMIN] } = {}) {
   const deps = {
     now: 1_000_000, today: "2026-10-06", clientId: CLIENT_ID, sessionSecret: "secreto", sessionTtl: 12 * 3600, crypto, ss,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => nodeCrypto.randomUUID() }),
-    domain: { absences, groupOnDate, canEdit, parseISO },
+    domain: { absences, groupOnDate, canEdit, parseISO, addDays },
     email: "tutor@gmail.com", // quien «inicia sesión en Google» en el siguiente login
     correos: [],
     sendMail: (para, asunto, cuerpo) => deps.correos.push({ para, asunto, cuerpo }),
@@ -421,4 +421,26 @@ test("V-55: una celda de email que no es un email se salta, para que no tumbe el
   deps.store.appendRecord("residentes", { id: "basura", nombre: "Sin email real", email: "pendiente", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" });
   assert.equal(solicita(deps).avisados, 2);
   assert.deepEqual([...deps.correos[0].para].sort(), ["ana@gmail.com", "quiquemm14@gmail.com"]);
+});
+
+test("el invitado no puede fechar una baja larga por el hueco entre periodos formativos editados, y el nivel no cambia ningún día", () => {
+  const deps = makeDeps();
+  // Tutoría registra que la baja de Ana retrasa su R3: hueco entre el fin de R2 y el inicio de R3 (S-3).
+  const editados = [
+    { anio: 1, fechaInicio: "2024-05-27", fechaFin: "2025-05-26" },
+    { anio: 2, fechaInicio: "2025-05-27", fechaFin: "2026-05-26" },
+    { anio: 3, fechaInicio: "2026-11-27", fechaFin: "2027-11-26" },
+    { anio: 4, fechaInicio: "2027-11-27", fechaFin: "2028-11-26" },
+  ];
+  deps.store.appendRecords("periodos", editados.map((p) => ({ residenteId: "ana", ...p })));
+  const inv = sesionInvitado(deps);
+  const ana = call({ action: "listResidentes", session: inv }, deps).residentes.find((r) => r.id === "ana");
+  assert.equal(ana.periodos[1].end, "2026-11-26", "el fin de R2 ya no delata cuándo empezó la baja");
+  assert.equal(ana.periodos[3].end, "2028-11-26", "el último fin se conserva: sin él, el nivel cambiaría");
+  const adm = loggedInAs(deps, "quiquemm14@gmail.com");
+  const real = call({ action: "listResidentes", session: adm }, deps).residentes.find((r) => r.id === "ana");
+  assert.equal(real.periodos[1].end, "2026-05-26", "a un residente se le da el dato tal cual");
+  for (let d = "2024-05-01"; d <= "2029-01-31"; d = addDays(d, 1)) {
+    assert.equal(levelOn(ana.periodos, d), levelOn(real.periodos, d), `mismo nivel el ${d}`);
+  }
 });
