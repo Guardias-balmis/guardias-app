@@ -10,6 +10,7 @@ import { absences } from "../../v2/domain/absences.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "../../v2/domain/validate.js";
+import { tally } from "../../v2/domain/tally.js";
 import { validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs } from "../../v2/domain/thirdpost.js";
 import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange, validateQuarterClose, quarterCloseWindow } from "../../v2/domain/equity.js";
 import { groupOnDate } from "../../v2/domain/residents.js";
@@ -869,4 +870,99 @@ test("marcarValidado (V-52): en la ventana solo valida un administrador, ni el R
 
   const fuera = mk("2027-07-16");
   assert.equal(call({ action: "marcarValidado", session: loggedInAs(fuera, "resp@gmail.com"), mes: 7, anio: 2027 }, fuera).ok, true);
+});
+
+// ── P-15/P-17: los refuerzos (quinta o sexta guardia de más) no invalidan un mes VALIDADO ──
+// El mes se valida con el stub «limpio» (construir uno que pase todos los invariantes es otro
+// problema, ver `stubClean`) y luego se vuelve al validador REAL para el refuerzo: lo que se prueba
+// aquí es que el servidor juzga el mes resultante y rechaza solo lo NUEVO.
+function mesValidadoConBase() {
+  const deps = stubClean(makeDeps());
+  const resp = loggedInAs(deps, "resp@gmail.com");
+  const otro = loggedInAs(deps, "otro@gmail.com");
+  guardar(deps, resp, [
+    { fecha: "2027-07-10", residenteId: "otro-1", codigo: "G" },
+    { fecha: "2027-07-10", residenteId: "resp-1", codigo: "G" },
+  ]);
+  assert.equal(call({ action: "marcarValidado", session: resp, mes: 7, anio: 2027 }, deps).ok, true);
+  deps.domain = { ...deps.domain, validateMonth }; // a partir de aquí, el validador de verdad
+  const estado = () => call({ action: "estadoCuadrante", session: resp, mes: 7, anio: 2027 }, deps).estado;
+  return { deps, resp, otro, estado };
+}
+const refuerzo = (residenteId, fecha, codigo = "G") => ({ fecha, residenteId, codigo, origen: "REFUERZO" });
+
+test("añadir un REFUERZO a un mes VALIDADO lo deja VALIDADO (si no incumple nada nuevo)", () => {
+  const { deps, otro, estado } = mesValidadoConBase();
+  const r = guardar(deps, otro, [refuerzo("otro-1", "2027-07-20")]);
+  assert.equal(r.ok, true);
+  assert.equal(estado(), "VALIDADO");
+  assert.equal(deps.store.readLatest("asignaciones", (x) => `${x.fecha}|${x.residenteId}`).find((x) => x.fecha === "2027-07-20").origen, "REFUERZO");
+});
+
+test("un REFUERZO pegado a otra guardia (INV-15, descanso legal) se RECHAZA y el mes sigue VALIDADO", () => {
+  const { deps, otro, estado } = mesValidadoConBase();
+  const r = guardar(deps, otro, [refuerzo("otro-1", "2027-07-11")]); // otro-1 ya está de guardia el 10
+  assert.equal(r.ok, false);
+  assert.match(r.error, /INV-15/);
+  assert.ok(r.violaciones.every((v) => v.severidad === "error"));
+  assert.equal(estado(), "VALIDADO");
+  assert.equal(deps.store.readLatest("asignaciones", (x) => `${x.fecha}|${x.residenteId}`).some((x) => x.fecha === "2027-07-11"), false, "no se escribió nada");
+});
+
+test("un REFUERZO sobre una BAJA registrada (INV-5) se rechaza", () => {
+  const baja = { id: "b1", residenteId: "otro-1", desde: "2027-07-18", hasta: "2027-07-25", motivo: "BAJA", activo: true };
+  const deps = stubClean(makeDeps({}, { bloqueos: bloqueoRaw(baja) }));
+  const resp = loggedInAs(deps, "resp@gmail.com");
+  guardar(deps, resp, [{ fecha: "2027-07-10", residenteId: "resp-1", codigo: "G" }]);
+  assert.equal(call({ action: "marcarValidado", session: resp, mes: 7, anio: 2027 }, deps).ok, true);
+  deps.domain = { ...deps.domain, validateMonth };
+  const r = guardar(deps, loggedInAs(deps, "otro@gmail.com"), [refuerzo("otro-1", "2027-07-20")]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /INV-5/);
+});
+
+test("quitar un REFUERZO no invalida el mes VALIDADO", () => {
+  const { deps, otro, estado } = mesValidadoConBase();
+  guardar(deps, otro, [refuerzo("otro-1", "2027-07-20")]);
+  assert.equal(guardar(deps, otro, [{ fecha: "2027-07-20", residenteId: "otro-1", codigo: "" }]).ok, true);
+  assert.equal(estado(), "VALIDADO");
+});
+
+test("reetiquetar como REFUERZO una guardia de la BASE, o mezclarla con otros cambios, sí invalida el mes", () => {
+  const a = mesValidadoConBase();
+  assert.equal(guardar(a.deps, a.otro, [refuerzo("otro-1", "2027-07-10")]).ok, true); // la celda ya tenía una G de base
+  assert.equal(a.estado(), "BORRADOR");
+
+  const b = mesValidadoConBase();
+  guardar(b.deps, b.otro, [refuerzo("otro-1", "2027-07-20"), { fecha: "2027-07-22", residenteId: "resp-1", codigo: "G" }]);
+  assert.equal(b.estado(), "BORRADOR");
+});
+
+test("un refuerzo solo puede ser una guardia (G, GF o GP): ni 3P ni celda vacía", () => {
+  const deps = makeDeps();
+  const otro = loggedInAs(deps, "otro@gmail.com");
+  for (const codigo of ["3P", "V", ""]) {
+    const r = guardar(deps, otro, [{ fecha: "2027-07-20", residenteId: "otro-1", codigo, origen: "REFUERZO" }]);
+    assert.equal(r.ok, false, JSON.stringify(codigo));
+    assert.match(r.error, /refuerzo solo puede ser una guardia/);
+  }
+});
+
+test("el refuerzo va en su contaje aparte: no suma a los acumulados que mira el cierre de equidad", () => {
+  const deps = stubClean(makeDeps());
+  const resp = loggedInAs(deps, "resp@gmail.com");
+  guardar(deps, resp, [
+    { fecha: "2027-07-10", residenteId: "otro-1", codigo: "G" },
+    refuerzo("otro-1", "2027-07-20"),
+  ]);
+  const t = tally(deps.store.readLatest("asignaciones", (x) => `${x.fecha}|${x.residenteId}`).filter((x) => x.residenteId === "otro-1"), { start: "2027-07-01", end: "2027-07-31" });
+  assert.deepEqual([t.total, t.refuerzos], [1, 1]);
+});
+
+test("guardarAsignaciones devuelve el estado resultante de cada mes (la pantalla no replica la regla)", () => {
+  const { deps, otro } = mesValidadoConBase();
+  const opcional = guardar(deps, otro, [refuerzo("otro-1", "2027-07-20")]);
+  assert.deepEqual(opcional.estados, [{ mes: 7, anio: 2027, estado: "VALIDADO" }]);
+  const base = guardar(deps, otro, [{ fecha: "2027-07-22", residenteId: "otro-1", codigo: "G" }]);
+  assert.deepEqual(base.estados, [{ mes: 7, anio: 2027, estado: "BORRADOR" }]);
 });

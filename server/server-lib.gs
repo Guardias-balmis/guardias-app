@@ -1061,10 +1061,11 @@ const BITACORA_MAX_VIOLACIONES = 50;
 // caracteres inventados por el modelo) seguirían pasando de 50.000. Margen sobre el límite de Sheets.
 const BITACORA_MAX_CHARS = 40000;
 const BITACORA_MAX_DETALLE = 300;
-// `origen` marca la guardia cedida o comprada, que INV-4 excluye de los seis ejes de INV-3.
+// `origen` marca la guardia cedida o comprada (INV-4) o de REFUERZO (P-15), que se excluyen de los
+// seis ejes de INV-3 (el refuerzo, además, en un contaje propio).
 // `tally.js:15` lo evalúa por TRUTHINESS, así que una errata cualquiera —no solo un valor de otro
 // enum— saca la guardia del cómputo y de los totales de la pestaña publicada, en silencio.
-const ASIG_ORIGENES = new Set(["CEDIDA", "COMPRADA"]);
+const ASIG_ORIGENES = new Set(["CEDIDA", "COMPRADA", "REFUERZO"]);
 // `puesto` (spec.md §2 Asignacion): hoy ningún cliente lo manda y ningún invariante lo lee —el
 // puesto se deriva del nivel—, pero la columna existe y el endpoint es público.
 const ASIG_PUESTOS = new Set(["MAYOR", "PEQUENO", "TERCERO"]);
@@ -1262,6 +1263,8 @@ function handleRequest(rawBody, deps) {
           if (malCodigo) return { ok: false, error: `código de asignación inválido: ${JSON.stringify(malCodigo.codigo)} (válidos: ${[...ASIG_CODIGOS].filter(Boolean).join(", ")})` };
           const malOrigen = req.cambios.find((c) => c.origen !== undefined && c.origen !== "" && !ASIG_ORIGENES.has(c.origen));
           if (malOrigen) return { ok: false, error: `origen inválido: ${JSON.stringify(malOrigen.origen)} (válidos: ${[...ASIG_ORIGENES].join(", ")})` };
+          const malRefuerzo = req.cambios.find((c) => c.origen === "REFUERZO" && !["G", "GF", "GP"].includes(c.codigo));
+          if (malRefuerzo) return { ok: false, error: `un refuerzo solo puede ser una guardia (G, GF o GP), no ${JSON.stringify(malRefuerzo.codigo || "")}` };
           // El residente tiene que existir (2026-09-04): una fila con un id que no es de nadie no la
           // ve ninguna pantalla ni la puede borrar nadie, y se queda para siempre en una tabla
           // append-only —el mismo motivo por el que el generador rechaza los ids inventados (V-31).
@@ -1281,14 +1284,37 @@ function handleRequest(rawBody, deps) {
             const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
             if (publicado) return { ok: false, error: `el cuadrante de ${publicado.mes}/${publicado.anio} está PUBLICADO y no admite ediciones` };
 
-            // Quitar un tercer puesto NO invalida un mes VALIDADO (P-16/V-55): es un apoyo voluntario
-            // —normalmente la quinta o sexta guardia de quien lo hace, casi nunca de las cuatro
-            // obligatorias—, quien lo tiene asignado puede quitárselo después, y borrarlo no puede
-            // crear ninguna violación que el mes validado no tuviera ya (INV-15 y compañía solo
-            // empeoran al AÑADIR). Se mira el estado ACTUAL de cada celda, dentro del lock: solo
-            // cuenta como «quitar un 3P» el cambio que deja vacía una celda que ahora es un 3P.
-            const actuales = new Map(deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }).map((x) => [ASIG_KEY(x), x.codigo]));
-            const soloQuitaTercerPuesto = req.cambios.every((c) => (c.codigo || "") === "" && actuales.get(ASIG_KEY(c)) === "3P");
+            // Lo OPCIONAL no invalida un mes VALIDADO (P-16/V-55, P-17): quitar un 3P, y añadir o quitar un
+            // REFUERZO. Son apoyos voluntarios —el 3P casi nunca es de las cuatro obligatorias, y el
+            // refuerzo es por definición la guardia de más—, y la reunión que validó las obligatorias no
+            // tiene por qué repetirse cada vez que alguien se apunta una quinta. Se mira el estado ACTUAL
+            // de cada celda, dentro del lock: solo cuenta como «quitar» el cambio que deja vacía una celda
+            // que ahora es de ese tipo, y como «añadir» el que escribe un refuerzo en una celda VACÍA —
+            // reetiquetar como refuerzo una guardia de la base la cambia, y eso sí invalida.
+            const actuales = new Map(deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }).map((x) => [ASIG_KEY(x), x]));
+            const vacia = (c) => (c.codigo || "") === "";
+            const quitaOpcional = (c) => { const a = actuales.get(ASIG_KEY(c)); return vacia(c) && Boolean(a) && (a.codigo === "3P" || a.origen === "REFUERZO"); };
+            const anadeRefuerzo = (c) => c.origen === "REFUERZO" && !vacia(c) && !actuales.has(ASIG_KEY(c));
+            const soloOpcional = req.cambios.every((c) => quitaOpcional(c) || anadeRefuerzo(c));
+
+            // Añadir un refuerzo a un mes VALIDADO no se hace a ciegas: tiene que pasar por lo que el mes
+            // ya tenía que cumplir (el descanso de INV-15, una baja de INV-5…). Se juzga el mes RESULTANTE
+            // y se rechaza solo por errores NUEVOS: uno que el mes ya traía no es culpa de este cambio.
+            if (soloOpcional && req.cambios.some(anadeRefuerzo)) {
+              for (const m of meses.filter((x) => x.estado === "VALIDADO")) {
+                const snap = monthSnapshot(deps);
+                const prefix = monthPrefix(m.anio, m.mes);
+                const resultante = new Map(snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)).map((a) => [ASIG_KEY(a), a]));
+                for (const c of req.cambios.filter((x) => x.fecha.startsWith(prefix))) resultante.set(ASIG_KEY(c), { ...c, codigo: c.codigo || "" });
+                const errores = (propuesta) => deps.domain.validateMonth(buildCuadranteCtx(deps, m.mes, m.anio, snap, propuesta)).filter((v) => v.severidad === "error");
+                const firma = (v) => `${v.invariante}|${v.fecha || ""}|${v.residenteId || ""}|${v.detalle}`;
+                const antes = new Set(errores(null).map(firma));
+                const nuevos = errores([...resultante.values()].filter((a) => a.codigo)).filter((v) => !antes.has(firma(v)));
+                if (nuevos.length > 0) {
+                  return { ok: false, error: `el refuerzo incumple una regla obligatoria (${nuevos[0].invariante}): ${nuevos[0].detalle}`, violaciones: nuevos };
+                }
+              }
+            }
 
             // Una sola escritura para todo el lote (appendRecords): un mes del generador son
             // ~60-90 cambios y fila a fila era un lock y una relectura íntegra de la tabla por cada
@@ -1296,11 +1322,15 @@ function handleRequest(rawBody, deps) {
             deps.store.appendRecords("asignaciones", req.cambios.map((c) => (
               { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen }
             )));
+            const estados = [];
             for (const m of meses) {
-              const siguiente = soloQuitaTercerPuesto ? m.estado : deps.domain.stateAfterEdit(m.estado);
+              const siguiente = soloOpcional ? m.estado : deps.domain.stateAfterEdit(m.estado);
               if (siguiente !== m.estado) writeCuadranteEstado(deps, session, m.mes, m.anio, siguiente);
+              estados.push({ mes: m.mes, anio: m.anio, estado: siguiente });
             }
-            return { ok: true, guardados: req.cambios.length };
+            // El estado resultante viaja en la respuesta: así la pantalla no tiene que replicar qué cambios
+            // invalidan un mes validado (y no puede discrepar cuando esa regla crece).
+            return { ok: true, guardados: req.cambios.length, estados };
           });
         });
 
@@ -2698,7 +2728,8 @@ function handleGenerarIA(req, deps, session) {
   // fijada es FORMATO— y los tres intentos se irían, a un minuto y una llamada al modelo cada uno,
   // en culpar al modelo con un «hay que montar este mes a mano». Se corta antes de gastar ninguno y
   // se dice la causa real. Los INV-1 de los días sin cubrir se excluyen porque son justo lo que el
-  // modelo va a rellenar; los de composición entre fijadas (dos del mismo grupo el mismo día) no.
+  // modelo va a rellenar. Desde P-14 la composición entre fijadas (dos del mismo grupo el mismo día) ya no
+  // es `error`, así que esto queda como defensa: el único INV-1 duro es el día vacío.
   if (completar && fijadas.length > 0) {
     // INV-1 se descarta SOLO donde es un hueco (menos de dos fijadas ocupando puesto ese día): con dos
     // o más, el error es de composición entre fijadas (dos Mayores el mismo día) y el modelo tampoco

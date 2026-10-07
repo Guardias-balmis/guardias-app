@@ -16,14 +16,14 @@ test("base: mes completo, V no suma a ningún contador", () => {
     a("2026-09-20", "G"), a("2026-09-24", "G"), a("2026-09-26", "V"),
   ];
   assert.deepEqual(tally(asg, W("2026-09-01", "2026-09-30")), {
-    total: 5, finde: 2, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0,
+    total: 5, finde: 2, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0,
   });
 });
 
 test("GF en sábado suma total, finde y festivos a la vez (contadores solapados)", () => {
   const asg = [a("2027-05-01", "GF")]; // sábado
   const t = tally(asg, W("2027-05-01", "2027-05-31"));
-  assert.deepEqual(t, { total: 1, finde: 1, festivos: 1, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 });
+  assert.deepEqual(t, { total: 1, finde: 1, festivos: 1, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0 });
 });
 
 test("GP en domingo suma finde y prefestivos, NUNCA festivos", () => {
@@ -78,15 +78,15 @@ test("doblete oct→nov con GP sábado intermedio y GF domingo fuera de ventana"
   const asg = [a("2026-10-30", "G"), a("2026-10-31", "GP"), a("2026-11-01", "GF")];
   const oct = tally(asg, W("2026-10-01", "2026-10-31"));
   const nov = tally(asg, W("2026-11-01", "2026-11-30"));
-  assert.deepEqual(oct, { total: 2, finde: 1, festivos: 0, prefestivos: 1, dobletes: 1, tercerPuesto: 0, cedidasCompradas: 0 });
+  assert.deepEqual(oct, { total: 2, finde: 1, festivos: 0, prefestivos: 1, dobletes: 1, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0 });
   // el domingo 1-nov (GF) NO cuenta en festivos/total/finde de octubre pese al lookahead
-  assert.deepEqual(nov, { total: 1, finde: 1, festivos: 1, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 });
+  assert.deepEqual(nov, { total: 1, finde: 1, festivos: 1, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0 });
 });
 
 test("doblete abr→may con GP viernes día 30 (día+2 desborda el mes)", () => {
   const asg = [a("2027-04-30", "GP"), a("2027-05-02", "G")];
   const abr = tally(asg, W("2027-04-01", "2027-04-30"));
-  assert.deepEqual(abr, { total: 1, finde: 0, festivos: 0, prefestivos: 1, dobletes: 1, tercerPuesto: 0, cedidasCompradas: 0 });
+  assert.deepEqual(abr, { total: 1, finde: 0, festivos: 0, prefestivos: 1, dobletes: 1, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0 });
 });
 
 test("viernes 31 sin domingo: sin doblete, sin crash", () => {
@@ -102,13 +102,13 @@ test("ventana trimestral T3 cruza el año natural y febrero de 28 días", () => 
     a("2027-02-26", "G"), a("2027-02-28", "G"),
   ];
   const t = tally(asg, W("2026-12-01", "2027-02-28"));
-  assert.deepEqual(t, { total: 6, finde: 3, festivos: 2, prefestivos: 0, dobletes: 3, tercerPuesto: 0, cedidasCompradas: 0 });
+  assert.deepEqual(t, { total: 6, finde: 3, festivos: 2, prefestivos: 0, dobletes: 3, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0 });
 });
 
 test("tercer puesto aparte y sin formar doblete", () => {
   const asg = [a("2026-06-06", "3P"), a("2026-06-26", "G"), a("2026-06-28", "3P")];
   const t = tally(asg, W("2026-06-01", "2026-06-30"));
-  assert.deepEqual(t, { total: 1, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 2, cedidasCompradas: 0 });
+  assert.deepEqual(t, { total: 1, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 2, cedidasCompradas: 0, refuerzos: 0 });
 });
 
 test("guardia comprada: registrada aparte, excluida del cómputo y rompe el doblete", () => {
@@ -124,10 +124,32 @@ test("guardia comprada: registrada aparte, excluida del cómputo y rompe el dobl
   assert.equal(t.cedidasCompradas, 1);
 });
 
+test("P-15: un REFUERZO va en contaje aparte, fuera de los seis ejes, y no forma doblete", () => {
+  const asg = [
+    a("2026-11-06", "G"),                                  // viernes, computable
+    a("2026-11-08", "GF", { origen: "REFUERZO" }),          // domingo, refuerzo: ni suma ni forma doblete
+    a("2026-11-14", "G", { origen: "REFUERZO" }),           // sábado, refuerzo
+    a("2026-11-21", "G"),
+  ];
+  const t = tally(asg, W("2026-11-01", "2026-11-30"));
+  assert.equal(t.total, 2);
+  assert.equal(t.finde, 1, "solo el sábado 21; los refuerzos de fin de semana no cuentan");
+  assert.equal(t.festivos, 0, "un refuerzo GF no suma a festivos");
+  assert.equal(t.dobletes, 0, "vie 6 + dom 8 (refuerzo) no es un doblete");
+  assert.equal(t.refuerzos, 2);
+  assert.equal(t.cedidasCompradas, 0, "no se mezcla con las cedidas/compradas");
+});
+
+test("P-15: `origen` REFUERZO solo cuenta como refuerzo si el código es de guardia (un 3P sigue siendo 3P)", () => {
+  const t = tally([a("2026-11-03", "3P", { origen: "REFUERZO" })], W("2026-11-01", "2026-11-30"));
+  assert.equal(t.tercerPuesto, 1);
+  assert.equal(t.refuerzos, 0);
+});
+
 test("cedente de una guardia no la cuenta (no está en su lista)", () => {
   const asg = []; // r2-fatima cedió su guardia: no aparece en sus asignaciones
   const t = tally(asg, W("2026-11-01", "2026-11-30"));
-  assert.deepEqual(t, { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 });
+  assert.deepEqual(t, { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0 });
 });
 
 test("ventana parcial (media mensualidad) con lookahead — prorrateo de baja/incorporación", () => {
