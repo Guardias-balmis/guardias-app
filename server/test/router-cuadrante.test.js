@@ -10,7 +10,7 @@ import { absences } from "../../v2/domain/absences.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "../../v2/domain/validate.js";
-import { validateThirdPost, thirdPostHistoryStart, thirdPostCommitmentEnd, canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES } from "../../v2/domain/thirdpost.js";
+import { validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs } from "../../v2/domain/thirdpost.js";
 import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange, validateQuarterClose, quarterCloseWindow } from "../../v2/domain/equity.js";
 import { groupOnDate } from "../../v2/domain/residents.js";
 import { eligibleCandidates } from "../../v2/domain/responsible.js";
@@ -66,7 +66,7 @@ function makeDeps(overrides = {}, extraSheets = {}) {
       validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange,
       validateQuarterClose, quarterCloseWindow,
       groupOnDate, eligibleCandidates,
-      validateThirdPost, thirdPostHistoryStart, thirdPostCommitmentEnd, canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES,
+      validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs,
       canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit,
       // La proyección son TRES hojas desde la Fase 7.2, y las dos agregadas necesitan el curso.
       buildMonthSheetRows, buildResumenRows, buildContajeTrimestralRows, academicYearOf, toISO,
@@ -618,13 +618,16 @@ test("marcarValidado: un 3P de quien no consta voluntario AVISA y no impide vali
   assert.match(av[0].detalle, /no consta en la lista de voluntarios/);
 });
 
-test("marcarValidado: con el residente apuntado, ese mismo 3P deja de avisar", () => {
+// P-16/V-55: los voluntarios salen de la respuesta mensual a «¿Deseas hacer tercer puesto este mes?»
+// (`preferencias.tercerPuesto`), ya no de una alta con compromiso de 4 meses.
+const quiere3P = (deps, session, mes, anio, si = true) =>
+  call({ action: "guardarPreferencias", session, anio, mes, prefs: { tercerPuesto: si } }, deps);
+
+test("marcarValidado: con el residente que dijo «sí» este mes, ese mismo 3P deja de avisar", () => {
   const deps = stubClean(makeDeps());
   const session = loggedInAs(deps, "resp@gmail.com");
   const suya = loggedInAs(deps, "otro@gmail.com");
-  call({ action: "ofrecerse3P", session: suya, compromisoAceptado: true }, deps); // desde = deps.today, "2027-07-16"
-  // La fecha del 3P tiene que ser DESDE el alta (decisión V-29, INV-8a juzga "¿era voluntario
-  // ESE día?"): antes se aceptaba cualquier fecha del mes con tal de que hoy siguiera apuntado.
+  assert.equal(quiere3P(deps, suya, 7, 2027).ok, true);
   guardar(deps, loggedInAs(deps, "resp@gmail.com"), [{ fecha: "2027-07-17", residenteId: "otro-1", codigo: "3P" }]);
 
   const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
@@ -632,18 +635,32 @@ test("marcarValidado: con el residente apuntado, ese mismo 3P deja de avisar", (
   assert.deepEqual(r.violaciones.filter((v) => v.invariante === "INV-8"), []);
 });
 
-test("marcarValidado: el ciclo de INV-8b arranca en el alta del voluntario y cruza meses", () => {
-  const deps = stubClean(makeDeps({ today: "2027-06-01" }));
+test("marcarValidado: quien dijo «no» este mes avisa si se le asigna un 3P, aunque dijera «sí» otro mes", () => {
+  const deps = stubClean(makeDeps());
   const suya = loggedInAs(deps, "otro@gmail.com");
-  call({ action: "ofrecerse3P", session: suya, compromisoAceptado: true }, deps);
+  quiere3P(deps, suya, 6, 2027, true);
+  quiere3P(deps, suya, 7, 2027, false);
+  guardar(deps, suya, [{ fecha: "2027-07-14", residenteId: "otro-1", codigo: "3P" }]);
+
+  const r = call({ action: "marcarValidado", session: loggedInAs(deps, "resp@gmail.com"), mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, true, "INV-8 no bloquea nunca");
+  const av = r.violaciones.filter((v) => v.invariante === "INV-8");
+  assert.equal(av.length, 1);
+  assert.match(av[0].detalle, /no consta en la lista de voluntarios/);
+});
+
+test("marcarValidado: el ciclo de INV-8b se cuenta dentro del año de residencia y cruza meses", () => {
+  const deps = stubClean(makeDeps());
+  const suya = loggedInAs(deps, "otro@gmail.com");
+  quiere3P(deps, suya, 6, 2027);
+  quiere3P(deps, suya, 7, 2027);
   // Dos miércoles: el de junio queda en el histórico y el de julio repite día sin cerrar ciclo.
   guardar(deps, suya, [
     { fecha: "2027-06-09", residenteId: "otro-1", codigo: "3P" },
     { fecha: "2027-07-14", residenteId: "otro-1", codigo: "3P" },
   ]);
 
-  const session = loggedInAs(deps, "resp@gmail.com");
-  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  const r = call({ action: "marcarValidado", session: loggedInAs(deps, "resp@gmail.com"), mes: 7, anio: 2027 }, deps);
   assert.equal(r.ok, true);
   const av = r.violaciones.filter((v) => v.invariante === "INV-8");
   assert.equal(av.length, 1, "el 3P de junio tiene que llegar como histórico");
@@ -651,40 +668,109 @@ test("marcarValidado: el ciclo de INV-8b arranca en el alta del voluntario y cru
 });
 
 test("marcarValidado: el 3P del propio mes no se cuenta dos veces (histórico + mes)", () => {
-  const deps = stubClean(makeDeps({ today: "2027-06-01" }));
+  const deps = stubClean(makeDeps());
   const suya = loggedInAs(deps, "otro@gmail.com");
-  call({ action: "ofrecerse3P", session: suya, compromisoAceptado: true }, deps);
+  quiere3P(deps, suya, 7, 2027);
   // Un ÚNICO 3P, dentro del mes validado: si el histórico lo incluyera también, el ciclo vería
   // dos miércoles seguidos y avisaría de una repetición que no existe.
   guardar(deps, suya, [{ fecha: "2027-07-14", residenteId: "otro-1", codigo: "3P" }]);
 
-  const session = loggedInAs(deps, "resp@gmail.com");
-  const r = call({ action: "marcarValidado", session, mes: 7, anio: 2027 }, deps);
+  const r = call({ action: "marcarValidado", session: loggedInAs(deps, "resp@gmail.com"), mes: 7, anio: 2027 }, deps);
   assert.deepEqual(r.violaciones.filter((v) => v.invariante === "INV-8"), []);
 });
 
-test("marcarValidado: el ciclo de INV-8b arranca en el alta de CADA uno, no en el mínimo global", () => {
-  // Reproduce el fallo que encontró la revisión adversarial. El histórico se lee desde el alta
-  // MÁS ANTIGUA (hace falta entera para INV-8c), así que el recorte por residente tiene que
-  // hacerlo el validador: sin él, el 3P que Óscar hizo en enero —antes de apuntarse— entraba en
-  // su ciclo nuevo y avisaba de una repetición de lunes que no existe.
-  const deps = stubClean(makeDeps({ today: "2027-01-02" }));
-  const resp = loggedInAs(deps, "resp@gmail.com");
-  call({ action: "ofrecerse3P", session: resp, compromisoAceptado: true }, deps); // alta antigua: 2027-01-02
-
+test("marcarValidado: el ciclo de INV-8b no arrastra un 3P de un año de residencia anterior", () => {
+  // «otro» cambia de año de residencia el 2027-05-27: el 3P de enero (año 3) no entra en el ciclo
+  // del año 4, aunque los dos fueran un lunes. Sin el recorte por año, avisaría de una repetición
+  // que no existe y quien hizo apoyos el año pasado arrancaría este con el ciclo a medias.
+  const deps = stubClean(makeDeps());
   const suya = loggedInAs(deps, "otro@gmail.com");
-  guardar(deps, suya, [{ fecha: "2027-01-04", residenteId: "otro-1", codigo: "3P" }]); // lunes, sin estar apuntado
-  deps.today = "2027-06-01";
-  call({ action: "ofrecerse3P", session: suya, compromisoAceptado: true }, deps);
-  guardar(deps, suya, [{ fecha: "2027-07-05", residenteId: "otro-1", codigo: "3P" }]); // otro lunes, ya en su etapa
+  quiere3P(deps, suya, 1, 2027);
+  quiere3P(deps, suya, 7, 2027);
+  guardar(deps, suya, [
+    { fecha: "2027-01-04", residenteId: "otro-1", codigo: "3P" }, // lunes, año de residencia 3
+    { fecha: "2027-07-05", residenteId: "otro-1", codigo: "3P" }, // otro lunes, año 4
+  ]);
 
-  deps.today = "2027-07-20";
   const r = call({ action: "marcarValidado", session: loggedInAs(deps, "resp@gmail.com"), mes: 7, anio: 2027 }, deps);
   assert.equal(r.ok, true);
-  assert.deepEqual(
-    r.violaciones.filter((v) => v.invariante === "INV-8" && /repite/.test(v.detalle)), [],
-    "el 3P de enero es anterior a su alta: no entra en su ciclo"
-  );
+  assert.deepEqual(r.violaciones.filter((v) => v.invariante === "INV-8" && /repite/.test(v.detalle)), []);
+});
+
+test("estadoVoluntariado3P: devuelve lo que INV-8 necesita del mes pedido y si yo he dicho que sí (P-16)", () => {
+  const deps = makeDeps();
+  const suya = loggedInAs(deps, "otro@gmail.com");
+  quiere3P(deps, suya, 7, 2027);
+  const r = call({ action: "estadoVoluntariado3P", session: suya, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.delMes, ["otro-1"]);
+  assert.equal(r.yo, true);
+  assert.equal(r.voluntarios[0].residenteId, "otro-1");
+  assert.deepEqual(r.periodos, [{ residenteId: "otro-1", desde: "2027-07-01", hasta: "2027-07-31" }]);
+  assert.equal(call({ action: "estadoVoluntariado3P", session: suya, mes: 8, anio: 2027 }, deps).yo, false, "otro mes, otra respuesta");
+  assert.equal(call({ action: "estadoVoluntariado3P", session: suya, mes: 13, anio: 2027 }, deps).ok, false);
+});
+
+test("las acciones del modelo anterior (apuntarse y retirarse del 3P) remiten a la pregunta mensual", () => {
+  const deps = makeDeps();
+  const suya = loggedInAs(deps, "otro@gmail.com");
+  for (const action of ["ofrecerse3P", "retirarVoluntariado3P"]) {
+    const r = call({ action, session: suya, compromisoAceptado: true }, deps);
+    assert.equal(r.ok, false);
+    assert.match(r.error, /cada mes en Preferencias/);
+  }
+});
+
+test("guardarPreferencias valida tercerPuesto (booleano; ausente = no)", () => {
+  const deps = makeDeps();
+  const suya = loggedInAs(deps, "otro@gmail.com");
+  assert.equal(quiere3P(deps, suya, 7, 2027, "sí").ok, false);
+  assert.equal(call({ action: "guardarPreferencias", session: suya, anio: 2027, mes: 7, prefs: {} }, deps).ok, true);
+  assert.equal(call({ action: "misPreferencias", session: suya, anio: 2027, mes: 7 }, deps).prefs.tercerPuesto, false);
+  quiere3P(deps, suya, 7, 2027, true);
+  assert.equal(call({ action: "misPreferencias", session: suya, anio: 2027, mes: 7 }, deps).prefs.tercerPuesto, true);
+});
+
+test("quitar un 3P NO devuelve un mes VALIDADO a Borrador; añadir uno o quitar una guardia sí (P-16)", () => {
+  const deps = stubClean(makeDeps());
+  const suya = loggedInAs(deps, "otro@gmail.com");
+  const resp = loggedInAs(deps, "resp@gmail.com");
+  quiere3P(deps, suya, 7, 2027);
+  guardar(deps, suya, [
+    { fecha: "2027-07-14", residenteId: "otro-1", codigo: "3P" },
+    { fecha: "2027-07-20", residenteId: "otro-1", codigo: "G" },
+  ]);
+  const estado = () => call({ action: "estadoCuadrante", session: resp, mes: 7, anio: 2027 }, deps).estado;
+  assert.equal(call({ action: "marcarValidado", session: resp, mes: 7, anio: 2027 }, deps).ok, true);
+  assert.equal(estado(), "VALIDADO");
+
+  // Quitar SOLO el 3P: sigue VALIDADO.
+  assert.equal(guardar(deps, suya, [{ fecha: "2027-07-14", residenteId: "otro-1", codigo: "" }]).ok, true);
+  assert.equal(estado(), "VALIDADO");
+
+  // Quitar una guardia (no un 3P) sí lo invalida.
+  assert.equal(guardar(deps, suya, [{ fecha: "2027-07-20", residenteId: "otro-1", codigo: "" }]).ok, true);
+  assert.equal(estado(), "BORRADOR");
+
+  // Y AÑADIR un 3P a un mes validado también lo invalida (nada lo ha comprobado todavía).
+  call({ action: "marcarValidado", session: resp, mes: 7, anio: 2027 }, deps);
+  assert.equal(estado(), "VALIDADO");
+  guardar(deps, suya, [{ fecha: "2027-07-22", residenteId: "otro-1", codigo: "3P" }]);
+  assert.equal(estado(), "BORRADOR");
+});
+
+test("quitar un 3P mezclado con otros cambios (un lote que también añade) sí invalida el mes", () => {
+  const deps = stubClean(makeDeps());
+  const suya = loggedInAs(deps, "otro@gmail.com");
+  const resp = loggedInAs(deps, "resp@gmail.com");
+  quiere3P(deps, suya, 7, 2027);
+  guardar(deps, suya, [{ fecha: "2027-07-14", residenteId: "otro-1", codigo: "3P" }]);
+  call({ action: "marcarValidado", session: resp, mes: 7, anio: 2027 }, deps);
+  guardar(deps, suya, [
+    { fecha: "2027-07-14", residenteId: "otro-1", codigo: "" },
+    { fecha: "2027-07-21", residenteId: "otro-1", codigo: "G" },
+  ]);
+  assert.equal(call({ action: "estadoCuadrante", session: resp, mes: 7, anio: 2027 }, deps).estado, "BORRADOR");
 });
 
 // ── Ausencia con fecha ilegible ya escrita en el Sheet (decisión V-22) ──

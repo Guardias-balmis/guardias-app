@@ -26,7 +26,7 @@ import { validateThirdPost, thirdPostHistoryStart } from "../../v2/domain/thirdp
  *   fallo de red se devuelve como {ok:false} para que la pantalla no dé por comprobado INV-8.
  */
 export async function thirdPostViolations({ api, mes, anio, residentes, asignacionesDelMes = [] }) {
-  const rVol = await api.estadoVoluntariado3P();
+  const rVol = await api.estadoVoluntariado3P(mes, anio);
   if (!rVol.ok) return { ok: false, error: rVol.error };
   const voluntarios = rVol.voluntarios || [];
   // `periodos` (activos e históricos, V-40) es lo que permite a INV-8a juzgar "¿era voluntario
@@ -59,9 +59,9 @@ export async function thirdPostViolations({ api, mes, anio, residentes, asignaci
     violaciones: validateThirdPost({
       mes, anio, residentes,
       asignaciones: asignacionesDelMes,
-      voluntarios3P: voluntarios, // con `desde`: el ciclo de 8b arranca en el alta de cada uno (V-18b)
+      voluntarios3P: voluntarios, // con `desde` = inicio de su año de residencia: el ciclo de 8b se cuenta dentro del año (V-55)
       historial3P,
-      periodosVoluntario3P: periodos, // solo para 8a (V-40); 8b/8c siguen sobre el compromiso vigente
+      periodosVoluntario3P: periodos, // solo para 8a: un «sí» = el mes entero (V-55); 8b/8c, sobre los del año de residencia
     }),
   };
 }

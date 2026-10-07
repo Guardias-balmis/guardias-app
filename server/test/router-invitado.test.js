@@ -188,7 +188,7 @@ test("el invitado NO puede escribir ni leer lo sensible: escritura, ausencias, p
   for (const action of [
     "guardarAsignaciones", "marcarValidado", "publicarCuadrante", "despublicarCuadrante", "generarCuadranteIA",
     "crearBloqueo", "cancelarBloqueo", "guardarPreferencias", "editarResidente", "guardarPeriodos",
-    "ofrecerseResponsable", "ejecutarSorteoResponsable", "ofrecerse3P", "registrarImaginaria", "crearFestivos",
+    "ofrecerseResponsable", "ejecutarSorteoResponsable", "registrarImaginaria", "crearFestivos",
     "listBloqueos", "listBloqueosRango", "misBloqueos", "listPreferencias", "misPreferencias", "colaImaginaria",
     "listSolicitudesInvitado", "resolverSolicitudInvitado",
   ]) {

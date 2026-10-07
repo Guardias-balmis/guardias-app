@@ -18,14 +18,14 @@ function fakeApi({ voluntarios = [], periodos = null, asignaciones = [], failVol
   const calls = [];
   return {
     calls,
-    estadoVoluntariado3P: async () => {
-      calls.push({ tipo: "voluntarios" });
+    estadoVoluntariado3P: async (mes, anio) => {
+      calls.push({ tipo: "voluntarios", mes, anio });
       // Por defecto, cada voluntario ACTIVO es también su único periodo (sin `hasta`): así los
       // tests que no le prestan atención a esto siguen viendo el mismo veredicto de antes.
       const periodosEfectivos = periodos !== null ? periodos : voluntarios.map((v) => ({ residenteId: v.residenteId, desde: v.desde }));
       return failVol
         ? { ok: false, error: "sin red" }
-        : { ok: true, voluntarios, periodos: periodosEfectivos, permanenciaMeses: 4, mio: null };
+        : { ok: true, voluntarios, periodos: periodosEfectivos, delMes: voluntarios.map((v) => v.residenteId), yo: false };
     },
     listAsignacionesRango: async (desde, hasta) => {
       calls.push({ tipo: "asignaciones", desde, hasta });
@@ -152,4 +152,10 @@ test("el ciclo de INV-8b arranca en el alta: un 3P anterior no cuenta (mismo ver
     asignacionesDelMes: [p3("r2-bruno", "2027-07-05")], // otro lunes
   });
   assert.deepEqual(r.violaciones, []);
+});
+
+test("el estado del tercer puesto se pide PARA EL MES que se valida (P-16: la respuesta es mensual)", async () => {
+  const api = fakeApi();
+  await thirdPostViolations({ api, mes: 10, anio: 2026, residentes: [ANA], asignacionesDelMes: [] });
+  assert.deepEqual(api.calls[0], { tipo: "voluntarios", mes: 10, anio: 2026 });
 });
