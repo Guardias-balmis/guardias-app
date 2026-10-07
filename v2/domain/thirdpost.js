@@ -1,9 +1,9 @@
 // Validación del tercer puesto (INV-8, spec.md §5). El 3P es siempre voluntario y se
-// registra aparte. Cuatro reglas: (a) solo voluntarios; (b) rotación de días por
+// registra aparte. Cinco reglas: (a) solo voluntarios; (b) rotación de días por
 // residente (7 días L-D distintos antes de repetir, acumula entre meses, reinicia al
 // completar el ciclo); (c) equidad ≤1 entre voluntarios al cierre del año de residencia;
-// (d) prioridad a los días con R1 de "mochila". El 3P no computa en la equidad de
-// guardias obligatorias (eso lo garantiza tally excluyendo 3P; aquí no se re-verifica).
+// (d) prioridad a los días con R1 de "mochila"; (e) no hay 3P mientras algún día tenga
+// menos de dos personas. El 3P no computa en la equidad de guardias obligatorias (eso lo garantiza tally excluyendo 3P; aquí no se re-verifica).
 //
 // Las CUATRO son `aviso` (decisión V-18, que extiende V-14): ninguna impide validar. Las dos
 // que aún eran `error` —8a, 3P a quien no consta voluntario, y 8b, repetir día de semana— lo
@@ -141,6 +141,27 @@ export function validateThirdPost(ctx) {
     const culpable = misplaced[0];
     // AVISO: el 3P es voluntario; la mala priorización se señala pero no impide VALIDAR.
     violations.push(aviso(`Existe 3P el ${culpable.fecha} (día sin R1) mientras el día de mochila ${dia} queda sin 3P: los 3P deben cubrir primero los días con R1`, { fecha: dia, residenteId: culpable.residenteId }));
+  }
+
+  // ── INV-8e: el tercer puesto no va mientras algún día tiene menos de dos personas (P-17/V-58) ──
+  // La tercera persona de un día es SIEMPRE un 3P (apoyo hasta las 20 h, el último que se añade a la
+  // guardia, sea del nivel que sea): no hay un «refuerzo» de 24 h distinto. Y no puede ir mientras
+  // algún día del mes está cubierto por una sola persona o por ninguna: ese hueco se cubre antes con
+  // una guardia completa —que puede ser la quinta o la sexta de alguien— y el 3P solo viene después.
+  // Aviso, como las demás (el tercer puesto es voluntario y la regla orienta, no bloquea).
+  const personasPorDia = new Map(days.map((d) => [d, 0]));
+  for (const a of asignaciones) {
+    if (!personasPorDia.has(a.fecha) || !["G", "GF", "GP"].includes(a.codigo)) continue;
+    const r = byId.get(a.residenteId);
+    if (r && ["R1", "R2", "R3", "R4"].includes(levelOn(periodsOfResident(r), a.fecha))) personasPorDia.set(a.fecha, personasPorDia.get(a.fecha) + 1);
+  }
+  // Sin ninguna guardia en el mes no hay cobertura que juzgar (INV-1 ya da cada día vacío como error).
+  const hayGuardias = [...personasPorDia.values()].some((n) => n > 0);
+  const huecoDelMes = hayGuardias ? days.find((d) => personasPorDia.get(d) < 2) : undefined;
+  if (huecoDelMes) {
+    for (const a of thisMonth3P) {
+      violations.push(aviso(`Tercer puesto de ${a.residenteId} el ${a.fecha} mientras el ${huecoDelMes} queda con menos de dos personas: el tercer puesto no va hasta que todos los días tengan sus dos guardias`, { fecha: a.fecha, residenteId: a.residenteId }));
+    }
   }
 
   // ── INV-8c: equidad al cierre del año de residencia ──

@@ -1071,11 +1071,10 @@ const BITACORA_MAX_VIOLACIONES = 50;
 // caracteres inventados por el modelo) seguirían pasando de 50.000. Margen sobre el límite de Sheets.
 const BITACORA_MAX_CHARS = 40000;
 const BITACORA_MAX_DETALLE = 300;
-// `origen` marca la guardia cedida o comprada (INV-4) o de REFUERZO (P-15), que se excluyen de los
-// seis ejes de INV-3 (el refuerzo, además, en un contaje propio).
+// `origen` marca la guardia cedida o comprada, que INV-4 excluye de los seis ejes de INV-3.
 // `tally.js:15` lo evalúa por TRUTHINESS, así que una errata cualquiera —no solo un valor de otro
 // enum— saca la guardia del cómputo y de los totales de la pestaña publicada, en silencio.
-const ASIG_ORIGENES = new Set(["CEDIDA", "COMPRADA", "REFUERZO"]);
+const ASIG_ORIGENES = new Set(["CEDIDA", "COMPRADA"]);
 // `puesto` (spec.md §2 Asignacion): hoy ningún cliente lo manda y ningún invariante lo lee —el
 // puesto se deriva del nivel—, pero la columna existe y el endpoint es público.
 const ASIG_PUESTOS = new Set(["MAYOR", "PEQUENO", "TERCERO"]);
@@ -1273,8 +1272,6 @@ function handleRequest(rawBody, deps) {
           if (malCodigo) return { ok: false, error: `código de asignación inválido: ${JSON.stringify(malCodigo.codigo)} (válidos: ${[...ASIG_CODIGOS].filter(Boolean).join(", ")})` };
           const malOrigen = req.cambios.find((c) => c.origen !== undefined && c.origen !== "" && !ASIG_ORIGENES.has(c.origen));
           if (malOrigen) return { ok: false, error: `origen inválido: ${JSON.stringify(malOrigen.origen)} (válidos: ${[...ASIG_ORIGENES].join(", ")})` };
-          const malRefuerzo = req.cambios.find((c) => c.origen === "REFUERZO" && !["G", "GF", "GP"].includes(c.codigo));
-          if (malRefuerzo) return { ok: false, error: `un refuerzo solo puede ser una guardia (G, GF o GP), no ${JSON.stringify(malRefuerzo.codigo || "")}` };
           // El residente tiene que existir (2026-09-04): una fila con un id que no es de nadie no la
           // ve ninguna pantalla ni la puede borrar nadie, y se queda para siempre en una tabla
           // append-only —el mismo motivo por el que el generador rechaza los ids inventados (V-31).
@@ -1294,23 +1291,23 @@ function handleRequest(rawBody, deps) {
             const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
             if (publicado) return { ok: false, error: `el cuadrante de ${publicado.mes}/${publicado.anio} está PUBLICADO y no admite ediciones` };
 
-            // Lo OPCIONAL no invalida un mes VALIDADO (P-16/V-55, P-17): quitar un 3P, y añadir o quitar un
-            // REFUERZO. Son apoyos voluntarios —el 3P casi nunca es de las cuatro obligatorias, y el
-            // refuerzo es por definición la guardia de más—, y la reunión que validó las obligatorias no
-            // tiene por qué repetirse cada vez que alguien se apunta una quinta. Se mira el estado ACTUAL
-            // de cada celda, dentro del lock: solo cuenta como «quitar» el cambio que deja vacía una celda
-            // que ahora es de ese tipo, y como «añadir» el que escribe un refuerzo en una celda VACÍA —
-            // reetiquetar como refuerzo una guardia de la base la cambia, y eso sí invalida.
+            // Lo OPCIONAL no invalida un mes VALIDADO (P-16, P-17/V-58): añadir o quitar un TERCER PUESTO. Es un
+            // apoyo voluntario —el que se añade el último a la guardia y se va a las 20 h—, casi nunca de
+            // las cuatro obligatorias, y la reunión que validó las obligatorias no tiene por qué repetirse
+            // cada vez que alguien se apunta uno o se lo quita. Se mira el estado ACTUAL de cada celda,
+            // dentro del lock: solo cuenta como «quitar» el cambio que deja vacía una celda que ahora es un
+            // 3P, y como «añadir» el que escribe un 3P en una celda VACÍA — convertir en 3P una guardia
+            // de la base la cambia, y eso sí invalida.
             const actuales = new Map(deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }).map((x) => [ASIG_KEY(x), x]));
             const vacia = (c) => (c.codigo || "") === "";
-            const quitaOpcional = (c) => { const a = actuales.get(ASIG_KEY(c)); return vacia(c) && Boolean(a) && (a.codigo === "3P" || a.origen === "REFUERZO"); };
-            const anadeRefuerzo = (c) => c.origen === "REFUERZO" && !vacia(c) && !actuales.has(ASIG_KEY(c));
-            const soloOpcional = req.cambios.every((c) => quitaOpcional(c) || anadeRefuerzo(c));
+            const quitaTercerPuesto = (c) => vacia(c) && actuales.get(ASIG_KEY(c))?.codigo === "3P";
+            const anadeTercerPuesto = (c) => c.codigo === "3P" && !actuales.has(ASIG_KEY(c));
+            const soloOpcional = req.cambios.every((c) => quitaTercerPuesto(c) || anadeTercerPuesto(c));
 
-            // Añadir un refuerzo a un mes VALIDADO no se hace a ciegas: tiene que pasar por lo que el mes
-            // ya tenía que cumplir (el descanso de INV-15, una baja de INV-5…). Se juzga el mes RESULTANTE
-            // y se rechaza solo por errores NUEVOS: uno que el mes ya traía no es culpa de este cambio.
-            if (soloOpcional && req.cambios.some(anadeRefuerzo)) {
+            // Añadir un 3P a un mes VALIDADO no se hace a ciegas: tiene que pasar por lo que el mes ya tenía
+            // que cumplir (el descanso de INV-15, una baja de INV-5…). Se juzga el mes RESULTANTE y se rechaza
+            // solo por errores NUEVOS: uno que el mes ya traía no es culpa de este cambio.
+            if (soloOpcional && req.cambios.some(anadeTercerPuesto)) {
               for (const m of meses.filter((x) => x.estado === "VALIDADO")) {
                 const snap = monthSnapshot(deps);
                 const prefix = monthPrefix(m.anio, m.mes);
@@ -1321,7 +1318,7 @@ function handleRequest(rawBody, deps) {
                 const antes = new Set(errores(null).map(firma));
                 const nuevos = errores([...resultante.values()].filter((a) => a.codigo)).filter((v) => !antes.has(firma(v)));
                 if (nuevos.length > 0) {
-                  return { ok: false, error: `el refuerzo incumple una regla obligatoria (${nuevos[0].invariante}): ${nuevos[0].detalle}`, violaciones: nuevos };
+                  return { ok: false, error: `el tercer puesto incumple una regla obligatoria (${nuevos[0].invariante}): ${nuevos[0].detalle}`, violaciones: nuevos };
                 }
               }
             }

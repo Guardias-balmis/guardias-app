@@ -22,7 +22,7 @@
 
 import { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays, isHoliday } from "./calendar.js";
 import { periodsOfResident, levelOn, groupOf } from "./residents.js";
-import { tally, ORIGEN_REFUERZO } from "./tally.js";
+import { tally } from "./tally.js";
 import { absences, isNearbyRotation, BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA } from "./absences.js";
 
 const GUARDIA = new Set(["G", "GF", "GP"]);          // ocupan puesto obligatorio
@@ -175,13 +175,11 @@ export function validateMonth(ctx) {
   // ── INV-1 / INV-9: paridad Mayor+Pequeño por día ──
   for (const fecha of days) {
     const guardias = byDay.get(fecha).filter((a) => GUARDIA.has(a.codigo));
-    const roles = guardias.map((a) => ({ id: a.residenteId, level: levelOnDay(a.residenteId, fecha), group: groupOf(levelOnDay(a.residenteId, fecha)), refuerzo: a.origen === ORIGEN_REFUERZO }));
-    // La composición se juzga sobre la BASE del día: los refuerzos (P-15) son una tercera persona
-    // voluntaria, de cualquier nivel, y con ella siempre coexisten dos de un mismo grupo — no es
-    // un defecto que avisar.
-    const base = roles.filter((r) => !r.refuerzo);
-    const mayores = base.filter((r) => r.group === "MAYOR");
-    const pequenos = base.filter((r) => r.group === "PEQUENO");
+    const roles = guardias.map((a) => ({ id: a.residenteId, level: levelOnDay(a.residenteId, fecha), group: groupOf(levelOnDay(a.residenteId, fecha)) }));
+    // La tercera persona de un día es un 3P (apoyo hasta las 20 h) y el 3P NO ocupa puesto: no está en
+    // `GUARDIA`, así que no entra aquí. Tres guardias G/GF/GP el mismo día sí avisan (P-14).
+    const mayores = roles.filter((r) => r.group === "MAYOR");
+    const pequenos = roles.filter((r) => r.group === "PEQUENO");
     const noAsignables = roles.filter((r) => r.group === null);
 
     // Asignaciones a quien no es asignable ese día (residencia terminada, no empezada, o id
@@ -198,7 +196,7 @@ export function validateMonth(ctx) {
         { fecha, residenteId: r.id }));
     }
 
-    if (base.length === 2 && pequenos.length === 2 && pequenos.every((p) => p.level === "R2")) {
+    if (guardias.length === 2 && pequenos.length === 2 && pequenos.every((p) => p.level === "R2")) {
       // Candidato 2×R2 → lo gobierna INV-9
       if (!twoR2Justified(fecha)) {
         const antesDeDiciembre = compareISO(fecha, toISO(academicYearOf(fecha), 12, 1)) < 0;
@@ -234,10 +232,10 @@ export function validateMonth(ctx) {
     if (mayores.length >= 2 || pequenos.length >= 2) {
       const n = mayores.length >= 2 ? `${mayores.length} Residentes Mayores` : `${pequenos.length} Residentes Pequeños`;
       const falta = mayores.length === 0 ? "; falta el puesto de Mayor" : pequenos.length === 0 ? "; falta el puesto de Pequeño" : "";
-      violations.push(aviso("INV-1", `El ${fecha} hay ${n}${falta}: la composición habitual es un Mayor y un Pequeño (si es un refuerzo, márcalo como tal)`, { fecha }));
+      violations.push(aviso("INV-1", `El ${fecha} hay ${n}${falta}: la composición habitual es un Mayor y un Pequeño (si es un apoyo de tarde, regístralo como tercer puesto)`, { fecha }));
       continue;
     }
-    if (noAsignables.length > 0 && roles.every((r) => r.group === null)) {
+    if (noAsignables.length > 0) {
       // El día TIENE nombres escritos en la rejilla: decirlo así, y no «sin cubrir», que es lo
       // que lo hacía indistinguible de un día vacío. Aviso por lo mismo que el bucle de arriba
       // (V-21) — el aviso de cada asignación ya dice a quién hay que arreglar.
@@ -246,27 +244,8 @@ export function validateMonth(ctx) {
         { fecha }));
       continue;
     }
-    if (roles.length === 0) {
-      violations.push(err("INV-1", `Día ${fecha} sin cubrir: no hay nadie de guardia (mayores=0, pequeños=0)`, { fecha }));
-      continue;
-    }
-    // Hay alguien, pero ningún puesto de la base: solo refuerzos (o solo no asignables junto a ellos).
-    violations.push(aviso("INV-1", `Guardia del ${fecha} cubierta solo por refuerzo: falta el Mayor y el Pequeño de la base`, { fecha }));
-  }
-
-  // ── INV-1 (prioridad, P-17): un refuerzo no va mientras algún día no tiene sus dos personas ──
-  // La quinta o sexta guardia se coloca PRIMERO donde falta alguien; solo cuando todos los días del mes
-  // tienen su Mayor y su Pequeño puede ir como tercera persona. Es un aviso que orienta (P-14): no
-  // bloquea, pero evita que el reparto vuelva a regalar un refuerzo con un día cubierto por uno solo.
-  const refuerzos = asignaciones.filter((a) => GUARDIA.has(a.codigo) && a.origen === ORIGEN_REFUERZO && dayset.has(a.fecha));
-  if (refuerzos.length > 0) {
-    const hueco = days.find((d) => byDay.get(d)
-      .filter((a) => GUARDIA.has(a.codigo) && a.origen !== ORIGEN_REFUERZO && groupOf(levelOnDay(a.residenteId, d)) !== null).length < 2);
-    if (hueco) {
-      for (const a of refuerzos) {
-        violations.push(aviso("INV-1", `Refuerzo de ${a.residenteId} el ${a.fecha} mientras el ${hueco} queda con menos de dos personas: cubre primero ese día`, { fecha: a.fecha, residenteId: a.residenteId }));
-      }
-    }
+    // Sin nadie asignable y sin nadie escrito: el día vacío, lo único imposible (P-14).
+    violations.push(err("INV-1", `Día ${fecha} sin cubrir: no hay nadie de guardia (mayores=0, pequeños=0)`, { fecha }));
   }
 
   // ── INV-5: asignación sobre bloqueo BAJA (único motivo DURO — decisión V-8) ──

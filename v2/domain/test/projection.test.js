@@ -114,17 +114,6 @@ test("buildMonthSheetRows: una guardia CEDIDA/COMPRADA (origen) se marca con \"*
   assert.equal(codigos[1], "G");
 });
 
-test("buildMonthSheetRows: un REFUERZO se marca con \"+\" (P-15): fuera del COUNTIF exacto, igual que tally.js", () => {
-  const asignaciones = [
-    { residenteId: "ana", fecha: DIAS[0], codigo: "G", origen: "REFUERZO" },
-    { residenteId: "ana", fecha: DIAS[1], codigo: "GF", origen: "REFUERZO" },
-    { residenteId: "ana", fecha: DIAS[2], codigo: "G" },
-  ];
-  const { rows } = buildMonthSheetRows({ anio: ANIO, mes: MES, residentes: [ANA], asignaciones });
-  const codigos = rows[2].slice(9);
-  assert.deepEqual(codigos.slice(0, 3), ["G+", "GF+", "G"]);
-});
-
 test("buildMonthSheetRows: un 3P con origen NO se marca — tally.js cuenta todo 3P como tercerPuesto con independencia del origen", () => {
   const asignaciones = [{ residenteId: "ana", fecha: DIAS[0], codigo: "3P", origen: "comprada" }];
   const { rows } = buildMonthSheetRows({ anio: ANIO, mes: MES, residentes: [ANA], asignaciones });

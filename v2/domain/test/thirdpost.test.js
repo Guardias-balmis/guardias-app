@@ -19,7 +19,10 @@ const EVA = R("r1-eva", "2026-05-25", "2030-05-24");
 // Desde la decisión V-18 NINGUNA de las cuatro reglas de INV-8 bloquea: las cuatro son aviso.
 // Filtrar aquí por severidad ocultaría justo lo que hay que comprobar, así que se filtra por
 // invariante —igual que en equity.test.js— y la severidad se asserta donde se fija.
-const only8 = (v) => v.filter((x) => x.invariante === "INV-8");
+// Excluye el 8e (cobertura): estos meses de prueba son esquemáticos (solo las guardias que cada test
+// necesita), así que el 8e los avisaría a todos; tiene sus propios tests abajo, con un mes completo.
+const esCobertura = (x) => /queda con menos de dos personas/.test(x.detalle);
+const only8 = (v) => v.filter((x) => x.invariante === "INV-8" && !esCobertura(x));
 const rotacion8 = (v) => only8(v).filter((x) => /repite|no consta en la lista/.test(x.detalle));
 
 test("INV-8b: ciclo completo permite repetir día", () => {
@@ -167,7 +170,7 @@ test("INV-8d: mochila descubierta con 3P mal priorizado (AVISO, no bloquea)", ()
   // Es AVISO: el 3P es voluntario, la mala priorización se señala pero no impide VALIDAR.
   const asignaciones = [g("r1-eva", "2026-09-11", "G"), p3("r2-bruno", "2026-09-12")];
   const v = validateThirdPost({ mes: 9, anio: 2026, residentes: [EVA, BRUNO], voluntarios3P: ["r2-bruno"], historial3P: {}, asignaciones });
-  const av = v.filter((x) => x.invariante === "INV-8" && x.severidad === "aviso");
+  const av = only8(v).filter((x) => x.severidad === "aviso");
   assert.equal(av.length, 1);
   assert.equal(av[0].fecha, "2026-09-11");
   assert.equal(rotacion8(v).length, 0); // el aviso es el de mochila, no uno de rotación
@@ -353,4 +356,49 @@ test("INV-8: las dos formas de `voluntarios3P` (ids o registros) valen para INV-
   const conRegistros = validateThirdPost({ ...base, voluntarios3P: [{ residenteId: "r2-bruno", desde: "2026-09-01" }] });
   assert.deepEqual(only8(conIds), []);
   assert.deepEqual(only8(conRegistros), []);
+});
+
+// ── INV-8e (P-17/V-58): el tercer puesto no va mientras algún día tenga menos de dos personas ──
+// La tercera persona de un día es siempre un 3P (apoyo hasta las 20 h), así que no hay otro «refuerzo»:
+// un hueco (día con una sola persona) se cubre antes con una guardia completa, que puede ser la quinta
+// o la sexta de alguien, y el 3P viene después.
+const diasDe = (anio, mes, n) => Array.from({ length: n }, (_, i) => `${anio}-${String(mes).padStart(2, "0")}-${String(i + 1).padStart(2, "0")}`);
+const mesCubierto = (omitir = []) => diasDe(2026, 9, 30).filter((d) => !omitir.includes(d)).flatMap((d) => [g("r3-ana", d), g("r2-bruno", d)]);
+const cobertura8 = (v) => v.filter((x) => x.invariante === "INV-8" && esCobertura(x));
+const ctx8 = (asignaciones) => ({ mes: 9, anio: 2026, residentes: [ANA, BRUNO, CARLA], voluntarios3P: ["r2-carla"], historial3P: {}, asignaciones });
+
+test("INV-8e: un 3P con todos los días cubiertos por dos no avisa", () => {
+  const v = validateThirdPost(ctx8([...mesCubierto(), p3("r2-carla", "2026-09-12")]));
+  assert.equal(cobertura8(v).length, 0);
+});
+
+test("INV-8e: un 3P mientras otro día queda con una sola persona AVISA, y nombra el día y el 3P", () => {
+  const quita = ["2026-09-20"];
+  const asig = mesCubierto(quita).concat([g("r3-ana", "2026-09-20")]); // el 20 solo tiene al Mayor
+  const v = validateThirdPost(ctx8([...asig, p3("r2-carla", "2026-09-12")]));
+  const c = cobertura8(v);
+  assert.equal(c.length, 1);
+  assert.equal(c[0].severidad, "aviso", "no bloquea (V-14)");
+  assert.equal(c[0].fecha, "2026-09-12");
+  assert.equal(c[0].residenteId, "r2-carla");
+  assert.match(c[0].detalle, /2026-09-20/);
+});
+
+test("INV-8e: un día sin NADIE también cuenta como hueco", () => {
+  const v = validateThirdPost(ctx8([...mesCubierto(["2026-09-20"]), p3("r2-carla", "2026-09-12")]));
+  assert.equal(cobertura8(v).length, 1);
+});
+
+test("INV-8e: sin ningún 3P no hay nada que avisar, aunque haya huecos (eso es de INV-1)", () => {
+  assert.equal(cobertura8(validateThirdPost(ctx8(mesCubierto(["2026-09-20"])))).length, 0);
+});
+
+test("INV-8e: sin guardias en el mes no hay cobertura que juzgar", () => {
+  assert.equal(cobertura8(validateThirdPost(ctx8([p3("r2-carla", "2026-09-12")]))).length, 0);
+});
+
+test("INV-8e: un aviso por cada 3P del mes mientras el hueco siga abierto", () => {
+  const asig = mesCubierto(["2026-09-20"]).concat([g("r3-ana", "2026-09-20")]);
+  const v = validateThirdPost(ctx8([...asig, p3("r2-carla", "2026-09-12"), p3("r2-carla", "2026-09-13")]));
+  assert.equal(cobertura8(v).length, 2);
 });

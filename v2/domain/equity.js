@@ -22,7 +22,7 @@
 // en el mes en que cierra el último de los dos (`earlierClosedPeers`).
 
 import { compareISO, addDays, addYears, datesOfMonth, toISO, daysInMonth, trimesterWindow, bridgesOfMonth, bridgesBetween } from "./calendar.js";
-import { tally, ORIGEN_REFUERZO } from "./tally.js";
+import { tally } from "./tally.js";
 import { absences, DESCUENTA_DISPONIBILIDAD, AUSENTE_EN_PUENTE } from "./absences.js";
 import { accumulatedTally } from "./accumulate.js";
 import { periodsOfResident, closingPeriodOn, closedPeriodsBetween } from "./residents.js";
@@ -561,9 +561,7 @@ function intersect(a, b) {
 export function residentIsFreeOnBridge(id, asignaciones, puente, win, bloqueos = []) {
   if (!inRange(puente, win.start, win.end)) return false; // fuera de su ventana → no es suyo
   if (absences(bloqueos, { residenteId: id, motivos: AUSENTE_EN_PUENTE, fecha: puente }).length) return false;
-  // Un refuerzo (P-15) no le quita el puente a quien lo hace, igual que el 3P (INV-4): es voluntario y
-  // opcional, así que el eje mide si el REPARTO obligatorio se lo quitó, no si él eligió trabajar.
-  return !asignaciones.some((a) => a.residenteId === id && GUARDIA.includes(a.codigo) && a.origen !== ORIGEN_REFUERZO && a.fecha === puente);
+  return !asignaciones.some((a) => a.residenteId === id && GUARDIA.includes(a.codigo) && a.fecha === puente);
 }
 
 function daysInclusive(a, b) {

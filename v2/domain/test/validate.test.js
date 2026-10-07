@@ -178,7 +178,7 @@ test("INV-1: dos Pequeños con un R1 (no ambos R2) es violación de INV-1", () =
   assert.equal(i1[0].fecha, "2027-01-23");
 });
 
-// ── P-14/P-15/P-17: la composición no bloquea; el refuerzo es una tercera persona voluntaria ──
+// ── P-14: la composición del día no bloquea (la tercera persona es un 3P, que no ocupa puesto) ──
 const DIA = "2026-07-15";
 const sinBloqueo = (v) => v.filter((x) => x.severidad === "error");
 
@@ -206,7 +206,7 @@ test("P-14: tres personas sin marcar (un Mayor y dos Pequeños) avisa, y no bloq
   const d = only(v, "INV-1").filter((x) => x.fecha === DIA);
   assert.equal(d.length, 1);
   assert.equal(d[0].severidad, "aviso");
-  assert.match(d[0].detalle, /refuerzo/);
+  assert.match(d[0].detalle, /tercer puesto/);
 });
 
 test("P-14: lo ÚNICO que sigue siendo error de INV-1 es el día vacío", () => {
@@ -215,48 +215,6 @@ test("P-14: lo ÚNICO que sigue siendo error de INV-1 es el día vacío", () => 
   const e = sinBloqueo(v).filter((x) => x.invariante === "INV-1");
   assert.equal(e.length, 1);
   assert.equal(e[0].fecha, DIA);
-});
-
-test("P-15: un REFUERZO sobre un día completo (Mayor + Pequeño) no avisa de composición, sea del nivel que sea", () => {
-  for (const quien of ["FRAN", "BEA", "IVAN"]) {
-    const asgs = coverMonth(7, 2026, 31, [asg("ANA", DIA, "G"), asg("ELENA", DIA, "G"), asg(quien, DIA, "G", { origen: "REFUERZO" })]);
-    const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, BEA, ELENA, FRAN, IVAN], asignaciones: asgs });
-    assert.equal(only(v, "INV-1").length, 0, `refuerzo de ${quien}`);
-  }
-});
-
-test("P-17: un refuerzo mientras otro día del mes queda con una sola persona AVISA (prioridad: cubrir primero el hueco)", () => {
-  const solo = coverMonth(7, 2026, 31, [asg("ANA", "2026-07-20", "G")]).filter((a) => !(a.fecha === "2026-07-20" && a.residenteId === "ELENA"));
-  const asgs = solo.concat([asg("FRAN", DIA, "G", { origen: "REFUERZO" })]);
-  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA, FRAN], asignaciones: asgs });
-  const prio = only(v, "INV-1").filter((x) => /Refuerzo de FRAN/.test(x.detalle));
-  assert.equal(prio.length, 1);
-  assert.equal(prio[0].severidad, "aviso");
-  assert.match(prio[0].detalle, /2026-07-20/);
-  assert.equal(prio[0].residenteId, "FRAN");
-});
-
-test("P-17: con todos los días completos, el refuerzo no avisa de prioridad", () => {
-  const asgs = coverMonth(7, 2026, 31, [asg("ANA", DIA, "G"), asg("ELENA", DIA, "G"), asg("FRAN", DIA, "G", { origen: "REFUERZO" })]);
-  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA, FRAN], asignaciones: asgs });
-  assert.equal(only(v, "INV-1").filter((x) => /Refuerzo/.test(x.detalle)).length, 0);
-});
-
-test("P-15: un día cubierto SOLO por un refuerzo avisa (no es vacío, pero no tiene su base)", () => {
-  const asgs = coverMonth(7, 2026, 31, [asg("FRAN", DIA, "G", { origen: "REFUERZO" })]);
-  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, ELENA, FRAN], asignaciones: asgs });
-  const d = only(v, "INV-1").filter((x) => x.fecha === DIA && /solo por refuerzo/.test(x.detalle));
-  assert.equal(d.length, 1);
-  assert.equal(d[0].severidad, "aviso");
-  assert.equal(sinBloqueo(v).filter((x) => x.invariante === "INV-1").length, 0);
-});
-
-test("P-15: los refuerzos no cuentan para el máximo de INV-2 (van en contaje aparte)", () => {
-  // ELENA hace 4 guardias de base y 3 refuerzos: INV-2 solo mira las 4.
-  const base = ["2026-07-02", "2026-07-09", "2026-07-16", "2026-07-23"].flatMap((f) => [asg("ANA", f, "G"), asg("ELENA", f, "G")]);
-  const refs = ["2026-07-04", "2026-07-11", "2026-07-18"].flatMap((f) => [asg("ANA", f, "G"), asg("BEA", f, "G"), asg("ELENA", f, "G", { origen: "REFUERZO" })]);
-  const v = validateMonth({ mes: 7, anio: 2026, residentes: [ANA, BEA, ELENA], asignaciones: [...base, ...refs] });
-  assert.equal(only(v, "INV-2").filter((x) => x.residenteId === "ELENA").length, 0);
 });
 
 // ─────────────── INV-9 (2xR2) ───────────────

@@ -123,12 +123,9 @@ function FilaRejilla({
                 <option value="">normal</option>
                 <option value="CEDIDA">cedida</option>
                 <option value="COMPRADA">comprada</option>
-                {/* Refuerzo (P-15): la guardia de más sobre un día que ya tiene su Mayor y su Pequeño.
-                    Solo G/GF/GP: el 3P ya es un apoyo aparte y el servidor lo rechazaría. */}
-                {codigo !== "3P" && <option value="REFUERZO">refuerzo</option>}
               </select>
             ) : (
-              `${codigo || "·"}${origen === "REFUERZO" ? "+" : origen ? "*" : ""}`
+              `${codigo || "·"}${origen ? "*" : ""}`
             )}
           </td>
         );
@@ -437,7 +434,7 @@ function CalendarScreen() {
       setPendientes({});
       baseRef.current = { asignaciones, origenes }; // lo que hay en pantalla es ahora lo persistido
       // Editar un mes VALIDADO lo revierte a BORRADOR en el servidor (Fase 6.2), salvo que solo se
-      // haya tocado lo opcional (quitar un 3P, añadir o quitar un refuerzo: P-16/P-17). El servidor
+      // haya tocado lo opcional (añadir o quitar un tercer puesto: P-16/P-17). El servidor
       // dice cuál es el estado resultante; si no lo manda (un backend anterior), se aplica la regla
       // de dominio de siempre.
       const delMes = (r.estados || []).find((e) => e.mes === mes && e.anio === anio);
@@ -884,10 +881,9 @@ function CalendarScreen() {
             <span style={{ fontSize: 12, color: COLOR.grayDark }}>Columna de un día festivo</span>
           </div>
           <div style={{ fontSize: 12, color: COLOR.grayDark, flexBasis: "100%", lineHeight: 1.5 }}>
-            <b>G*</b> cedida o comprada · <b>G+</b> <b>refuerzo</b>: una guardia de más sobre un día que ya
-            tiene su Mayor y su Pequeño. Ni una ni otra cuentan en el contaje de cada uno; los refuerzos
-            van en un contaje aparte. Se marcan manteniendo pulsada la celda. Un refuerzo se coloca
-            solo cuando todos los días tienen ya sus dos personas.
+            <b>G*</b> cedida o comprada: no cuenta en el contaje de cada uno (mantén pulsada la celda para
+            marcarla). <b>3P</b> es el apoyo de tarde que se añade el último a la guardia y se marcha a las
+            20 h: tiene su contaje aparte y no se pone mientras algún día tenga menos de dos personas.
           </div>
         </div>
       </Card>
