@@ -236,6 +236,16 @@ test("pedirAcceso: espera mientras está PENDIENTE y entra cuando la aprueban (V
   assert.equal(entro.session, "S");
 });
 
+test("pedirAcceso: el primer estado lleva `avisados` tal cual lo devuelve el servidor (V-55)", async () => {
+  for (const avisados of [0, 2, undefined]) {
+    const estados = [];
+    const api = { solicitarInvitado: async () => ({ ok: true, solicitudToken: "t", expiraEn: 9, ...(avisados === undefined ? {} : { avisados }) }), estadoSolicitudInvitado: async () => ({ ok: true, estado: "CADUCADA" }) };
+    await pedirAcceso({ api, iniciar: () => api.solicitarInvitado("p"), storage: almacen(), onSuccess: () => assert.fail(), onError: () => assert.fail(), onEstado: (e) => estados.push(e), esperar: async () => {} });
+    assert.equal(estados[0].estado, "PENDIENTE");
+    assert.equal(estados[0].avisados, avisados);
+  }
+});
+
 test("pedirAcceso: rechazo y caducidad terminan la espera sin sesión", async () => {
   for (const estado of ["RECHAZADA", "CADUCADA"]) {
     const api = { solicitarInvitado: async () => ({ ok: true, solicitudToken: "t" }), estadoSolicitudInvitado: async () => ({ ok: true, estado }) };

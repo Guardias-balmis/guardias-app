@@ -304,3 +304,66 @@ test("alta: un residente ya vinculado no puede pedirla, y una solicitud de invit
   assert.deepEqual(tipos, ["ALTA", "INVITADO"]);
   assert.ok(inv.solicitudToken);
 });
+
+// ── A quién se avisa, y qué se le dice al solicitante (V-55) ──
+// Antes de V-55, pasada la ventana de administradores no se avisaba a nadie, y la pantalla del
+// solicitante seguía diciendo que sí. El aviso tiene que llegar justo a quien puede aprobar.
+const PEQ = { id: "peq", nombre: "Pepa", email: "peq@gmail.com", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" };
+const MUDO = { id: "mudo", nombre: "Sin email", email: "", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
+function trasLaVentana({ mandatoDe } = {}) {
+  const deps = makeDeps();
+  deps.today = "2027-04-15"; // ANA y ADMIN son R3 (Mayores); PEQ es R1
+  deps.store.appendRecords("residentes", [PEQ, MUDO]);
+  if (mandatoDe) deps.store.appendRecord("responsables", { periodoInicio: "2027-01-01", periodoFin: "2028-01-01", residenteId: mandatoDe, metodo: "VOLUNTARIO" });
+  return deps;
+}
+
+test("V-55: dentro de la ventana avisa a los administradores y la respuesta dice a cuántos", () => {
+  const deps = makeDeps();
+  assert.equal(solicita(deps).avisados, 2);
+});
+
+test("V-55: pasada la ventana, con mandato vigente, avisa SOLO al Responsable, que es el único que puede aprobar", () => {
+  const deps = trasLaVentana({ mandatoDe: "ana" });
+  assert.equal(solicita(deps).avisados, 1);
+  assert.deepEqual(deps.correos[0].para, ["ana@gmail.com"]);
+  const quique = loggedInAs(deps, "quiquemm14@gmail.com"); // Mayor, pero ya sin ventana de administrador
+  assert.match(call({ action: "listSolicitudesInvitado", session: quique }, deps).error, /Responsable/);
+  const ana = loggedInAs(deps, "ana@gmail.com");
+  const [pend] = call({ action: "listSolicitudesInvitado", session: ana }, deps).solicitudes;
+  assert.equal(call({ action: "resolverSolicitudInvitado", session: ana, id: pend.id, aprobar: true }, deps).ok, true);
+});
+
+test("V-55: pasada la ventana, sin mandato, avisa a todos los Mayores y a ningún Pequeño", () => {
+  const deps = trasLaVentana();
+  assert.equal(solicita(deps).avisados, 2);
+  assert.deepEqual([...deps.correos[0].para].sort(), ["ana@gmail.com", "quiquemm14@gmail.com"]);
+  const pepa = loggedInAs(deps, "peq@gmail.com");
+  assert.equal(call({ action: "listSolicitudesInvitado", session: pepa }, deps).ok, false, "a quien no se avisa tampoco puede aprobar");
+});
+
+test("V-55: el alta de un R1 pasada la ventana también avisa al Responsable", () => {
+  const deps = trasLaVentana({ mandatoDe: "ana" });
+  assert.equal(pideAlta(deps).avisados, 1);
+  assert.deepEqual(deps.correos[0].para, ["ana@gmail.com"]);
+  assert.match(deps.correos[0].asunto, /alta de residente/);
+});
+
+test("V-55: si el correo falla, no está configurado o no hay a quién mandarlo, la respuesta dice avisados: 0", () => {
+  const falla = makeDeps();
+  falla.sendMail = () => { throw new Error("cuota"); };
+  assert.equal(solicita(falla).avisados, 0);
+  const sinCorreo = makeDeps();
+  delete sinCorreo.sendMail;
+  assert.equal(solicita(sinCorreo).avisados, 0);
+  const sinDestinatario = trasLaVentana({ mandatoDe: "mudo" }); // el Responsable no tiene email
+  assert.equal(solicita(sinDestinatario).avisados, 0);
+  assert.equal(sinDestinatario.correos.length, 0);
+});
+
+test("V-55: una solicitud reutilizada no afirma nada del correo (se mandó, o no, en otra petición)", () => {
+  const deps = makeDeps();
+  assert.equal(solicita(deps).avisados, 2);
+  assert.equal("avisados" in solicita(deps), false);
+  assert.equal(deps.correos.length, 1);
+});

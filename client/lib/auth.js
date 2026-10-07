@@ -176,7 +176,7 @@ export async function pedirAcceso({
 }) {
   const sol = await iniciar();
   if (!sol.ok) { onError(sol.error); return "ERROR"; }
-  onEstado({ estado: "PENDIENTE", expiraEn: sol.expiraEn });
+  onEstado({ estado: "PENDIENTE", expiraEn: sol.expiraEn, avisados: sol.avisados });
   while (!cancelado()) {
     await esperar(intervaloMs);
     if (cancelado()) break;

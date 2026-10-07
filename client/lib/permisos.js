@@ -72,3 +72,27 @@ export function puedeValidarCuadrante({ email, puedeMoverCiclo, hoy = todayISO()
   if (hoy > FECHA_LIMITE_ACCESO_DESARROLLADOR) return Boolean(puedeMoverCiclo);
   return esAccesoDesarrollador(email, hoy);
 }
+
+/**
+ * Quién decide las solicitudes de acceso (V-53/V-54), dicho para la pantalla de quien las pide,
+ * que aún no tiene sesión y no puede saber si hay mandato: dentro de la ventana de V-52, los
+ * administradores; pasada la fecha, el permiso del ciclo (V-16). Espejo de `destinatariosAviso` y
+ * `requireValidarPermiso` en el servidor.
+ */
+export function quienApruebaSolicitudes(hoy = todayISO()) {
+  return hoy > FECHA_LIMITE_ACCESO_DESARROLLADOR
+    ? "el Responsable (o, si no hay Responsable, un R3 o R4)"
+    : "un administrador";
+}
+
+/**
+ * Lo que la pantalla de espera dice del correo de aviso (V-55). Solo afirma que se ha avisado si el
+ * servidor dice que el correo salió (`avisados` > 0); si dice que no pudo avisar a nadie, se lo
+ * pide al solicitante, porque quien aprueba no tiene otra forma de enterarse a tiempo; y si no lo
+ * sabe (solicitud reutilizada, o un servidor anterior a V-55 que no lo devuelve), no afirma nada.
+ */
+export function textoAvisoSolicitud(avisados) {
+  if (typeof avisados !== "number") return "";
+  if (avisados > 0) return "Se ha enviado un aviso por correo.";
+  return "No se ha podido avisar a nadie por correo: avisa tú directamente a quien tenga que aprobarla, antes de que caduque.";
+}

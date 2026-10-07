@@ -2054,39 +2054,67 @@ function handleSolicitarInvitado(req, deps) {
  */
 function crearSolicitud(deps, email, tipo, datos) {
   let sol = allSolicitudes(deps).find((r) => r.email === email && (r.tipo || "INVITADO") === tipo && r.estado === "PENDIENTE" && deps.now - r.solicitadoEn <= SOLICITUD_TTL);
+  // `avisados` solo viaja cuando se SABE (V-55): en una solicitud reutilizada el correo se mandó
+  // —o falló— en otra petición y no queda constancia, así que no se afirma ni lo uno ni lo otro.
+  let avisados;
   if (!sol) {
     const id = deps.store.appendRecord("solicitudesInvitado", { email, solicitadoEn: deps.now, estado: "PENDIENTE", tipo, ...datos });
     sol = { id, email, solicitadoEn: deps.now };
-    avisarAdministradores(deps, email, tipo, datos);
+    avisados = avisarAprobadores(deps, email, tipo, datos);
   }
   // El token de la solicitud solo sirve para preguntar por ELLA y canjearla: no es una sesión.
   const solicitudToken = issueSession({ solicitud: sol.id, email }, {
     now: deps.now, ttlSeconds: Math.max(1, sol.solicitadoEn + SOLICITUD_TTL - deps.now), secret: deps.sessionSecret, crypto: deps.crypto,
   });
-  return { ok: true, solicitudToken, expiraEn: sol.solicitadoEn + SOLICITUD_TTL };
+  return avisados === undefined
+    ? { ok: true, solicitudToken, expiraEn: sol.solicitadoEn + SOLICITUD_TTL }
+    : { ok: true, solicitudToken, expiraEn: sol.solicitadoEn + SOLICITUD_TTL, avisados };
 }
 
 /**
- * El correo es solo el AVISO: la aprobación se hace dentro de la app, donde el administrador ya
+ * A quién se avisa de una solicitud (V-55): a quien hoy puede APROBARLA, sacado del mismo
+ * `requireValidarPermiso` que la deja aprobar, para que «a quién avisar» y «quién puede decidir»
+ * no se separen nunca. Dentro de la ventana de V-52 son los administradores; pasada
+ * `FECHA_LIMITE_ACCESO_DESARROLLADOR`, el Responsable en mandato o, sin mandato, los Mayores
+ * (V-16). Antes de V-55, pasada la fecha no se avisaba a nadie y la pantalla del solicitante
+ * seguía diciendo que sí: con 5 minutos para aprobar, un R1 nuevo solo entraba si el Responsable
+ * tenía Inicio abierto por casualidad.
+ */
+function destinatariosAviso(deps) {
+  if (deps.today <= FECHA_LIMITE_ACCESO_DESARROLLADOR) return EMAILS_ACCESO_DESARROLLADOR;
+  const emails = allResidentes(deps)
+    .filter((r) => r.email && !requireValidarPermiso(deps, { sub: r.id }, "gestionar las solicitudes de acceso"))
+    .map((r) => r.email);
+  return [...new Set(emails)];
+}
+
+/**
+ * El correo es solo el AVISO: la aprobación se hace dentro de la app, donde quien aprueba ya
  * está autenticado. Un enlace de aprobación en un correo se puede reenviar o abrir sin querer, y
  * obligaría a una entrada GET que hoy el Web App no tiene. Si el envío falla, la solicitud sigue
- * visible en Inicio del administrador: un correo caído no puede dejar a nadie sin poder aprobar.
- * Pasada la ventana de administradores no se avisa a nadie por correo (decide el ciclo normal).
+ * visible en Inicio de quien puede aprobarla: un correo caído no puede dejar a nadie sin poder
+ * aprobar. Devuelve a cuántas personas se avisó (0 si no se pudo), y con eso la pantalla del
+ * solicitante solo dice que ha llegado un correo cuando de verdad se ha enviado (V-55).
  */
-function avisarAdministradores(deps, email, tipo, datos) {
-  if (typeof deps.sendMail !== "function" || deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return;
+function avisarAprobadores(deps, email, tipo, datos) {
+  if (typeof deps.sendMail !== "function") return 0;
+  const para = destinatariosAviso(deps);
+  if (para.length === 0) return 0;
   const que = tipo === "ALTA"
     ? `${email} ha pedido darse de alta como residente (${datos.nombre}, del ${datos.fechaInicio} al ${datos.fechaFin}).`
     : `${email} ha pedido entrar como invitado (solo lectura).`;
   try {
     deps.sendMail(
-      EMAILS_ACCESO_DESARROLLADOR,
+      para,
       tipo === "ALTA" ? "Guardias · solicitud de alta de residente" : "Guardias · solicitud de acceso como invitado",
       `${que}\n\n` +
       "Para aprobarla o rechazarla, entra en la app → Inicio → «Solicitudes de acceso».\n" +
       "La solicitud caduca a los 5 minutos; si no la apruebas, tendrá que volver a pedirla.",
     );
-  } catch (e) { /* el aviso es una comodidad: la solicitud ya está en la tabla y en Inicio */ }
+    return para.length;
+  } catch (e) {
+    return 0; // el aviso es una comodidad: la solicitud ya está en la tabla y en Inicio
+  }
 }
 
 function handleResolverSolicitud(req, deps, session) {
