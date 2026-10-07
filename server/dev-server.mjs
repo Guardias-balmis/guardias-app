@@ -37,11 +37,12 @@ import * as Responsible from "../v2/domain/responsible.js";
 import * as CuadranteEstados from "../v2/domain/cuadrante.js";
 import * as Projection from "../v2/domain/projection.js";
 import * as Schedule from "../v2/domain/schedule.js";
+import * as Holidays from "../v2/domain/holidays.js";
 // OJO: esta lista se mantiene A MANO y `Code.gs` no —allí `deps.domain` es el `Domain` entero
 // del bundle—, así que un módulo nuevo del dominio funciona en producción y revienta AQUÍ. Ya
 // pasó con buildMonthSheetRows/buildResumenRows (Fase 7.2) y con `absences`. Si añades un
 // módulo a build/build-gas.mjs:DOMAIN_MODULES, añádelo también aquí.
-const DOMAIN = Object.assign({}, Calendar, Apply, Residents, Tally, Absences, BlockPreview, Imaginaria, Accumulate, Thirdpost, Equity, Validate, Responsible, CuadranteEstados, Projection, Schedule);
+const DOMAIN = Object.assign({}, Calendar, Apply, Residents, Tally, Absences, BlockPreview, Imaginaria, Accumulate, Thirdpost, Equity, Validate, Responsible, CuadranteEstados, Projection, Schedule, Holidays);
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = Number(process.argv[2] || 8787);

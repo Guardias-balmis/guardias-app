@@ -512,6 +512,15 @@ export function handleRequest(rawBody, deps) {
       // Anular una fecha mal cargada: reinserción con activo=false, jamás borrado (append-only).
       case "anularFestivo":
         return authed(req, deps, () => {
+          // Un festivo AUTOMÁTICO no tiene fila: anularlo es escribir la fila anulada de su fecha, que
+          // es lo que `festivosEfectivos` entiende como «este año esta no es fiesta».
+          if (typeof req.id === "string" && req.id.startsWith("auto:")) {
+            const fecha = req.id.slice(5);
+            const auto = festivosEfectivos(deps, Number(fecha.slice(0, 4)) || 0, Number(fecha.slice(0, 4)) || 0).find((f) => f.id === req.id);
+            if (!auto) return { ok: true }; // ya anulado, o no es un festivo automático de ese año
+            deps.store.appendRecord("festivos", { fecha: auto.fecha, nombre: auto.nombre, ambito: auto.ambito, activo: false });
+            return { ok: true };
+          }
           const actual = allFestivos(deps).find((f) => f.id === req.id);
           if (!actual) return { ok: false, error: "festivo no encontrado" };
           // Ya anulado: no se apila otra fila igual (append-only, y un doble clic las duplicaba).
@@ -1099,9 +1108,43 @@ function allFestivos(deps) {
   return deps.store.readLatest("festivos", (r) => r.id);
 }
 
-/** Festivos ACTIVOS dentro de [desde,hasta]. */
+/**
+ * Los festivos que VALEN, de los años `desdeAnio`..`hastaAnio` (decisión V-61): la base de la
+ * Comunitat Valenciana calculada (`holidays.js`) más lo que haya en la tabla.
+ *   - Una fila ACTIVA de la tabla manda sobre la base de esa fecha (y la sustituye, con su nombre).
+ *   - Una fila ANULADA quita la base de esa fecha: es como se descarta un festivo automático que
+ *     el decreto del año no incluye. Una fecha anulada que vuelve a cargarse a mano queda activa.
+ *   - Las filas de la tabla de cualquier año se devuelven siempre, también fuera de la ventana.
+ * Los automáticos llevan `id: "auto:<fecha>"` y `origen: "AUTO"`; `anularFestivo` sabe anularlos.
+ * Si el `domain.gs` desplegado es anterior a V-61 y no trae `valencianHolidays`, se devuelve solo
+ * la tabla, como antes: pegar `server-lib.gs` sin `domain.gs` no puede tumbar el cuadrante.
+ */
+function festivosEfectivos(deps, desdeAnio, hastaAnio) {
+  const filas = allFestivos(deps);
+  const activos = filas.filter((f) => f.activo === true);
+  if (typeof deps.domain.valencianHolidays !== "function") return activos;
+  const fechasActivas = new Set(activos.map((f) => f.fecha));
+  const anuladas = new Set(filas.filter((f) => f.activo !== true).map((f) => f.fecha));
+  const auto = [];
+  for (let anio = desdeAnio; anio <= hastaAnio; anio++) {
+    for (const h of deps.domain.valencianHolidays(anio)) {
+      if (fechasActivas.has(h.fecha) || anuladas.has(h.fecha)) continue;
+      auto.push({ id: `auto:${h.fecha}`, fecha: h.fecha, nombre: h.nombre, ambito: h.ambito, activo: true, origen: "AUTO" });
+    }
+  }
+  return [...activos, ...auto];
+}
+
+/** Años que cubre la lectura SIN rango (el snapshot de validar/generar): tres a cada lado de hoy. */
+function ventanaFestivos(deps) {
+  const hoy = Number(String(deps.today || "").slice(0, 4)) || new Date().getUTCFullYear();
+  return [hoy - 3, hoy + 3];
+}
+
+/** Festivos vigentes dentro de [desde,hasta] (tabla + base automática). */
 function festivosInRange(deps, desde, hasta) {
-  return allFestivos(deps).filter((f) => f.activo === true && f.fecha >= desde && f.fecha <= hasta);
+  return festivosEfectivos(deps, Number(desde.slice(0, 4)), Number(hasta.slice(0, 4)))
+    .filter((f) => f.fecha >= desde && f.fecha <= hasta);
 }
 
 /** Eventos del servicio vigentes (última reinserción gana; el sorteo reinserta la fila). */
@@ -1311,7 +1354,7 @@ function monthSnapshot(deps) {
     asignaciones: deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }),
     bloqueos: usables,
     bloqueosCorruptos: corruptas,
-    festivos: allFestivos(deps).filter((f) => f.activo === true),
+    festivos: festivosEfectivos(deps, ...ventanaFestivos(deps)),
     eventos: activeEventos(deps),
     excepciones: activeExcepciones(deps),
   };
