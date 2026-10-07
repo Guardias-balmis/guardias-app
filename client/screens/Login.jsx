@@ -20,6 +20,7 @@ import { GOOGLE_CLIENT_ID } from "./client/config.js";
 import { addDays, addYears } from "./v2/domain/calendar.js";
 import { rangoValido } from "./client/lib/fechas.js";
 import { todayISO } from "./client/lib/dates.js";
+import { quienApruebaSolicitudes, textoAvisoSolicitud } from "./client/lib/permisos.js";
 
 const { useState, useEffect, useRef } = React;
 const { Card, Btn, Aviso } = window.UI;
@@ -183,9 +184,10 @@ function LoginScreen() {
 
 /**
  * Alta de cuenta (DoD-1) o acceso como invitado. Desde V-54 ninguna de las dos es inmediata: se
- * SOLICITAN y un administrador las aprueba en los 5 minutos siguientes (le llega un correo). La
- * pantalla espera y entra sola cuando se aprueba. El alta pide nombre y fechas (la de fin se
- * sugiere a inicio+4a); el invitado, nada.
+ * SOLICITAN y quien puede aprobarlas (un administrador o, pasada la ventana de V-52, el permiso del
+ * ciclo) tiene 5 minutos. La pantalla espera y entra sola cuando se aprueba. Del correo de aviso
+ * solo dice lo que el servidor confirma (V-57). El alta pide nombre y fechas (la de fin se sugiere
+ * a inicio+4a); el invitado, nada.
  */
 function AltaForm({ pendingToken, onCancel, onSuccess }) {
   const app = window.useApp();
@@ -193,10 +195,16 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
   const [fechaInicio, setFechaInicio] = useState(todayISO());
   const [fechaFin, setFechaFin] = useState(addDays(addYears(todayISO(), 4), -1));
   const [error, setError] = useState(null);
-  // null | {tipo: "ALTA"|"INVITADO", estado: "PENDIENTE"|"RECHAZADA"|"CADUCADA"}
+  // null | {tipo: "ALTA"|"INVITADO", estado: "PENDIENTE"|"RECHAZADA"|"CADUCADA", avisados?: number}
   const [espera, setEspera] = useState(null);
+  const aprobador = quienApruebaSolicitudes();
+  const Aprobador = aprobador.charAt(0).toUpperCase() + aprobador.slice(1);
   const cancelarRef = useRef(false);
   useEffect(() => () => { cancelarRef.current = true; }, []);
+  // Cada `pedir` es una petición con su propio número: cancelar o volver a pedir deja obsoletas las
+  // anteriores. Con una sola marca compartida, cancelar y volver a pedir enseguida resucitaba el
+  // bucle de la solicitud abandonada (y podía entrar con ella, o pegarle a esta su `avisados`).
+  const peticionRef = useRef(0);
 
   // `rangoValido` y no `compareISO` a pelo: mientras se teclea el año, el input emite "0002-09-04"
   // y `parseISO` lanzaría EN EL RENDER, desmontando la app entera (ver client/lib/fechas.js).
@@ -210,7 +218,11 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
 
   const pedir = async (tipo) => {
     if (tipo === "ALTA" && (!nombre.trim() || !fechasValidas)) { setError("Rellena el nombre y unas fechas válidas"); return; }
-    cancelarRef.current = false;
+    const yo = ++peticionRef.current;
+    const vigente = () => !cancelarRef.current && peticionRef.current === yo;
+    // `avisados` solo llega en la primera respuesta (la de solicitar); los sondeos no lo traen, así
+    // que se guarda aquí, en ESTA petición, y no se hereda del estado anterior (que puede ser de otra).
+    let avisados;
     setError(null);
     setEspera({ tipo, estado: "PENDIENTE" });
     const fin = await pedirAcceso({
@@ -218,14 +230,18 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
       iniciar: () => (tipo === "ALTA"
         ? app.api.solicitarAlta(pendingToken, { nombre: nombre.trim(), fechaInicio, fechaFin })
         : app.api.solicitarInvitado(pendingToken)),
-      onSuccess,
-      onError: (e) => { setEspera(null); setError(e); },
-      onEstado: (e) => setEspera({ tipo, estado: e.estado }),
-      cancelado: () => cancelarRef.current,
+      onSuccess: (r) => { if (vigente()) onSuccess(r); },
+      onError: (e) => { if (!vigente()) return; setEspera(null); setError(e); },
+      onEstado: (e) => {
+        if (!vigente()) return;
+        if (e.avisados !== undefined) avisados = e.avisados;
+        setEspera({ tipo, estado: e.estado, avisados });
+      },
+      cancelado: () => !vigente(),
     });
-    if (fin === "CANCELADA") setEspera(null);
+    if (fin === "CANCELADA" && vigente()) setEspera(null);
   };
-  const cancelarEspera = () => { cancelarRef.current = true; setEspera(null); };
+  const cancelarEspera = () => { peticionRef.current++; setEspera(null); };
   const esperando = espera && espera.estado === "PENDIENTE";
 
   return (
@@ -233,9 +249,9 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
       {esperando && (
         <Card title="⏳ Esperando la aprobación">
           <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 12, lineHeight: 1.5 }}>
-            {espera.tipo === "ALTA"
-              ? "Tu solicitud de alta está enviada. Un administrador la tiene que aprobar (le ha llegado un aviso por correo) y dispone de 5 minutos."
-              : "Tu solicitud de acceso como invitado está enviada. Un administrador la tiene que aprobar (le ha llegado un aviso por correo) y dispone de 5 minutos."}
+            {espera.tipo === "ALTA" ? "Tu solicitud de alta está enviada." : "Tu solicitud de acceso como invitado está enviada."}
+            {" "}{Aprobador} la tiene que aprobar y dispone de 5 minutos.
+            {textoAvisoSolicitud(espera.avisados) && ` ${textoAvisoSolicitud(espera.avisados)}`}
             {" "}Esta pantalla entrará sola cuando la aprueben; no la cierres.
           </div>
           <Btn onClick={cancelarEspera} color={COLOR.grayMid} textColor={COLOR.grayDark}>Cancelar solicitud</Btn>
@@ -243,7 +259,7 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
       )}
       {espera && !esperando && (
         <Aviso color={COLOR.red} bg={COLOR.redLight}>
-          {espera.estado === "RECHAZADA" ? "Un administrador ha rechazado la solicitud." : "La solicitud ha caducado (pasaron 5 minutos sin aprobarse). Puedes volver a pedirla."}
+          {espera.estado === "RECHAZADA" ? "Han rechazado la solicitud." : "La solicitud ha caducado (pasaron 5 minutos sin aprobarse). Puedes volver a pedirla."}
         </Aviso>
       )}
 
@@ -252,8 +268,8 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
           <Card title="👀 ¿Solo quieres consultar?">
             <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 12, lineHeight: 1.5 }}>
               Si eres tutor/a o no eres residente, puedes entrar como invitado: ves el cuadrante y
-              el equipo, sin editar nada y sin darte de alta. Un administrador tiene que aprobarlo
-              (le llega un aviso por correo) y dispone de 5 minutos para hacerlo.
+              el equipo, sin editar nada y sin darte de alta. {Aprobador} tiene que aprobarlo y
+              dispone de 5 minutos para hacerlo.
             </div>
             <Btn onClick={() => pedir("INVITADO")} color={COLOR.bluePale} textColor={COLOR.blueDark}>Solicitar acceso como invitado</Btn>
           </Card>
@@ -262,7 +278,7 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
           <Card>
             <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 12, lineHeight: 1.5 }}>
               Tu cuenta de Google está verificada pero no hay ningún residente vinculado a este
-              email todavía. Rellena tus datos y solicita el alta: un administrador la aprobará
+              email todavía. Rellena tus datos y solicita el alta: {aprobador} la aprobará
               (tienes que esperar su aprobación) y tu nivel (R1–R4) se calculará solo a partir de
               las fechas, nadie tiene que asignártelo.
             </div>

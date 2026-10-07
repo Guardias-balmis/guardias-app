@@ -77,3 +77,28 @@ test("lecturas memoizadas por store: una hoja se lee una vez, y una escritura pr
   s.appendRecord("residentes", { nombre: "Bea", email: "bea@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" });
   assert.equal(s.readRecords("residentes").length, 2, "la escritura propia no deja ver datos viejos");
 });
+
+test("la memoria de lecturas se vacía al coger el lock: dentro de una transacción se ve lo que escribió OTRA ejecución (2026-10-07)", () => {
+  // Dos peticiones de Apps Script = dos stores sobre la misma hoja, cada uno con su memoria.
+  const ss = fakeSS();
+  const a = store(ss);
+  const b = store(ss);
+  a.appendRecord("residentes", { nombre: "Ana", email: "ana@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" });
+  assert.equal(a.readRecords("residentes").length, 1); // A memoriza la hoja
+  b.appendRecord("residentes", { nombre: "Bea", email: "bea@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" });
+  assert.equal(a.readRecords("residentes").length, 1, "fuera del lock, A sigue con lo que leyó (como cualquier lectura suelta)");
+  const dentro = a.transaction(() => a.readRecords("residentes").length);
+  assert.equal(dentro, 2, "bajo el lock, A decide con lo que hay AHORA, no con su copia de antes");
+});
+
+test("dentro de una misma transacción la memoria sigue valiendo: una hoja se lee una vez", () => {
+  const ss = fakeSS();
+  let lecturas = 0;
+  const leer = ss.read;
+  ss.read = (nombre) => { lecturas++; return leer(nombre); };
+  const s = store(ss);
+  s.readRecords("residentes");
+  lecturas = 0;
+  s.transaction(() => { s.readRecords("residentes"); s.readLatest("residentes", (r) => r.id); });
+  assert.equal(lecturas, 1, "una relectura al entrar en el lock, y ninguna más dentro");
+});

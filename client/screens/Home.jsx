@@ -25,7 +25,7 @@ function nivelDe(residente) {
  * Solicitudes de acceso como invitado (V-53). Solo la ven quienes pueden decidirlas (los
  * administradores durante la ventana de V-52; el permiso del ciclo después) y solo cuando hay
  * alguna pendiente. Cada solicitud caduca a los 5 minutos: se consulta cada 20 s mientras Inicio
- * está abierto, y el correo que recibe el administrador es solo el aviso para venir aquí.
+ * está abierto, y el correo que recibe quien puede aprobarla (V-57) es solo el aviso para venir aquí.
  */
 function SolicitudesAcceso({ api, showToast }) {
   const [lista, setLista] = useState([]);

@@ -128,6 +128,39 @@ test("generarCuadranteIA no escribe si el mes cambió mientras el modelo pensaba
   assert.equal(deps.store.readRecords("generaciones")[0].resultado, "CONFLICTO");
 });
 
+// Otra ejecución de Apps Script: su propio store, con su propia memoria de lecturas, sobre la misma
+// hoja. Los tests de arriba intercalan con `deps.store`, cuya escritura invalida su propia memoria;
+// en producción el que escribe es OTRA petición, y eso es lo que destapó la revisión del 2026-10-07.
+const otraEjecucion = (deps) => ({ ...deps, store: makeStore({ ss: deps.ss, withLock: (fn) => fn(), newId: () => `id-${nodeCrypto.randomUUID()}` }) });
+
+test("generarCuadranteIA detecta el CONFLICTO aunque la escritura venga de OTRA ejecución (la memoria de antes del lock no cuenta)", () => {
+  const deps = makeDeps();
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const propuesta = JSON.stringify({ asignaciones: [{ fecha: "2027-07-01", residenteId: "resp-1", codigo: "G" }] });
+  deps.llm = { modelo: "fake", generar: () => {
+    otraEjecucion(deps).store.appendRecord("asignaciones", { fecha: "2027-07-20", residenteId: "otro-1", codigo: "G" });
+    return { ok: true, texto: propuesta };
+  } };
+  const r = call({ action: "generarCuadranteIA", session, mes: 7, anio: 2027 }, deps);
+  assert.equal(r.resultado, "CONFLICTO");
+  const filas = otraEjecucion(deps).store.readLatest("asignaciones", (a) => `${a.fecha}|${a.residenteId}`, { emptyField: "codigo" });
+  assert.deepEqual(filas.map((a) => a.fecha), ["2027-07-20"], "la propuesta no se escribió encima de lo que guardó el otro");
+});
+
+test("dos sorteos del Responsable desde dos ejecuciones dejan UN mandato: el segundo ve el del primero bajo el lock", () => {
+  const deps = makeDeps();
+  // Una R3 a 1 de enero de 2028 para que haya a quién sortear (RESP ya será R4).
+  deps.store.appendRecord("residentes", { nombre: "Tere Tres", email: "r3@gmail.com", fechaInicio: "2025-05-27", fechaFin: "2029-05-26" });
+  const resp = loggedInAs(deps, "resp@gmail.com"); // Mayor sin mandato vigente: puede sortear (V-16)
+  let colado = null;
+  deps.locks.gancho = () => { colado = call({ action: "ejecutarSorteoResponsable", session: resp, anio: 2028 }, otraEjecucion(deps)); };
+  const r = call({ action: "ejecutarSorteoResponsable", session: resp, anio: 2028 }, deps);
+  assert.equal(colado.ok, true, "el que se coló decide el mandato");
+  assert.equal(r.ok, false);
+  assert.match(r.error, /ya está decidido/);
+  assert.equal(otraEjecucion(deps).store.readRecords("responsables").length, 1, "un solo mandato");
+});
+
 test("generarCuadranteIA sí escribe cuando nadie tocó el mes entre la lectura y la escritura", () => {
   const deps = makeDeps();
   const session = loggedInAs(deps, "resp@gmail.com");

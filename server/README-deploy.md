@@ -19,7 +19,7 @@ mano, cada vez que algo llega de verdad a producción.
 
 `Code.gs` cambió el 2026-10-06 (añade `sendMail` con `MailApp`, V-53); antes seguía en la versión del 2026-09-05 (V-47).
 
-`domain.gs`, `server-lib.gs` y `Code.gs` están al día: no queda ningún cambio de backend pendiente de desplegar.
+**Pendiente de desplegar (PR #57, 2026-10-07):** `server-lib.gs` **y `Code.gs`** (`domain.gs` no cambia; sin permisos nuevos). Entran V-57 (el aviso de una solicitud de acceso va a quien puede aprobarla y devuelve `avisados`), la memoria de lecturas que se vacía al coger el lock, `SpreadsheetApp.flush()` antes de soltarlo (en `Code.gs`), y que el invitado deje de recibir las marcas V/R/B y los huecos de los periodos editados. El orden da igual: el cliente nuevo contra el servidor de la versión 17 solo deja de afirmar nada sobre el correo. Para comprobarlo: pedir acceso como invitado y ver que la pantalla dice «Se ha enviado un aviso por correo»; y, con una sesión de invitado, que el cuadrante no enseña ninguna V/R/B.
 Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
 `/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el
 cliente está hablando con un backend que ya no es este (DR-4).

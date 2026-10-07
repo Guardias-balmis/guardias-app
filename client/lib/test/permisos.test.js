@@ -105,3 +105,22 @@ test("puedeValidarCuadrante: en la ventana solo los administradores; pasada, el 
   assert.equal(puedeValidarCuadrante({ email: "resp@gmail.com", puedeMoverCiclo: true, hoy: "2027-04-01" }), true, "caducada: vuelve V-16");
   assert.equal(puedeValidarCuadrante({ email: "otro@gmail.com", puedeMoverCiclo: false, hoy: "2027-04-01" }), false);
 });
+
+test("quienApruebaSolicitudes: los administradores en la ventana; el ciclo normal después (V-57)", async () => {
+  const { quienApruebaSolicitudes } = await import("../permisos.js");
+  assert.equal(quienApruebaSolicitudes("2027-03-31"), "un administrador");
+  assert.match(quienApruebaSolicitudes("2027-04-01"), /^el Responsable .*R3 o R4/);
+});
+
+test("textoAvisoSolicitud: solo dice que hay correo si el servidor confirma que salió (V-57)", async () => {
+  const { textoAvisoSolicitud } = await import("../permisos.js");
+  assert.match(textoAvisoSolicitud(2), /aviso por correo/);
+  assert.match(textoAvisoSolicitud(1), /aviso por correo/);
+  assert.match(textoAvisoSolicitud(0), /No se ha podido avisar.*avisa tú/);
+  assert.equal(textoAvisoSolicitud(undefined), "", "sin el dato (reutilizada o servidor viejo) no afirma nada");
+});
+
+test("esAccesoDesarrollador compara el email normalizado, como el servidor y el login (V-57)", () => {
+  assert.equal(esAccesoDesarrollador("  Quiquemm14@gmail.com ", "2026-10-07"), true);
+  assert.equal(esAccesoDesarrollador(undefined, "2026-10-07"), false);
+});

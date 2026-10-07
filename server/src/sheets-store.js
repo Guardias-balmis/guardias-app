@@ -20,6 +20,23 @@ import { TABLES, headerOf, recordToRow, rowsToRecords } from "./sheets-schema.js
 const TMP_PREFIX = "_tmp_";
 
 export function makeStore({ ss, withLock: withLockCrudo, newId }) {
+  // Memoización de `ss.read` por hoja, válida mientras viva ESTE store (2026-10-06). En Apps Script
+  // el store se construye por petición (`sheetsStore_()` desde `deps_()`), así que la memoria no se
+  // comparte entre ejecuciones; evita que una misma petición relea la hoja entera varias veces
+  // (`marcarValidado` leía `periodos`, `residentes` y `voluntarios3P` dos veces cada una — 12
+  // lecturas de hoja completa por validar, y cada `getValues` es un viaje a Sheets). Cada escritura
+  // de este store invalida la hoja que toca; se cachean las FILAS crudas, no los registros, porque
+  // los llamadores ordenan y mutan los registros que reciben.
+  //
+  // Y se VACÍA entera al coger el lock real (2026-10-07). Lo leído antes del lock puede ser de antes
+  // de que OTRA ejecución escribiera —la que tenía el lock mientras esta esperaba, o la que escribió
+  // mientras el generador esperaba al modelo—, y todo comprobar-y-escribir (`transaction`) existe
+  // precisamente para decidir con lo que hay AHORA. Sin esto, `generarCuadranteIA` releía bajo el
+  // lock su propia copia de antes, la huella siempre coincidía y escribía encima de una edición ajena
+  // (o en un mes que otro acababa de publicar), y dos sorteos del Responsable volvían a poder dejar
+  // dos mandatos. Dentro del lock la memoria sigue valiendo: nadie más escribe hasta soltarlo.
+  const lecturas = new Map();
+
   // El lock, REENTRANTE por ejecución (2026-09-04): `transaction(fn)` lo coge para que una
   // comprobación y su escritura sean atómicas, y las escrituras de dentro de `fn` vuelven a pedirlo.
   // Con el `LockService` de Apps Script un `waitLock` anidado sobre el mismo lock esperaría a sí
@@ -33,18 +50,11 @@ export function makeStore({ ss, withLock: withLockCrudo, newId }) {
     if (dentro) return fn();
     return withLockCrudo(() => {
       dentro = true;
+      lecturas.clear();
       try { return fn(); } finally { dentro = false; }
     });
   };
 
-  // Memoización de `ss.read` por hoja, válida mientras viva ESTE store (2026-10-06). En Apps Script
-  // el store se construye por petición (`sheetsStore_()` desde `deps_()`), así que nunca sirve un
-  // dato de otra ejecución: solo evita que una misma petición relea la hoja entera varias veces
-  // (`marcarValidado` leía `periodos`, `residentes` y `voluntarios3P` dos veces cada una — 12
-  // lecturas de hoja completa por validar, y cada `getValues` es un viaje a Sheets). Cada escritura
-  // de este store invalida la hoja que toca; se cachean las FILAS crudas, no los registros, porque
-  // los llamadores ordenan y mutan los registros que reciben.
-  const lecturas = new Map();
   function leer(nombre) {
     if (!lecturas.has(nombre)) lecturas.set(nombre, ss.read(nombre));
     return lecturas.get(nombre);

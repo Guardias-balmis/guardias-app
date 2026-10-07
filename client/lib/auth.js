@@ -191,12 +191,15 @@ export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage 
 }
 
 /**
- * Pide acceso (V-53 invitado, V-54 alta de residente) y espera a que un administrador lo apruebe
- * (5 min). `iniciar()` lanza la solicitud (`api.solicitarInvitado(pendingToken)` o
- * `api.solicitarAlta(pendingToken, datos)`) y devuelve `{ok, solicitudToken, expiraEn}`. Consulta
- * cada `intervaloMs`; al aprobarse guarda la sesión igual que un login (en un alta, la del
- * residente recién creado). `cancelado()` corta la espera (el usuario pulsó Cancelar o desmontó la
- * pantalla). `onEstado` recibe cada consulta, para pintar la espera con el `expiraEn` del servidor.
+ * Pide acceso (V-53 invitado, V-54 alta de residente) y espera a que lo apruebe quien puede (un
+ * administrador o, pasada la ventana de V-52, el permiso del ciclo; 5 min). `iniciar()` lanza la
+ * solicitud (`api.solicitarInvitado(pendingToken)` o `api.solicitarAlta(pendingToken, datos)`) y
+ * devuelve `{ok, solicitudToken, expiraEn, avisados?}`. Consulta cada `intervaloMs`; al aprobarse
+ * guarda la sesión igual que un login (en un alta, la del residente recién creado). `cancelado()`
+ * corta la espera (el usuario pulsó Cancelar, pidió otra cosa o desmontó la pantalla), y se mira
+ * también DESPUÉS de cada respuesta: una consulta que vuelve tras cancelar no puede guardar la
+ * sesión de una solicitud que el usuario ya abandonó. `onEstado` recibe cada consulta, para pintar
+ * la espera con el `expiraEn` del servidor; la primera lleva además `avisados` (V-57).
  *
  * Devuelve el estado final: "APROBADA" | "RECHAZADA" | "CADUCADA" | "CANCELADA" | "ERROR".
  */
@@ -205,12 +208,14 @@ export async function pedirAcceso({
   intervaloMs = 4000, esperar = (ms) => new Promise((r) => setTimeout(r, ms)), cancelado = () => false,
 }) {
   const sol = await iniciar();
+  if (cancelado()) return "CANCELADA";
   if (!sol.ok) { onError(sol.error); return "ERROR"; }
-  onEstado({ estado: "PENDIENTE", expiraEn: sol.expiraEn });
+  onEstado({ estado: "PENDIENTE", expiraEn: sol.expiraEn, avisados: sol.avisados });
   while (!cancelado()) {
     await esperar(intervaloMs);
     if (cancelado()) break;
     const r = await api.estadoSolicitudInvitado(sol.solicitudToken);
+    if (cancelado()) break;
     // Un fallo de red puntual no tira la solicitud: se sigue preguntando hasta que caduque.
     if (!r.ok) continue;
     if (r.estado === "APROBADA") { storeSession(r, storage); onSuccess(r); return "APROBADA"; }

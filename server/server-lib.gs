@@ -220,6 +220,23 @@ var SheetsStore = (function () {
 const TMP_PREFIX = "_tmp_";
 
 function makeStore({ ss, withLock: withLockCrudo, newId }) {
+  // Memoización de `ss.read` por hoja, válida mientras viva ESTE store (2026-10-06). En Apps Script
+  // el store se construye por petición (`sheetsStore_()` desde `deps_()`), así que la memoria no se
+  // comparte entre ejecuciones; evita que una misma petición relea la hoja entera varias veces
+  // (`marcarValidado` leía `periodos`, `residentes` y `voluntarios3P` dos veces cada una — 12
+  // lecturas de hoja completa por validar, y cada `getValues` es un viaje a Sheets). Cada escritura
+  // de este store invalida la hoja que toca; se cachean las FILAS crudas, no los registros, porque
+  // los llamadores ordenan y mutan los registros que reciben.
+  //
+  // Y se VACÍA entera al coger el lock real (2026-10-07). Lo leído antes del lock puede ser de antes
+  // de que OTRA ejecución escribiera —la que tenía el lock mientras esta esperaba, o la que escribió
+  // mientras el generador esperaba al modelo—, y todo comprobar-y-escribir (`transaction`) existe
+  // precisamente para decidir con lo que hay AHORA. Sin esto, `generarCuadranteIA` releía bajo el
+  // lock su propia copia de antes, la huella siempre coincidía y escribía encima de una edición ajena
+  // (o en un mes que otro acababa de publicar), y dos sorteos del Responsable volvían a poder dejar
+  // dos mandatos. Dentro del lock la memoria sigue valiendo: nadie más escribe hasta soltarlo.
+  const lecturas = new Map();
+
   // El lock, REENTRANTE por ejecución (2026-09-04): `transaction(fn)` lo coge para que una
   // comprobación y su escritura sean atómicas, y las escrituras de dentro de `fn` vuelven a pedirlo.
   // Con el `LockService` de Apps Script un `waitLock` anidado sobre el mismo lock esperaría a sí
@@ -233,18 +250,11 @@ function makeStore({ ss, withLock: withLockCrudo, newId }) {
     if (dentro) return fn();
     return withLockCrudo(() => {
       dentro = true;
+      lecturas.clear();
       try { return fn(); } finally { dentro = false; }
     });
   };
 
-  // Memoización de `ss.read` por hoja, válida mientras viva ESTE store (2026-10-06). En Apps Script
-  // el store se construye por petición (`sheetsStore_()` desde `deps_()`), así que nunca sirve un
-  // dato de otra ejecución: solo evita que una misma petición relea la hoja entera varias veces
-  // (`marcarValidado` leía `periodos`, `residentes` y `voluntarios3P` dos veces cada una — 12
-  // lecturas de hoja completa por validar, y cada `getValues` es un viaje a Sheets). Cada escritura
-  // de este store invalida la hoja que toca; se cachean las FILAS crudas, no los registros, porque
-  // los llamadores ordenan y mutan los registros que reciben.
-  const lecturas = new Map();
   function leer(nombre) {
     if (!lecturas.has(nombre)) lecturas.set(nombre, ss.read(nombre));
     return lecturas.get(nombre);
@@ -1143,7 +1153,7 @@ function handleRequest(rawBody, deps) {
         });
 
       case "listResidentes":
-        return authed(req, deps, (session) => ({ ok: true, residentes: paraSesion(allResidentes(deps), session) }));
+        return authed(req, deps, (session) => ({ ok: true, residentes: paraSesion(allResidentes(deps), session, deps) }));
 
       // Corregir las fechas de un residente. Hasta ahora `fechaInicio`/`fechaFin` solo se escribían
       // en el alta (`handleAlta`) y no había forma de tocarlas después, lo que dejaba sin salida
@@ -1224,11 +1234,11 @@ function handleRequest(rawBody, deps) {
         });
 
       case "listAsignaciones":
-        return authed(req, deps, () => {
+        return authed(req, deps, (session) => {
           if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
           const prefix = monthPrefix(req.anio, req.mes);
           const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
-          return { ok: true, asignaciones: all.filter((a) => a.fecha.startsWith(prefix)) };
+          return { ok: true, asignaciones: asignacionesParaSesion(all.filter((a) => a.fecha.startsWith(prefix)), session) };
         });
 
       // A diferencia de listAsignaciones (filtra por mes/año), esta filtra por rango de
@@ -1236,11 +1246,11 @@ function handleRequest(rawBody, deps) {
       // contrato C-2 (INV-7 necesita las asignaciones de TODO el periodo de rotación,
       // aunque empiece en un mes anterior) y para el contaje acumulado del generador (§4).
       case "listAsignacionesRango":
-        return authed(req, deps, () => {
+        return authed(req, deps, (session) => {
           const rango = validRango(req, deps);
           if (rango.ok === false) return rango;
           const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
-          return { ok: true, asignaciones: all.filter((a) => a.fecha >= req.desde && a.fecha <= req.hasta) };
+          return { ok: true, asignaciones: asignacionesParaSesion(all.filter((a) => a.fecha >= req.desde && a.fecha <= req.hasta), session) };
         });
 
       // Consciente del ciclo de estados (Fase 6.2): PUBLICADO bloquea cualquier edición del mes
@@ -2560,7 +2570,9 @@ const FECHA_LIMITE_ACCESO_DESARROLLADOR = "2027-03-31";
 function esAccesoDesarrollador(deps, session) {
   if (deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return false;
   const residente = allResidentes(deps).find((r) => r.id === session.sub);
-  return Boolean(residente) && EMAILS_ACCESO_DESARROLLADOR.includes(residente.email);
+  // Normalizado como en `handleLogin`: con el email en crudo, una mayúscula o un espacio al final en
+  // la celda dejaban entrar al administrador (el login normaliza) pero no aprobar ni validar.
+  return Boolean(residente) && EMAILS_ACCESO_DESARROLLADOR.includes(emailNormalizado(residente.email));
 }
 
 /**
@@ -3026,10 +3038,33 @@ const INVITADO_ACCIONES = new Set([
   "estadoCuadrante", "estadoResponsable", "listResponsables",
 ]);
 
-/** A un invitado se le quitan los emails de la lista de residentes; al resto se le deja igual. */
-function paraSesion(residentes, session) {
+/**
+ * A un invitado se le quitan los emails de la lista de residentes y se le tapan los huecos entre
+ * periodos formativos; al resto se le deja igual. Un hueco (S-3) es justo como tutoría registra que
+ * una baja larga retrasa la promoción (`guardarPeriodos`), así que el `end` de un periodo y el
+ * `start` del siguiente daban las fechas exactas de la ausencia. Tapado (cada `end` pasa a ser la
+ * víspera del siguiente `start`), el nivel derivado no cambia ningún día: `levelOn`/`periodOn` solo
+ * miran los `start` y el `end` del último periodo, y en un hueco ya conservaban el periodo anterior.
+ */
+function paraSesion(residentes, session, deps) {
   if (!session || session.rol !== ROL_INVITADO) return residentes;
-  return residentes.map(({ email, ...resto }) => resto);
+  return residentes.map(({ email, ...resto }) => (resto.periodos ? { ...resto, periodos: periodosSinHuecos(resto.periodos, deps) } : resto));
+}
+
+function periodosSinHuecos(periodos, deps) {
+  return periodos.map((p, i) => (i < periodos.length - 1 ? { ...p, end: deps.domain.addDays(periodos[i + 1].start, -1) } : p));
+}
+
+/**
+ * A un invitado no le llegan las marcas de ausencia de la rejilla (V/R/B, `MARCADORES_REJILLA`). Desde
+ * V-50, registrar una ausencia escribe su marca en `asignaciones`, así que con solo la lista blanca
+ * de V-53 el invitado veía en el cuadrante quién está de baja médica, de vacaciones o rotando —
+ * justo lo que V-53 promete que no ve—. Basta con quitarlas: `readLatest` ya devuelve solo la última
+ * fila de cada celda, así que ninguna guardia anterior vuelve a asomar en su lugar.
+ */
+function asignacionesParaSesion(asignaciones, session) {
+  if (!session || session.rol !== ROL_INVITADO) return asignaciones;
+  return asignaciones.filter((a) => !MARCADORES_REJILLA.has(a.codigo));
 }
 
 const SOLICITUD_TTL = 300; // 5 min: lo que dura la solicitud para ser aprobada y canjeada
@@ -3059,43 +3094,80 @@ function handleSolicitarInvitado(req, deps) {
 
 /**
  * Alta de una solicitud (INVITADO o ALTA). Una pendiente del mismo email y tipo se reutiliza, para
- * que pulsar el botón varias veces no inunde de correos a los administradores.
+ * que pulsar el botón varias veces no inunde de correos a quien puede aprobarla.
  */
 function crearSolicitud(deps, email, tipo, datos) {
   let sol = allSolicitudes(deps).find((r) => r.email === email && (r.tipo || "INVITADO") === tipo && r.estado === "PENDIENTE" && deps.now - r.solicitadoEn <= SOLICITUD_TTL);
+  // `avisados` solo viaja cuando se SABE (V-57): en una solicitud reutilizada el correo se mandó
+  // —o falló— en otra petición y no queda constancia, así que no se afirma ni lo uno ni lo otro.
+  let avisados;
   if (!sol) {
     const id = deps.store.appendRecord("solicitudesInvitado", { email, solicitadoEn: deps.now, estado: "PENDIENTE", tipo, ...datos });
     sol = { id, email, solicitadoEn: deps.now };
-    avisarAdministradores(deps, email, tipo, datos);
+    avisados = avisarAprobadores(deps, email, tipo, datos);
   }
   // El token de la solicitud solo sirve para preguntar por ELLA y canjearla: no es una sesión.
   const solicitudToken = issueSession({ solicitud: sol.id, email }, {
     now: deps.now, ttlSeconds: Math.max(1, sol.solicitadoEn + SOLICITUD_TTL - deps.now), secret: deps.sessionSecret, crypto: deps.crypto,
   });
-  return { ok: true, solicitudToken, expiraEn: sol.solicitadoEn + SOLICITUD_TTL };
+  return avisados === undefined
+    ? { ok: true, solicitudToken, expiraEn: sol.solicitadoEn + SOLICITUD_TTL }
+    : { ok: true, solicitudToken, expiraEn: sol.solicitadoEn + SOLICITUD_TTL, avisados };
 }
 
 /**
- * El correo es solo el AVISO: la aprobación se hace dentro de la app, donde el administrador ya
+ * A quién se avisa de una solicitud (V-57): a quien hoy puede APROBARLA, residente a residente con
+ * el mismo `requireValidarPermiso` que la deja aprobar, para que «a quién avisar» y «quién puede
+ * decidir» no se separen nunca. Dentro de la ventana de V-52 eso da los administradores que tienen
+ * fila de residente (sin ella no pueden ni entrar); pasada `FECHA_LIMITE_ACCESO_DESARROLLADOR`, el
+ * Responsable en mandato o, sin mandato, los Mayores (V-16). Antes de V-57, pasada la fecha no se
+ * avisaba a nadie y la pantalla del solicitante seguía diciendo que sí: con 5 minutos para
+ * aprobar, un R1 nuevo solo entraba si el Responsable tenía Inicio abierto por casualidad.
+ *
+ * Un residente que no se puede evaluar (fechas ilegibles: `groupOnDate` lanza) ni puede aprobar
+ * ni puede dejar sin aviso a los demás, así que se salta. Los emails van normalizados y con forma
+ * de email: `sendMail` manda UN correo a todos, y una dirección imposible lo tumbaría entero.
+ */
+function destinatariosAviso(deps) {
+  const emails = [];
+  for (const r of allResidentes(deps)) {
+    const email = emailNormalizado(r.email);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) continue;
+    try {
+      if (!requireValidarPermiso(deps, { sub: r.id }, "gestionar las solicitudes de acceso")) emails.push(email);
+    } catch (e) { /* fechas ilegibles: no puede aprobar */ }
+  }
+  return [...new Set(emails)];
+}
+
+/**
+ * El correo es solo el AVISO: la aprobación se hace dentro de la app, donde quien aprueba ya
  * está autenticado. Un enlace de aprobación en un correo se puede reenviar o abrir sin querer, y
  * obligaría a una entrada GET que hoy el Web App no tiene. Si el envío falla, la solicitud sigue
- * visible en Inicio del administrador: un correo caído no puede dejar a nadie sin poder aprobar.
- * Pasada la ventana de administradores no se avisa a nadie por correo (decide el ciclo normal).
+ * visible en Inicio de quien puede aprobarla: un correo caído no puede dejar a nadie sin poder
+ * aprobar. Devuelve a cuántas personas se avisó (0 si no se pudo), y con eso la pantalla del
+ * solicitante solo dice que ha llegado un correo cuando de verdad se ha enviado (V-57).
  */
-function avisarAdministradores(deps, email, tipo, datos) {
-  if (typeof deps.sendMail !== "function" || deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return;
+function avisarAprobadores(deps, email, tipo, datos) {
+  if (typeof deps.sendMail !== "function") return 0;
   const que = tipo === "ALTA"
     ? `${email} ha pedido darse de alta como residente (${datos.nombre}, del ${datos.fechaInicio} al ${datos.fechaFin}).`
     : `${email} ha pedido entrar como invitado (solo lectura).`;
+  // Todo dentro del try: calcular a quién avisar tampoco puede tumbar una solicitud ya escrita.
   try {
+    const para = destinatariosAviso(deps);
+    if (para.length === 0) return 0;
     deps.sendMail(
-      EMAILS_ACCESO_DESARROLLADOR,
+      para,
       tipo === "ALTA" ? "Guardias · solicitud de alta de residente" : "Guardias · solicitud de acceso como invitado",
       `${que}\n\n` +
       "Para aprobarla o rechazarla, entra en la app → Inicio → «Solicitudes de acceso».\n" +
       "La solicitud caduca a los 5 minutos; si no la apruebas, tendrá que volver a pedirla.",
     );
-  } catch (e) { /* el aviso es una comodidad: la solicitud ya está en la tabla y en Inicio */ }
+    return para.length;
+  } catch (e) {
+    return 0; // el aviso es una comodidad: la solicitud ya está en la tabla y en Inicio
+  }
 }
 
 function handleResolverSolicitud(req, deps, session) {
@@ -3143,7 +3215,7 @@ function handleEstadoSolicitudInvitado(req, deps) {
     return {
       ok: true, estado: "APROBADA", session,
       residente: { id: ROL_INVITADO, nombre: "Invitado", rol: ROL_INVITADO },
-      residentes: paraSesion(allResidentes(deps), { rol: ROL_INVITADO }),
+      residentes: paraSesion(allResidentes(deps), { rol: ROL_INVITADO }, deps),
     };
   });
 }
