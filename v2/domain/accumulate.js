@@ -7,7 +7,7 @@ import { addDays, addYears } from "./calendar.js";
 import { periodsOfResident, periodOn } from "./residents.js";
 import { tally } from "./tally.js";
 
-const ZERO = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 };
+const ZERO = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0 };
 
 /**
  * @param {{id:string, fechaInicio:string, fechaFin?:string}[]} residentes
