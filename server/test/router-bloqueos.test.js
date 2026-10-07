@@ -230,3 +230,25 @@ test("V-50: un bloqueo que cruza dos meses reparte las marcas en cada uno", () =
   assert.equal(asignacionesDe(deps, session, 2026, 8).find((a) => a.fecha === "2026-08-30").codigo, "V");
   assert.equal(asignacionesDe(deps, session, 2026, 9).find((a) => a.fecha === "2026-09-02").codigo, "V");
 });
+
+// ── V-62: CONGRESO, misma categoría que las vacaciones ───────────────────────────────────────
+
+test("V-62: un congreso se registra como bloqueo informativo y escribe la marca C en la rejilla", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  const r = call({ action: "crearBloqueo", session, desde: "2026-08-04", hasta: "2026-08-06", motivo: "CONGRESO" }, deps);
+  assert.equal(r.ok, true);
+  assert.equal(r.marcasEscritas, 3);
+  const asig = asignacionesDe(deps, session, 2026, 8).filter((a) => a.residenteId === "uuid-ana");
+  assert.deepEqual(asig.map((a) => `${a.fecha}=${a.codigo}`).sort(), ["2026-08-04=C", "2026-08-05=C", "2026-08-06=C"]);
+  const lista = call({ action: "misBloqueos", session, anio: 2026, mes: 8 }, deps).bloqueos;
+  assert.ok(lista.some((b) => b.motivo === "CONGRESO" && b.desde === "2026-08-04"));
+});
+
+test("V-62: la marca C se puede poner a mano en la rejilla, y un motivo inventado sigue rechazándose", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps);
+  assert.equal(call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2026-08-10", residenteId: "uuid-ana", codigo: "C" }] }, deps).ok, true);
+  assert.equal(asignacionesDe(deps, session, 2026, 8).find((a) => a.fecha === "2026-08-10").codigo, "C");
+  assert.equal(call({ action: "crearBloqueo", session, desde: "2026-08-01", hasta: "2026-08-02", motivo: "CONGRESOS" }, deps).ok, false);
+});

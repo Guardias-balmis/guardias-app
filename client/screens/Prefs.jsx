@@ -19,7 +19,7 @@ import { avisarAlSalir } from "./client/lib/aviso-salida.js";
 
 const { useState, useEffect, useRef } = React;
 const { Card, SectionTitle, Btn, Aviso } = window.UI;
-const MOTIVO_LABEL = { VACACIONES: "Vacaciones", ROTACION: "Rotación externa", BAJA: "Baja" };
+const MOTIVO_LABEL = { VACACIONES: "Vacaciones", ROTACION: "Rotación externa", CONGRESO: "Congreso", BAJA: "Baja" };
 // Etiquetas de los riesgos de P-13 (spec.md §8/§8.1, blockPreview.js) — el `tipo` que devuelve
 // el dominio es un identificador estable, no texto pensado para pantalla.
 const RIESGO_LABEL = {
@@ -398,9 +398,9 @@ function PrefsScreen() {
         </div>
       </Card>
 
-      <Card title="🗓️ Vacaciones, rotación y baja" accent={COLOR.orange}>
+      <Card title="🗓️ Vacaciones, rotación, congresos y baja" accent={COLOR.orange}>
         <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
-          Vacaciones y rotación son informativas: el generador evita asignarte guardia esos
+          Vacaciones, rotación y congresos son informativos: el generador evita asignarte guardia esos
           días, pero puede hacerlo si no queda alternativa — el validador no lo bloquea. La
           baja médica o el embarazo son distintos: <b>nunca</b> se te asignará guardia esos
           días, lo hace cumplir el validador.

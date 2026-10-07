@@ -28,7 +28,7 @@ export const RESPONSE_SHAPE = '{"asignaciones": [{"fecha":"YYYY-MM-DD","resident
 
 const MESES = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 const GRUPO_LABEL = { R4: "Mayor", R3: "Mayor", R2: "Pequeño", R1: "Pequeño" };
-const MOTIVO_LABEL = { BAJA: "BAJA", VACACIONES: "VACACIONES", ROTACION: "ROTACIÓN" };
+const MOTIVO_LABEL = { BAJA: "BAJA", VACACIONES: "VACACIONES", ROTACION: "ROTACIÓN", CONGRESO: "CONGRESO" };
 const NIVELES = ["R4", "R3", "R2", "R1"];
 
 /**
@@ -257,8 +257,8 @@ NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
    festivos, prefestivos y dobletes — usa el contaje acumulado de arriba como punto de
    partida, no repartas el mes como si todos empezaran de cero.
 4. Las guardias cedidas/compradas no cuentan para el mínimo ni el máximo de guardias del punto 2.
-5. Respeta la sección BLOQUEOS ACTIVOS de arriba: BAJA es obligatorio no asignar; VACACIONES
-   y ROTACIÓN evita asignar si puedes, pero puedes hacerlo si no hay alternativa razonable.
+5. Respeta la sección BLOQUEOS ACTIVOS de arriba: BAJA es obligatorio no asignar; VACACIONES,
+   CONGRESO y ROTACIÓN evita asignar si puedes, pero puedes hacerlo si no hay alternativa razonable.
 6. Como máximo 2 residentes de la misma promoción (año de incorporación) pueden estar
    ausentes a la vez en rotación externa.
 7. Si un residente rota en Alicante o provincia colindante (ver BLOQUEOS ACTIVOS), cúbrele

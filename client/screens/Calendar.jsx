@@ -103,7 +103,7 @@ function FilaRejilla({
         const prensable = onPressStart && pulsable(codigo);
         return (
           <td key={fecha} onClick={() => onCelda(fecha, codigo)}
-            title={onPressStart && pulsable(codigo) ? "Clic: poner o quitar la guardia · mantén pulsado: cedida/comprada, 3.º puesto, vacaciones, rotación, baja" : undefined}
+            title={onPressStart && pulsable(codigo) ? "Clic: poner o quitar la guardia · mantén pulsado: cedida/comprada, 3.º puesto, vacaciones, rotación, congreso, baja" : undefined}
             onMouseDown={prensable ? () => onPressStart(fecha, codigo) : undefined}
             onMouseUp={prensable ? onPressEnd : undefined}
             onMouseLeave={prensable ? onPressEnd : undefined}
@@ -136,6 +136,7 @@ function FilaRejilla({
                 {codigo !== "3P" && <option value="3P">3.º puesto</option>}
                 {codigo !== "V" && <option value="V">vacaciones</option>}
                 {codigo !== "R" && <option value="R">rotación</option>}
+                {codigo !== "C" && <option value="C">congreso</option>}
                 {codigo !== "B" && <option value="B">baja</option>}
                 {codigo !== "" && <option value="VACIA">dejar vacía</option>}
                 {codigo === "" && <option value="VACIA">sin cambios</option>}
@@ -442,7 +443,7 @@ function CalendarScreen() {
       aplica(residenteId, fecha, codigoActual, opcion === "NORMAL" ? "" : opcion);
     } else if (opcion === "GUARDIA") {
       aplica(residenteId, fecha, autoGuardCode(fecha, festivos));
-    } else if (opcion === "3P" || opcion === "V" || opcion === "R" || opcion === "B") {
+    } else if (opcion === "3P" || opcion === "V" || opcion === "R" || opcion === "B" || opcion === "C") {
       aplica(residenteId, fecha, opcion);
     } else if (opcion === "VACIA" && codigoActual !== "") {
       aplica(residenteId, fecha, "");
@@ -926,7 +927,7 @@ function CalendarScreen() {
           <div style={{ fontSize: 12, color: COLOR.grayDark, flexBasis: "100%", lineHeight: 1.5 }}>
             Un <b>clic</b> en una celda pone o quita la guardia; el tipo (<b>G</b>, <b>GF</b> o <b>GP</b>)
             lo calcula la app con el calendario de festivos y no se elige a mano. <b>Mantén pulsada</b> una
-            celda para marcarla cedida o comprada, o poner 3.º puesto, vacaciones, rotación o baja.{" "}
+            celda para marcarla cedida o comprada, o poner 3.º puesto, vacaciones, rotación, congreso o baja.{" "}
             <b>G*</b> cedida o comprada: no cuenta en el contaje de cada uno. <b>3P</b> es el apoyo de tarde que se añade el último a la guardia y se marcha a las
             20 h: tiene su contaje aparte y no se pone mientras algún día tenga menos de dos personas.
           </div>

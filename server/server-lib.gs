@@ -521,7 +521,7 @@ const RESPONSE_SHAPE = '{"asignaciones": [{"fecha":"YYYY-MM-DD","residenteId":".
 
 const MESES = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 const GRUPO_LABEL = { R4: "Mayor", R3: "Mayor", R2: "Pequeño", R1: "Pequeño" };
-const MOTIVO_LABEL = { BAJA: "BAJA", VACACIONES: "VACACIONES", ROTACION: "ROTACIÓN" };
+const MOTIVO_LABEL = { BAJA: "BAJA", VACACIONES: "VACACIONES", ROTACION: "ROTACIÓN", CONGRESO: "CONGRESO" };
 const NIVELES = ["R4", "R3", "R2", "R1"];
 
 /**
@@ -750,8 +750,8 @@ NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
    festivos, prefestivos y dobletes — usa el contaje acumulado de arriba como punto de
    partida, no repartas el mes como si todos empezaran de cero.
 4. Las guardias cedidas/compradas no cuentan para el mínimo ni el máximo de guardias del punto 2.
-5. Respeta la sección BLOQUEOS ACTIVOS de arriba: BAJA es obligatorio no asignar; VACACIONES
-   y ROTACIÓN evita asignar si puedes, pero puedes hacerlo si no hay alternativa razonable.
+5. Respeta la sección BLOQUEOS ACTIVOS de arriba: BAJA es obligatorio no asignar; VACACIONES,
+   CONGRESO y ROTACIÓN evita asignar si puedes, pero puedes hacerlo si no hay alternativa razonable.
 6. Como máximo 2 residentes de la misma promoción (año de incorporación) pueden estar
    ausentes a la vez en rotación externa.
 7. Si un residente rota en Alicante o provincia colindante (ver BLOQUEOS ACTIVOS), cúbrele
@@ -1123,13 +1123,13 @@ const EVENTO_TIPOS = new Set(["NAVIDAD", "DESPEDIDA"]); // los dos eventos del s
 // excepción de un tipo que `validateMonth` no lee sería una fila muerta que nadie avisa que no
 // sirve para nada.
 const EXCEPCION_TIPOS = new Set(["2xR2"]);
-const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA"]); // enum de motivos válidos (severidad mixta desde V-8: solo BAJA bloquea la asignación)
+const BLOQ_MOTIVOS = new Set(["VACACIONES", "ROTACION", "BAJA", "CONGRESO"]); // enum de motivos válidos (severidad mixta desde V-8: solo BAJA bloquea la asignación)
 // Códigos de asignación (spec.md §2 + `CODES_CYCLE` del cliente). El "" es el BORRADO explícito:
 // `readLatest("asignaciones", …, { emptyField: "codigo" })` lo usa para quitar una asignación sin
 // borrar la fila, así que la lista blanca tiene que admitirlo. Existe porque sin ella entraba
 // cualquier cadena y las erratas son MUDAS: una "g" minúscula no la reconoce ni `GUARDIA` (INV-1
 // da el día por descubierto) ni `tally` (no cuenta para nada), y nadie avisa.
-const ASIG_CODIGOS = new Set(["G", "GF", "GP", "3P", "V", "R", "B", ""]);
+const ASIG_CODIGOS = new Set(["G", "GF", "GP", "3P", "V", "R", "B", "C", ""]);
 // Modos de `generarCuadranteIA` (decisión V-47). COMPLETAR es el defecto: respeta las guardias que
 // ya hay en la rejilla y rellena el resto. REEMPLAZAR es el comportamiento original de V-45:
 // sustituye el mes entero. Lista blanca porque un modo mal escrito no puede degradar en silencio
@@ -1145,7 +1145,7 @@ const FASES_GENERACION = new Set(["obligatorias", "extras"]);
 // `validate.js:OCUPA_PUESTO` y `apply.js:MARCADORES_REJILLA`.
 const NIVELES_ASIGNABLES = new Set(["R1", "R2", "R3", "R4"]);
 const CODIGOS_GUARDIA = new Set(["G", "GF", "GP", "3P"]);
-const MARCADORES_REJILLA = new Set(["V", "R", "B"]);
+const MARCADORES_REJILLA = new Set(["V", "R", "B", "C"]);
 // Tope de violaciones que se persisten por fila de `generaciones`: una celda de Sheets admite
 // 50.000 caracteres y una respuesta hostil (500 ids inventados) daba ~96 KB de JSON.
 const BITACORA_MAX_VIOLACIONES = 50;
@@ -1516,7 +1516,7 @@ function handleRequest(rawBody, deps) {
             // P-13 (spec.md §8/§8.1, decisión 2026-08-07): simulación preventiva de cobertura.
             // Solo VACACIONES/ROTACION pasan por aquí — BAJA es impredecible, no se "previene".
             let riesgos = [];
-            if (req.motivo === "VACACIONES" || req.motivo === "ROTACION") {
+            if (req.motivo === "VACACIONES" || req.motivo === "ROTACION" || req.motivo === "CONGRESO") {
               const preview = deps.domain.previewBloqueoRisk(
                 { residenteId, desde: rango.desde, hasta: rango.hasta, motivo: req.motivo },
                 { residentes: allResidentes(deps), bloqueosActivos: allBloqueos(deps), today: deps.today },
@@ -2376,7 +2376,7 @@ function activeBloqueosInMonth(deps, anio, mes) {
 
 // El código de la rejilla que corresponde a cada motivo de Bloqueo (V-50): son exactamente los
 // tres códigos "de marca" que ya existían en ASIG_CODIGOS antes de esta decisión.
-const ASIG_CODIGO_DE_BLOQUEO = { VACACIONES: "V", ROTACION: "R", BAJA: "B" };
+const ASIG_CODIGO_DE_BLOQUEO = { VACACIONES: "V", ROTACION: "R", BAJA: "B", CONGRESO: "C" };
 
 /**
  * Escribe sola la marca V/R/B en `asignaciones`, un día por cada uno del bloqueo recién creado

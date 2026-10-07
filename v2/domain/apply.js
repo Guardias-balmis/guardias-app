@@ -40,7 +40,7 @@ const clave = (a) => `${a.fecha}|${a.residenteId}`; // la misma ASIG_KEY que usa
 // Los marcadores que la tarjeta del generador promete conservar («las vacaciones, rotaciones y
 // bajas marcadas en la rejilla se conservan»). No son ausencias (V-19: la ausencia es la fila de
 // `bloqueos`), pero son celdas que alguien apuntó a mano y una guardia propuesta encima las pisaría.
-const MARCADORES_REJILLA = new Set(["V", "R", "B"]);
+const MARCADORES_REJILLA = new Set(["V", "R", "B", "C"]);
 
 /**
  * Claves `fecha|residenteId` que la propuesta REPITE. La tabla es una rejilla por clave y

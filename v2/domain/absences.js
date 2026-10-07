@@ -22,10 +22,11 @@
 export const BLOQUEA_ASIGNACION = ["BAJA"];
 // INV-2: exime del mínimo de 4 guardias/mes (spec.md §5: «febrero/vacaciones/baja/R1-verano»).
 // La rotación NO exime: se sigue haciendo guardia en el hospital de origen.
-export const EXIME_DEL_MINIMO = ["VACACIONES", "BAJA"];
+// CONGRESO (V-62) se trata como las vacaciones: es una ausencia concedida que no está en el hospital.
+export const EXIME_DEL_MINIMO = ["VACACIONES", "CONGRESO", "BAJA"];
 // INV-6: cuentan como «ausente» para el máximo de 2 por promoción. La baja NO computa — no es
 // una ausencia que nadie haya concedido ni que se pueda repartir.
-export const AUSENCIA_SIMULTANEA = ["ROTACION", "VACACIONES"];
+export const AUSENCIA_SIMULTANEA = ["ROTACION", "VACACIONES", "CONGRESO"];
 // INV-3, nota [a] de p.2: «se descontará de forma proporcional». Solo la baja.
 export const DESCUENTA_DISPONIBILIDAD = ["BAJA"];
 // Eje `puentesLibres` de INV-3 (decisión V-27): un puente que cae dentro de CUALQUIER ausencia
@@ -33,7 +34,7 @@ export const DESCUENTA_DISPONIBILIDAD = ["BAJA"];
 // ese día. A diferencia de DESCUENTA_DISPONIBILIDAD (solo BAJA, nota [a] literal), aquí van los
 // TRES motivos: el sesgo de que una ausencia inflara este eje no distinguía tipo de ausencia, y
 // ROTACION/VACACIONES son más frecuentes que BAJA.
-export const AUSENTE_EN_PUENTE = ["BAJA", "VACACIONES", "ROTACION"];
+export const AUSENTE_EN_PUENTE = ["BAJA", "VACACIONES", "CONGRESO", "ROTACION"];
 
 // INV-7: la rotación «cercana» que obliga a cubrir viernes y sábado del periodo. La lista de
 // provincias vivía duplicada en `rotationHistoryStart` y en el propio INV-7.

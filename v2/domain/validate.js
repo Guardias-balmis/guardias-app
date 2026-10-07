@@ -445,7 +445,7 @@ function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, viol
       const wasInExcess = emittedRun.get(c) || false;
       if (excess && !wasInExcess) {
         // primer día del run de exceso: atribuir
-        const vacs = ausentes.filter((x) => x.motivo === "VACACIONES");
+        const vacs = ausentes.filter((x) => x.motivo === "VACACIONES" || x.motivo === "CONGRESO"); // V-62: el congreso cede como las vacaciones
         let culpable;
         if (vacs.length) culpable = vacs[vacs.length - 1].id;            // rotación prioritaria: cede el de vacaciones
         else culpable = ausentes.slice().sort((a, b) => compareISO(a.desde, b.desde)).pop().id; // el último en incorporarse

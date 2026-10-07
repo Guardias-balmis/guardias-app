@@ -331,6 +331,25 @@ test("INV-2: vacaciones documentadas eximen del mínimo", () => {
   assert.equal(v.filter((x) => x.invariante === "INV-2").length, 0);
 });
 
+test("INV-2: un congreso documentado exime del mínimo igual que las vacaciones (V-62)", () => {
+  const BRUNO = R("BRUNO", "2024-05-27", "2028-05-26");
+  const asgs = [asg("BRUNO", "2026-09-19", "G"), asg("BRUNO", "2026-09-26", "G")];
+  const v = validateMonth({
+    mes: 9, anio: 2026, residentes: [BRUNO], asignaciones: asgs,
+    bloqueos: [blk("BRUNO", "2026-09-01", "2026-09-15", "CONGRESO")],
+  });
+  assert.equal(v.filter((x) => x.invariante === "INV-2").length, 0);
+});
+
+test("INV-5: una guardia durante un congreso NO es error (informativo, como las vacaciones) (V-62)", () => {
+  const BRUNO = R("BRUNO", "2024-05-27", "2028-05-26");
+  const v = validateMonth({
+    mes: 10, anio: 2026, residentes: [BRUNO], asignaciones: [asg("BRUNO", "2026-10-07", "G")],
+    bloqueos: [blk("BRUNO", "2026-10-05", "2026-10-09", "CONGRESO")],
+  });
+  assert.ok(!v.some((x) => x.invariante === "INV-5"));
+});
+
 test("INV-2: baja documentada también exime del mínimo (misma rama que vacaciones)", () => {
   const BRUNO = R("BRUNO", "2024-05-27", "2028-05-26");
   const asgs = [asg("BRUNO", "2026-09-19", "G"), asg("BRUNO", "2026-09-26", "G")];
