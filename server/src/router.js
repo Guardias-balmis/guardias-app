@@ -129,6 +129,14 @@ export function handleRequest(rawBody, deps) {
       case "whoami":
         return authed(req, deps, (session) => ({ ok: true, sub: session.sub, rol: session.rol }));
 
+      // Varias LECTURAS en una sola petición (S-9). Cada petición al `/exec` paga unos 3 s de
+      // arranque + redirección de Google aunque la ejecución dure 300 ms, así que Inicio y el
+      // cuadrante, que lanzan 3-5 lecturas a la vez, tardaban lo de la más lenta de una cola. Cada
+      // llamada interior pasa por `handleRequest` entera —con su `authed`, su perfil de invitado y
+      // sus permisos— y comparten la memoria de lecturas de esta petición.
+      case "lote":
+        return handleLote(req, deps);
+
       case "validar":
         return authed(req, deps, () => {
           // Mismo tratamiento que en `marcarValidado` (V-22): aquí los bloqueos los manda el
@@ -2045,6 +2053,36 @@ function currentMandate(deps, periodoInicio) {
  * Se exige un `sub` (id de residente) en POSITIVO, no se descarta `pending` en negativo: así
  * cualquier clase futura de token sin sujeto queda fuera por defecto en vez de por enumeración.
  */
+// Solo lecturas: un lote no puede escribir (una escritura que falla a medias entre varias no tiene
+// un resultado que contar) ni anidar otro lote ni tocar el login. Lista explícita, como
+// `REINTENTABLES` del cliente: lo que no está aquí se rechaza.
+const LOTE_ACCIONES = new Set([
+  "whoami", "listResidentes", "listAsignaciones", "listAsignacionesRango",
+  "misPreferencias", "listPreferencias", "misBloqueos", "listBloqueos", "listBloqueosRango",
+  "listFestivosRango", "listEventos", "listExcepciones", "colaImaginaria",
+  "estadoResponsable", "listResponsables", "estadoCuadrante", "estadoVoluntariado3P",
+  "listSolicitudesInvitado",
+]);
+const LOTE_MAX = 12;
+
+function handleLote(req, deps) {
+  const llamadas = req.llamadas;
+  if (!Array.isArray(llamadas) || llamadas.length === 0 || llamadas.length > LOTE_MAX) {
+    return { ok: false, error: `un lote lleva de 1 a ${LOTE_MAX} llamadas` };
+  }
+  // La sesión se comprueba UNA vez por delante: sin ella, ninguna llamada interior valdría y
+  // todas devolverían lo mismo; así el cliente recibe el rechazo de sesión de siempre.
+  const s = verifySession(req.session, { now: deps.now, secret: deps.sessionSecret, crypto: deps.crypto });
+  if (!s.valid) return { ok: false, error: `sesión ${s.reason}` };
+  const resultados = llamadas.map((ll) => {
+    if (!ll || typeof ll !== "object" || !LOTE_ACCIONES.has(ll.action)) {
+      return { ok: false, error: `acción no admitida en un lote: ${ll && typeof ll === "object" ? ll.action : ll}` };
+    }
+    return handleRequest(JSON.stringify({ ...ll, session: req.session }), deps);
+  });
+  return { ok: true, resultados };
+}
+
 function authed(req, deps, fn) {
   const s = verifySession(req.session, { now: deps.now, secret: deps.sessionSecret, crypto: deps.crypto });
   if (!s.valid) return { ok: false, error: `sesión ${s.reason}` };

@@ -361,3 +361,75 @@ test("el mismo contrato en todas las lecturas de listas: ok:true sin su array es
     assert.deepEqual(await sano[metodo](...args), { ok: true, [campo]: [] }, `${metodo} con su array vacío pasa tal cual`);
   }
 });
+
+// ── lecturas en lote (S-9) ────────────────────────────────────────────────────────────────────
+
+/** `fetch` falso que contesta a un `lote` con un resultado por llamada y al resto con `{ok:true}`. */
+function fetchConLote() {
+  const calls = [];
+  const fn = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    const json = body.action === "lote"
+      ? { ok: true, resultados: body.llamadas.map((l) => ({ ok: true, eco: l.action, residentes: [], bloqueos: [], festivos: [] })) }
+      : { ok: true, eco: body.action, residentes: [] };
+    return { ok: true, status: 200, json: async () => json };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test("S-9: lecturas pedidas a la vez viajan en UNA petición `lote` y cada una recibe lo suyo", async () => {
+  const fetchImpl = fetchConLote();
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "tok", ventanaLoteMs: 0 });
+  const [a, b, c] = await Promise.all([api.estadoCuadrante(2027, 7), api.estadoResponsable(2027), api.listResidentes()]);
+  assert.equal(fetchImpl.calls.length, 1, "una sola ida y vuelta");
+  assert.equal(fetchImpl.calls[0].action, "lote");
+  assert.equal(fetchImpl.calls[0].session, "tok");
+  assert.deepEqual(fetchImpl.calls[0].llamadas, [
+    { action: "estadoCuadrante", anio: 2027, mes: 7 }, { action: "estadoResponsable", anio: 2027 }, { action: "listResidentes" },
+  ]);
+  assert.deepEqual([a.eco, b.eco, c.eco], ["estadoCuadrante", "estadoResponsable", "listResidentes"]);
+});
+
+test("S-9: una lectura sola se manda como siempre y una escritura nunca entra en un lote", async () => {
+  const fetchImpl = fetchConLote();
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "tok", ventanaLoteMs: 0 });
+  await Promise.all([api.estadoCuadrante(2027, 7), api.guardarAsignaciones([{ fecha: "2027-07-01", residenteId: "r", codigo: "G" }])]);
+  assert.deepEqual(fetchImpl.calls.map((c) => c.action).sort(), ["estadoCuadrante", "guardarAsignaciones"]);
+});
+
+test("S-9: un servidor que aún no conoce `lote` hace que se manden por separado, sin perder ninguna", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push(body.action);
+    const json = body.action === "lote" ? { ok: false, error: "acción desconocida: lote" } : { ok: true, eco: body.action, residentes: [] };
+    return { ok: true, status: 200, json: async () => json };
+  };
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "tok", ventanaLoteMs: 0 });
+  const [a, b] = await Promise.all([api.estadoCuadrante(2027, 7), api.estadoResponsable(2027)]);
+  assert.deepEqual([a.eco, b.eco], ["estadoCuadrante", "estadoResponsable"]);
+  assert.deepEqual(calls, ["lote", "estadoCuadrante", "estadoResponsable"]);
+  await Promise.all([api.estadoCuadrante(2027, 8), api.estadoResponsable(2028)]);
+  assert.equal(calls.filter((x) => x === "lote").length, 1, "no vuelve a probar el lote");
+});
+
+test("S-9: el rechazo de sesión de un lote llega a cada lectura y avisa una vez por cada una", async () => {
+  const avisos = [];
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ ok: false, error: "sesión expirada" }) });
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "tok", ventanaLoteMs: 0, onSessionInvalid: (e) => avisos.push(e) });
+  const [a, b] = await Promise.all([api.estadoCuadrante(2027, 7), api.listEventos()]);
+  assert.equal(a.ok, false);
+  assert.equal(b.ok, false);
+  assert.match(a.error, /sesión expirada/);
+  assert.ok(avisos.length >= 1);
+});
+
+test("S-9: las listas siguen exigidas dentro de un lote", async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, resultados: [{ ok: true }, { ok: true, eventos: [] }] }) });
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "tok", ventanaLoteMs: 0 });
+  const [a, b] = await Promise.all([api.listResidentes(), api.listEventos()]);
+  assert.equal(a.ok, false, "falta la lista de residentes");
+  assert.equal(b.ok, true);
+});
