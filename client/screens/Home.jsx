@@ -7,6 +7,7 @@ import { S } from "./client/lib/design-tokens.js";
 import { puedeMoverCiclo, vistaGenerador, esAccesoDesarrollador, puedeValidarCuadrante } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 import { ESTADO_INICIAL, recibirSolicitudes, vistaSolicitudes } from "./client/lib/solicitudes.js";
+import { anioARevisar, recordarRevision } from "./client/lib/revision-festivos.js";
 
 const { useState, useEffect, useRef } = React;
 const { Card, QuickCard, Btn, Aviso } = window.UI;
@@ -21,6 +22,35 @@ function nivelDe(residente) {
   return levelOn(periodsOfResident(residente), todayISO());
 }
 
+
+/**
+ * Recordatorio de la revisión anual de los festivos (V-63). Lo ven quienes pueden confirmarla (el
+ * permiso del ciclo) y solo mientras el año a revisar no conste como revisado: desde el 1 de
+ * diciembre para el año siguiente, y todo el año si nadie lo hace. Una consulta al abrir Inicio,
+ * sin sondeo: no cambia hasta que alguien actúa en Datos del servicio.
+ */
+function RevisionFestivos({ api, setTab }) {
+  const anio = anioARevisar(todayISO());
+  const [estado, setEstado] = useState(null);
+  useEffect(() => {
+    let vivo = true;
+    (async () => { const r = await api.estadoRevisionFestivos(anio); if (vivo) setEstado(r); })();
+    return () => { vivo = false; };
+  }, [anio]);
+  if (!recordarRevision(estado)) return null;
+  return (
+    <Card title={`🎄 Revisar los festivos de ${anio}`}>
+      <div style={{ fontSize: 13, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
+        Toca revisar el calendario de festivos de {anio} en la reunión de guardias de comienzo de año.
+        La app ya trae los de la Comunitat Valenciana, pero hay que comprobarlos con el decreto del
+        Consell (por ejemplo un festivo trasladado de domingo a lunes) y añadir los locales de Alicante.
+      </div>
+      <button onClick={() => setTab("datos-servicio")} style={{ background: COLOR.blue, color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+        Revisar festivos de {anio} →
+      </button>
+    </Card>
+  );
+}
 
 /**
  * Solicitudes de acceso como invitado (V-53). Solo la ven quienes pueden decidirlas (los
@@ -734,6 +764,8 @@ function HomeScreen() {
           setAnio={setAnio} vista={vistaGen} verCuadrante={() => setTab("calendar")} completarDisponible={completarDisponible}
           reintentar={() => setReintento((n) => n + 1)} />
       )}
+
+      {puedoRegistrarImaginaria && !app.esInvitado && <RevisionFestivos api={app.api} setTab={setTab} />}
 
       {puedoAprobarInvitados && !app.esInvitado && <SolicitudesAcceso api={app.api} showToast={app.showToast} />}
 

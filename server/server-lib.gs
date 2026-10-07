@@ -112,6 +112,11 @@ const TABLES = {
   // segundos (no `date`: la ventana de aprobación es de 5 minutos). Guarda el email de quien pidió
   // entrar —es la traza de quién miró el cuadrante o se dio de alta— y NO crea ningún residente por sí sola.
   solicitudesInvitado: { name: "solicitudesInvitado", columns: [col("id"), col("email"), col("solicitadoEn", "number"), col("estado"), col("decididoPor"), col("decididoEn", "number"), col("tipo"), col("nombre"), col("fechaInicio", "date"), col("fechaFin", "date")] },
+  // Revisión anual de los festivos (V-63): una fila por año revisado, append-only. Quien dirige la
+  // reunión de guardias de comienzo de año marca que se ha comprobado el calendario del Consell
+  // (traslados, locales de Alicante); mientras no haya fila de ese año, Inicio se lo recuerda a
+  // quien puede confirmarlo. `fecha` es el día de la confirmación (ISO).
+  revisionesFestivos: { name: "revisionesFestivos", columns: [col("id"), col("anio", "number"), col("actorId"), col("fecha", "date")] },
   excepciones: { name: "excepciones", columns: [col("id"), col("tipo"), col("desde", "date"), col("hasta", "date"), col("justificacion"), col("registradaPor"), col("fecha", "date"), col("activo", "bool")] },
 };
 
@@ -1609,6 +1614,29 @@ function handleRequest(rawBody, deps) {
           return { ok: true, ids, cargados: ids.length };
         });
 
+      // Revisión anual de los festivos (V-63). Leer está abierto a toda sesión (la pantalla de festivos
+      // lo enseña a todos); CONFIRMAR exige el permiso del ciclo, porque apaga el recordatorio de
+      // Inicio para todo el equipo y debe hacerlo quien dirige la reunión, no cualquiera de pasada.
+      case "estadoRevisionFestivos":
+        return authed(req, deps, () => {
+          if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
+          return { ok: true, anio: req.anio, ...revisionFestivos(deps, req.anio) };
+        });
+
+      case "confirmarRevisionFestivos":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "confirmar la revisión de los festivos");
+          if (denegado) return denegado;
+          if (!isYear(req.anio)) return { ok: false, error: "anio inválido" };
+          return atomico(deps, () => {
+            // Una sola fila por año: repetirlo no apila otra (y conserva quién y cuándo lo hizo primero).
+            if (!revisionFestivos(deps, req.anio).revisado) {
+              deps.store.appendRecord("revisionesFestivos", { anio: req.anio, actorId: session.sub, fecha: deps.today });
+            }
+            return { ok: true, anio: req.anio, ...revisionFestivos(deps, req.anio) };
+          });
+        });
+
       // Anular una fecha mal cargada: reinserción con activo=false, jamás borrado (append-only).
       case "anularFestivo":
         return authed(req, deps, () => {
@@ -2233,6 +2261,14 @@ function festivosEfectivos(deps, desdeAnio, hastaAnio) {
     }
   }
   return [...activos, ...auto];
+}
+
+/** ¿Se ha revisado ya el calendario de festivos de ese año, y quién y cuándo? (V-63) */
+function revisionFestivos(deps, anio) {
+  const fila = deps.store.readRecords("revisionesFestivos").find((r) => r.anio === anio);
+  if (!fila) return { revisado: false, por: "", fecha: "" };
+  const quien = allResidentes(deps).find((r) => r.id === fila.actorId);
+  return { revisado: true, por: quien ? quien.nombre : "", fecha: fila.fecha };
 }
 
 /** Años que cubre la lectura SIN rango (el snapshot de validar/generar): tres a cada lado de hoy. */
@@ -3204,7 +3240,7 @@ const LOTE_ACCIONES = new Set([
   "misPreferencias", "listPreferencias", "misBloqueos", "listBloqueos", "listBloqueosRango",
   "listFestivosRango", "listEventos", "listExcepciones", "colaImaginaria",
   "estadoResponsable", "listResponsables", "estadoCuadrante", "estadoVoluntariado3P",
-  "listSolicitudesInvitado",
+  "listSolicitudesInvitado", "estadoRevisionFestivos",
 ]);
 const LOTE_MAX = 12;
 
