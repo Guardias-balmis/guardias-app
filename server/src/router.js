@@ -1531,7 +1531,9 @@ const FECHA_LIMITE_ACCESO_DESARROLLADOR = "2027-03-31";
 function esAccesoDesarrollador(deps, session) {
   if (deps.today > FECHA_LIMITE_ACCESO_DESARROLLADOR) return false;
   const residente = allResidentes(deps).find((r) => r.id === session.sub);
-  return Boolean(residente) && EMAILS_ACCESO_DESARROLLADOR.includes(residente.email);
+  // Normalizado como en `handleLogin`: con el email en crudo, una mayúscula o un espacio al final en
+  // la celda dejaban entrar al administrador (el login normaliza) pero no aprobar ni validar.
+  return Boolean(residente) && EMAILS_ACCESO_DESARROLLADOR.includes(emailNormalizado(residente.email));
 }
 
 /**
@@ -2062,7 +2064,7 @@ function handleSolicitarInvitado(req, deps) {
 
 /**
  * Alta de una solicitud (INVITADO o ALTA). Una pendiente del mismo email y tipo se reutiliza, para
- * que pulsar el botón varias veces no inunde de correos a los administradores.
+ * que pulsar el botón varias veces no inunde de correos a quien puede aprobarla.
  */
 function crearSolicitud(deps, email, tipo, datos) {
   let sol = allSolicitudes(deps).find((r) => r.email === email && (r.tipo || "INVITADO") === tipo && r.estado === "PENDIENTE" && deps.now - r.solicitadoEn <= SOLICITUD_TTL);
@@ -2084,19 +2086,27 @@ function crearSolicitud(deps, email, tipo, datos) {
 }
 
 /**
- * A quién se avisa de una solicitud (V-55): a quien hoy puede APROBARLA, sacado del mismo
- * `requireValidarPermiso` que la deja aprobar, para que «a quién avisar» y «quién puede decidir»
- * no se separen nunca. Dentro de la ventana de V-52 son los administradores; pasada
- * `FECHA_LIMITE_ACCESO_DESARROLLADOR`, el Responsable en mandato o, sin mandato, los Mayores
- * (V-16). Antes de V-55, pasada la fecha no se avisaba a nadie y la pantalla del solicitante
- * seguía diciendo que sí: con 5 minutos para aprobar, un R1 nuevo solo entraba si el Responsable
- * tenía Inicio abierto por casualidad.
+ * A quién se avisa de una solicitud (V-55): a quien hoy puede APROBARLA, residente a residente con
+ * el mismo `requireValidarPermiso` que la deja aprobar, para que «a quién avisar» y «quién puede
+ * decidir» no se separen nunca. Dentro de la ventana de V-52 eso da los administradores que tienen
+ * fila de residente (sin ella no pueden ni entrar); pasada `FECHA_LIMITE_ACCESO_DESARROLLADOR`, el
+ * Responsable en mandato o, sin mandato, los Mayores (V-16). Antes de V-55, pasada la fecha no se
+ * avisaba a nadie y la pantalla del solicitante seguía diciendo que sí: con 5 minutos para
+ * aprobar, un R1 nuevo solo entraba si el Responsable tenía Inicio abierto por casualidad.
+ *
+ * Un residente que no se puede evaluar (fechas ilegibles: `groupOnDate` lanza) ni puede aprobar
+ * ni puede dejar sin aviso a los demás, así que se salta. Los emails van normalizados y con forma
+ * de email: `sendMail` manda UN correo a todos, y una dirección imposible lo tumbaría entero.
  */
 function destinatariosAviso(deps) {
-  if (deps.today <= FECHA_LIMITE_ACCESO_DESARROLLADOR) return EMAILS_ACCESO_DESARROLLADOR;
-  const emails = allResidentes(deps)
-    .filter((r) => r.email && !requireValidarPermiso(deps, { sub: r.id }, "gestionar las solicitudes de acceso"))
-    .map((r) => r.email);
+  const emails = [];
+  for (const r of allResidentes(deps)) {
+    const email = emailNormalizado(r.email);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) continue;
+    try {
+      if (!requireValidarPermiso(deps, { sub: r.id }, "gestionar las solicitudes de acceso")) emails.push(email);
+    } catch (e) { /* fechas ilegibles: no puede aprobar */ }
+  }
   return [...new Set(emails)];
 }
 
@@ -2110,12 +2120,13 @@ function destinatariosAviso(deps) {
  */
 function avisarAprobadores(deps, email, tipo, datos) {
   if (typeof deps.sendMail !== "function") return 0;
-  const para = destinatariosAviso(deps);
-  if (para.length === 0) return 0;
   const que = tipo === "ALTA"
     ? `${email} ha pedido darse de alta como residente (${datos.nombre}, del ${datos.fechaInicio} al ${datos.fechaFin}).`
     : `${email} ha pedido entrar como invitado (solo lectura).`;
+  // Todo dentro del try: calcular a quién avisar tampoco puede tumbar una solicitud ya escrita.
   try {
+    const para = destinatariosAviso(deps);
+    if (para.length === 0) return 0;
     deps.sendMail(
       para,
       tipo === "ALTA" ? "Guardias · solicitud de alta de residente" : "Guardias · solicitud de acceso como invitado",

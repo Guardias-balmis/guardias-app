@@ -119,3 +119,8 @@ test("textoAvisoSolicitud: solo dice que hay correo si el servidor confirma que 
   assert.match(textoAvisoSolicitud(0), /No se ha podido avisar.*avisa tú/);
   assert.equal(textoAvisoSolicitud(undefined), "", "sin el dato (reutilizada o servidor viejo) no afirma nada");
 });
+
+test("esAccesoDesarrollador compara el email normalizado, como el servidor y el login (V-55)", () => {
+  assert.equal(esAccesoDesarrollador("  Quiquemm14@gmail.com ", "2026-10-07"), true);
+  assert.equal(esAccesoDesarrollador(undefined, "2026-10-07"), false);
+});

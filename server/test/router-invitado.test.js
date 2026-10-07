@@ -29,10 +29,12 @@ function fakeSS(rows = {}) {
 }
 const ANA = { id: "ana", nombre: "Ana", email: "ana@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
 const ADMIN = { id: "adm", nombre: "Quique", email: "quiquemm14@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
+// El otro administrador: sin fila de residente no podría ni entrar, así que tampoco recibiría el aviso (V-55).
+const AGUS = { id: "agus", nombre: "Agustín", email: "agustinlagioiosa@gmail.com", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" };
 
-function makeDeps() {
+function makeDeps({ residentes = [ANA, AGUS, ADMIN] } = {}) {
   const ss = fakeSS({
-    residentes: [headerOf(TABLES.residentes), ...[ANA, ADMIN].map((r) => recordToRow(TABLES.residentes, r))],
+    residentes: [headerOf(TABLES.residentes), ...residentes.map((r) => recordToRow(TABLES.residentes, r))],
     asignaciones: [headerOf(TABLES.asignaciones)],
     cuadrantes: [headerOf(TABLES.cuadrantes)],
   });
@@ -246,7 +248,7 @@ test("alta: el administrador la ve con sus datos, la aprueba y SOLO entonces se 
   assert.equal(e.estado, "APROBADA");
   assert.equal(e.residente.nombre, "Nueva Residente");
   assert.notEqual(e.residente.rol, "invitado");
-  assert.equal(e.residentes.length, 3);
+  assert.equal(e.residentes.length, 4);
   // Es una sesión de residente de verdad: puede leer lo que un invitado no puede
   assert.equal(call({ action: "misBloqueos", session: e.session, mes: 10, anio: 2026 }, deps).ok, true);
   assert.equal(call({ action: "estadoSolicitudInvitado", solicitudToken: sol.solicitudToken }, deps).estado, "CADUCADA", "un solo canje");
@@ -258,7 +260,7 @@ test("alta rechazada: no se crea nada", () => {
   const adm = loggedInAs(deps, "quiquemm14@gmail.com");
   call({ action: "resolverSolicitudInvitado", session: adm, id: idPendiente(deps, adm).id, aprobar: false }, deps);
   assert.equal(call({ action: "estadoSolicitudInvitado", solicitudToken: sol.solicitudToken }, deps).estado, "RECHAZADA");
-  assert.equal(deps.store.readRecords("residentes").length, 2);
+  assert.equal(deps.store.readRecords("residentes").length, 3);
 });
 
 test("alta: a los 5 minutos caduca y no se puede aprobar (no se crea el residente)", () => {
@@ -268,7 +270,7 @@ test("alta: a los 5 minutos caduca y no se puede aprobar (no se crea el resident
   const id = idPendiente(deps, adm).id;
   pasa(deps, 301);
   assert.match(call({ action: "resolverSolicitudInvitado", session: adm, id, aprobar: true }, deps).error, /caducado/);
-  assert.equal(deps.store.readRecords("residentes").length, 2);
+  assert.equal(deps.store.readRecords("residentes").length, 3);
 });
 
 test("alta: un residente normal no puede aprobar su propia alta ni la de otro", () => {
@@ -277,7 +279,7 @@ test("alta: un residente normal no puede aprobar su propia alta ni la de otro", 
   const id = deps.store.readLatest("solicitudesInvitado", (r) => r.id)[0].id;
   const ana = loggedInAs(deps, "ana@gmail.com");
   assert.match(call({ action: "resolverSolicitudInvitado", session: ana, id, aprobar: true }, deps).error, /administradores/);
-  assert.equal(deps.store.readRecords("residentes").length, 2);
+  assert.equal(deps.store.readRecords("residentes").length, 3);
 });
 
 test("alta: si el email ya se vinculó entre la petición y la aprobación, no se duplica", () => {
@@ -388,4 +390,35 @@ test("el invitado no recibe las marcas V/R/B de la rejilla (bajas médicas inclu
   const adm = loggedInAs(deps, "quiquemm14@gmail.com");
   const todas = call({ action: "listAsignaciones", session: adm, mes: 10, anio: 2026 }, deps).asignaciones;
   assert.equal(todas.length, 5, "a un residente no se le quita nada");
+});
+
+test("V-55: los destinatarios salen del permiso también DENTRO de la ventana: un administrador sin fila de residente no recibe un aviso que no podría atender", () => {
+  const deps = makeDeps({ residentes: [ANA, ADMIN] });
+  assert.equal(solicita(deps).avisados, 1);
+  assert.deepEqual(deps.correos[0].para, ["quiquemm14@gmail.com"]);
+});
+
+test("V-55: un administrador con el email en mayúsculas o con espacios en el Sheet recibe el aviso (normalizado) y PUEDE aprobar", () => {
+  const deps = makeDeps({ residentes: [ANA, { ...ADMIN, email: "  Quiquemm14@gmail.com " }, AGUS] });
+  assert.equal(solicita(deps).avisados, 2);
+  assert.deepEqual([...deps.correos[0].para].sort(), ["agustinlagioiosa@gmail.com", "quiquemm14@gmail.com"]);
+  const adm = loggedInAs(deps, "quiquemm14@gmail.com");
+  assert.equal(call({ action: "listSolicitudesInvitado", session: adm }, deps).ok, true);
+});
+
+test("V-55: pasada la ventana, un residente con fechas ilegibles no tumba la solicitud ni deja sin aviso a los demás Mayores", () => {
+  const deps = trasLaVentana();
+  deps.store.appendRecord("residentes", { id: "roto", nombre: "Fecha rota", email: "roto@gmail.com", fechaInicio: "27/05/2025", fechaFin: "2029-05-26" });
+  const r = login(deps, "tutor@gmail.com");
+  const sol = call({ action: "solicitarInvitado", pendingToken: r.pendingToken }, deps);
+  assert.equal(sol.ok, true, "la solicitud se registra y devuelve su token");
+  assert.equal(sol.avisados, 2);
+  assert.deepEqual([...deps.correos[0].para].sort(), ["ana@gmail.com", "quiquemm14@gmail.com"]);
+});
+
+test("V-55: una celda de email que no es un email se salta, para que no tumbe el correo de todos", () => {
+  const deps = trasLaVentana();
+  deps.store.appendRecord("residentes", { id: "basura", nombre: "Sin email real", email: "pendiente", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" });
+  assert.equal(solicita(deps).avisados, 2);
+  assert.deepEqual([...deps.correos[0].para].sort(), ["ana@gmail.com", "quiquemm14@gmail.com"]);
 });

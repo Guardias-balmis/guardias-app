@@ -60,7 +60,8 @@ export function puedeGenerarCuadrante({ isResponsable, grupo, sinResponsable, ac
 const EMAILS_ACCESO_DESARROLLADOR = ["agustinlagioiosa@gmail.com", "quiquemm14@gmail.com"];
 const FECHA_LIMITE_ACCESO_DESARROLLADOR = "2027-03-31";
 export function esAccesoDesarrollador(email, hoy = todayISO()) {
-  return EMAILS_ACCESO_DESARROLLADOR.includes(email) && hoy <= FECHA_LIMITE_ACCESO_DESARROLLADOR;
+  // Normalizado como el servidor (y el login): el email llega de la celda del Sheet, tal cual.
+  return EMAILS_ACCESO_DESARROLLADOR.includes(String(email || "").trim().toLowerCase()) && hoy <= FECHA_LIMITE_ACCESO_DESARROLLADOR;
 }
 
 /**

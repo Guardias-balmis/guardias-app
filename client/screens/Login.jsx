@@ -144,6 +144,10 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
   const Aprobador = aprobador.charAt(0).toUpperCase() + aprobador.slice(1);
   const cancelarRef = useRef(false);
   useEffect(() => () => { cancelarRef.current = true; }, []);
+  // Cada `pedir` es una petición con su propio número: cancelar o volver a pedir deja obsoletas las
+  // anteriores. Con una sola marca compartida, cancelar y volver a pedir enseguida resucitaba el
+  // bucle de la solicitud abandonada (y podía entrar con ella, o pegarle a esta su `avisados`).
+  const peticionRef = useRef(0);
 
   // `rangoValido` y no `compareISO` a pelo: mientras se teclea el año, el input emite "0002-09-04"
   // y `parseISO` lanzaría EN EL RENDER, desmontando la app entera (ver client/lib/fechas.js).
@@ -157,7 +161,11 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
 
   const pedir = async (tipo) => {
     if (tipo === "ALTA" && (!nombre.trim() || !fechasValidas)) { setError("Rellena el nombre y unas fechas válidas"); return; }
-    cancelarRef.current = false;
+    const yo = ++peticionRef.current;
+    const vigente = () => !cancelarRef.current && peticionRef.current === yo;
+    // `avisados` solo llega en la primera respuesta (la de solicitar); los sondeos no lo traen, así
+    // que se guarda aquí, en ESTA petición, y no se hereda del estado anterior (que puede ser de otra).
+    let avisados;
     setError(null);
     setEspera({ tipo, estado: "PENDIENTE" });
     const fin = await pedirAcceso({
@@ -165,15 +173,18 @@ function AltaForm({ pendingToken, onCancel, onSuccess }) {
       iniciar: () => (tipo === "ALTA"
         ? app.api.solicitarAlta(pendingToken, { nombre: nombre.trim(), fechaInicio, fechaFin })
         : app.api.solicitarInvitado(pendingToken)),
-      onSuccess,
-      onError: (e) => { setEspera(null); setError(e); },
-      // `avisados` solo llega en la primera respuesta (la de solicitar); los sondeos no lo traen.
-      onEstado: (e) => setEspera((prev) => ({ tipo, estado: e.estado, avisados: e.avisados !== undefined ? e.avisados : prev && prev.avisados })),
-      cancelado: () => cancelarRef.current,
+      onSuccess: (r) => { if (vigente()) onSuccess(r); },
+      onError: (e) => { if (!vigente()) return; setEspera(null); setError(e); },
+      onEstado: (e) => {
+        if (!vigente()) return;
+        if (e.avisados !== undefined) avisados = e.avisados;
+        setEspera({ tipo, estado: e.estado, avisados });
+      },
+      cancelado: () => !vigente(),
     });
-    if (fin === "CANCELADA") setEspera(null);
+    if (fin === "CANCELADA" && vigente()) setEspera(null);
   };
-  const cancelarEspera = () => { cancelarRef.current = true; setEspera(null); };
+  const cancelarEspera = () => { peticionRef.current++; setEspera(null); };
   const esperando = espera && espera.estado === "PENDIENTE";
 
   return (

@@ -246,6 +246,28 @@ test("pedirAcceso: el primer estado lleva `avisados` tal cual lo devuelve el ser
   }
 });
 
+test("pedirAcceso: una consulta que vuelve APROBADA después de cancelar no guarda la sesión ni entra", async () => {
+  let cancelada = false;
+  const storage = almacen();
+  const api = {
+    solicitarInvitado: async () => ({ ok: true, solicitudToken: "t", expiraEn: 9 }),
+    // El usuario cancela (o pide otra cosa) MIENTRAS esta consulta está en vuelo.
+    estadoSolicitudInvitado: async () => { cancelada = true; return { ok: true, estado: "APROBADA", session: "S", residente: { id: "invitado", rol: "invitado" }, residentes: [] }; },
+  };
+  const fin = await pedirAcceso({ api, iniciar: () => api.solicitarInvitado("p"), storage, onSuccess: () => assert.fail("no debe entrar"), onError: () => assert.fail(), esperar: async () => {}, cancelado: () => cancelada });
+  assert.equal(fin, "CANCELADA");
+  assert.equal(storage.m.guardias_session, undefined);
+});
+
+test("pedirAcceso: si se cancela mientras se envía la solicitud, no pinta la espera", async () => {
+  let cancelada = false;
+  const estados = [];
+  const api = { solicitarInvitado: async () => { cancelada = true; return { ok: true, solicitudToken: "t", expiraEn: 9, avisados: 2 }; } };
+  const fin = await pedirAcceso({ api, iniciar: () => api.solicitarInvitado("p"), storage: almacen(), onSuccess: () => assert.fail(), onError: () => assert.fail(), onEstado: (e) => estados.push(e), esperar: async () => {}, cancelado: () => cancelada });
+  assert.equal(fin, "CANCELADA");
+  assert.deepEqual(estados, []);
+});
+
 test("pedirAcceso: rechazo y caducidad terminan la espera sin sesión", async () => {
   for (const estado of ["RECHAZADA", "CADUCADA"]) {
     const api = { solicitarInvitado: async () => ({ ok: true, solicitudToken: "t" }), estadoSolicitudInvitado: async () => ({ ok: true, estado }) };
