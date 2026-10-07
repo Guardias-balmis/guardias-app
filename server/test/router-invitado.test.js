@@ -29,7 +29,7 @@ function fakeSS(rows = {}) {
 }
 const ANA = { id: "ana", nombre: "Ana", email: "ana@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
 const ADMIN = { id: "adm", nombre: "Quique", email: "quiquemm14@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
-// El otro administrador: sin fila de residente no podría ni entrar, así que tampoco recibiría el aviso (V-55).
+// El otro administrador: sin fila de residente no podría ni entrar, así que tampoco recibiría el aviso (V-57).
 const AGUS = { id: "agus", nombre: "Agustín", email: "agustinlagioiosa@gmail.com", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" };
 
 function makeDeps({ residentes = [ANA, AGUS, ADMIN] } = {}) {
@@ -190,7 +190,7 @@ test("el invitado NO puede escribir ni leer lo sensible: escritura, ausencias, p
   for (const action of [
     "guardarAsignaciones", "marcarValidado", "publicarCuadrante", "despublicarCuadrante", "generarCuadranteIA",
     "crearBloqueo", "cancelarBloqueo", "guardarPreferencias", "editarResidente", "guardarPeriodos",
-    "ofrecerseResponsable", "ejecutarSorteoResponsable", "ofrecerse3P", "registrarImaginaria", "crearFestivos",
+    "ofrecerseResponsable", "ejecutarSorteoResponsable", "registrarImaginaria", "crearFestivos",
     "listBloqueos", "listBloqueosRango", "misBloqueos", "listPreferencias", "misPreferencias", "colaImaginaria",
     "listSolicitudesInvitado", "resolverSolicitudInvitado",
   ]) {
@@ -307,8 +307,8 @@ test("alta: un residente ya vinculado no puede pedirla, y una solicitud de invit
   assert.ok(inv.solicitudToken);
 });
 
-// ── A quién se avisa, y qué se le dice al solicitante (V-55) ──
-// Antes de V-55, pasada la ventana de administradores no se avisaba a nadie, y la pantalla del
+// ── A quién se avisa, y qué se le dice al solicitante (V-57) ──
+// Antes de V-57, pasada la ventana de administradores no se avisaba a nadie, y la pantalla del
 // solicitante seguía diciendo que sí. El aviso tiene que llegar justo a quien puede aprobar.
 const PEQ = { id: "peq", nombre: "Pepa", email: "peq@gmail.com", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" };
 const MUDO = { id: "mudo", nombre: "Sin email", email: "", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" };
@@ -320,12 +320,12 @@ function trasLaVentana({ mandatoDe } = {}) {
   return deps;
 }
 
-test("V-55: dentro de la ventana avisa a los administradores y la respuesta dice a cuántos", () => {
+test("V-57: dentro de la ventana avisa a los administradores y la respuesta dice a cuántos", () => {
   const deps = makeDeps();
   assert.equal(solicita(deps).avisados, 2);
 });
 
-test("V-55: pasada la ventana, con mandato vigente, avisa SOLO al Responsable, que es el único que puede aprobar", () => {
+test("V-57: pasada la ventana, con mandato vigente, avisa SOLO al Responsable, que es el único que puede aprobar", () => {
   const deps = trasLaVentana({ mandatoDe: "ana" });
   assert.equal(solicita(deps).avisados, 1);
   assert.deepEqual(deps.correos[0].para, ["ana@gmail.com"]);
@@ -336,7 +336,7 @@ test("V-55: pasada la ventana, con mandato vigente, avisa SOLO al Responsable, q
   assert.equal(call({ action: "resolverSolicitudInvitado", session: ana, id: pend.id, aprobar: true }, deps).ok, true);
 });
 
-test("V-55: pasada la ventana, sin mandato, avisa a todos los Mayores y a ningún Pequeño", () => {
+test("V-57: pasada la ventana, sin mandato, avisa a todos los Mayores y a ningún Pequeño", () => {
   const deps = trasLaVentana();
   assert.equal(solicita(deps).avisados, 2);
   assert.deepEqual([...deps.correos[0].para].sort(), ["ana@gmail.com", "quiquemm14@gmail.com"]);
@@ -344,14 +344,14 @@ test("V-55: pasada la ventana, sin mandato, avisa a todos los Mayores y a ningú
   assert.equal(call({ action: "listSolicitudesInvitado", session: pepa }, deps).ok, false, "a quien no se avisa tampoco puede aprobar");
 });
 
-test("V-55: el alta de un R1 pasada la ventana también avisa al Responsable", () => {
+test("V-57: el alta de un R1 pasada la ventana también avisa al Responsable", () => {
   const deps = trasLaVentana({ mandatoDe: "ana" });
   assert.equal(pideAlta(deps).avisados, 1);
   assert.deepEqual(deps.correos[0].para, ["ana@gmail.com"]);
   assert.match(deps.correos[0].asunto, /alta de residente/);
 });
 
-test("V-55: si el correo falla, no está configurado o no hay a quién mandarlo, la respuesta dice avisados: 0", () => {
+test("V-57: si el correo falla, no está configurado o no hay a quién mandarlo, la respuesta dice avisados: 0", () => {
   const falla = makeDeps();
   falla.sendMail = () => { throw new Error("cuota"); };
   assert.equal(solicita(falla).avisados, 0);
@@ -363,7 +363,7 @@ test("V-55: si el correo falla, no está configurado o no hay a quién mandarlo,
   assert.equal(sinDestinatario.correos.length, 0);
 });
 
-test("V-55: una solicitud reutilizada no afirma nada del correo (se mandó, o no, en otra petición)", () => {
+test("V-57: una solicitud reutilizada no afirma nada del correo (se mandó, o no, en otra petición)", () => {
   const deps = makeDeps();
   assert.equal(solicita(deps).avisados, 2);
   assert.equal("avisados" in solicita(deps), false);
@@ -392,13 +392,13 @@ test("el invitado no recibe las marcas V/R/B de la rejilla (bajas médicas inclu
   assert.equal(todas.length, 5, "a un residente no se le quita nada");
 });
 
-test("V-55: los destinatarios salen del permiso también DENTRO de la ventana: un administrador sin fila de residente no recibe un aviso que no podría atender", () => {
+test("V-57: los destinatarios salen del permiso también DENTRO de la ventana: un administrador sin fila de residente no recibe un aviso que no podría atender", () => {
   const deps = makeDeps({ residentes: [ANA, ADMIN] });
   assert.equal(solicita(deps).avisados, 1);
   assert.deepEqual(deps.correos[0].para, ["quiquemm14@gmail.com"]);
 });
 
-test("V-55: un administrador con el email en mayúsculas o con espacios en el Sheet recibe el aviso (normalizado) y PUEDE aprobar", () => {
+test("V-57: un administrador con el email en mayúsculas o con espacios en el Sheet recibe el aviso (normalizado) y PUEDE aprobar", () => {
   const deps = makeDeps({ residentes: [ANA, { ...ADMIN, email: "  Quiquemm14@gmail.com " }, AGUS] });
   assert.equal(solicita(deps).avisados, 2);
   assert.deepEqual([...deps.correos[0].para].sort(), ["agustinlagioiosa@gmail.com", "quiquemm14@gmail.com"]);
@@ -406,7 +406,7 @@ test("V-55: un administrador con el email en mayúsculas o con espacios en el Sh
   assert.equal(call({ action: "listSolicitudesInvitado", session: adm }, deps).ok, true);
 });
 
-test("V-55: pasada la ventana, un residente con fechas ilegibles no tumba la solicitud ni deja sin aviso a los demás Mayores", () => {
+test("V-57: pasada la ventana, un residente con fechas ilegibles no tumba la solicitud ni deja sin aviso a los demás Mayores", () => {
   const deps = trasLaVentana();
   deps.store.appendRecord("residentes", { id: "roto", nombre: "Fecha rota", email: "roto@gmail.com", fechaInicio: "27/05/2025", fechaFin: "2029-05-26" });
   const r = login(deps, "tutor@gmail.com");
@@ -416,7 +416,7 @@ test("V-55: pasada la ventana, un residente con fechas ilegibles no tumba la sol
   assert.deepEqual([...deps.correos[0].para].sort(), ["ana@gmail.com", "quiquemm14@gmail.com"]);
 });
 
-test("V-55: una celda de email que no es un email se salta, para que no tumbe el correo de todos", () => {
+test("V-57: una celda de email que no es un email se salta, para que no tumbe el correo de todos", () => {
   const deps = trasLaVentana();
   deps.store.appendRecord("residentes", { id: "basura", nombre: "Sin email real", email: "pendiente", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" });
   assert.equal(solicita(deps).avisados, 2);

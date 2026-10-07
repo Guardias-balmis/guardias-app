@@ -36,6 +36,10 @@ export const TABLES = {
   imaginaria: { name: "imaginaria", columns: [col("id"), col("grupo"), col("fechaIncidencia", "date"), col("residenteId"), col("registradaEn", "date"), col("activo", "bool")] },
   responsables: { name: "responsables", columns: [col("id"), col("periodoInicio", "date"), col("periodoFin", "date"), col("residenteId"), col("metodo"), col("voluntarios", "json"), col("semilla"), col("candidatos", "json"), col("fechaSorteo", "date")] },
   voluntariosResponsable: { name: "voluntariosResponsable", columns: [col("id"), col("residenteId"), col("periodoInicio", "date"), col("activo", "bool")] },
+  // RETIRADA como fuente de verdad (P-16/V-55): desde el 2026-10 los voluntarios del 3P salen de
+  // `preferencias.tercerPuesto`, mes a mes, y esta tabla ya no se lee ni se escribe. Se conserva
+  // —el historial no se borra nunca— con las altas y bajas del modelo anterior (compromiso de 4
+  // meses). Lo que sigue describe ESE modelo.
   // Voluntarios del TERCER PUESTO (INV-8a, decisión V-18). Se parece a voluntariosResponsable
   // —append-only, `activo` para retirarse reinsertando— pero NO lleva `periodoInicio`: el 3P no
   // se elige por periodos comunes, cada residente se apunta el día que quiere y su ciclo L-D
@@ -62,7 +66,12 @@ export const TABLES = {
   // preferencia personal. La columna se queda en el Sheet, como toda tabla append-only de este
   // proyecto, pero ya no se lee ni se escribe desde ningún sitio: las filas viejas con un valor
   // conservan su historia, sin más efecto.
-  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles"), col("fechasEvitar", "json"), col("notas")] },
+  // `tercerPuesto` (P-16/V-55) va la ÚLTIMA a propósito, como `modo` en `generaciones` (V-47): las
+  // hojas `preferencias` ya creadas conservan su cabecera de 8 columnas y `rowsToRecords` mapea por
+  // posición, así que una columna añadida al final se lee bien en las filas nuevas y sale
+  // `undefined` (= «no») en las viejas. Es la respuesta mensual a «¿Deseas hacer tercer puesto este
+  // mes?»: de ella se derivan los voluntarios de INV-8, ya no de `voluntarios3P`.
+  preferencias: { name: "preferencias", columns: [col("id"), col("residenteId"), col("anio", "number"), col("mes", "number"), col("maxGuardias", "number"), col("preferDobles"), col("fechasEvitar", "json"), col("notas"), col("tercerPuesto", "bool")] },
   // Fase 6.2: ciclo BORRADOR|VALIDADO|PUBLICADO por mes+año (spec.md §2 Cuadrante). Cada fila
   // es UNA transición de estado (append-only, `readLatest` por mes|anio se queda con la
   // última); `actorId`/`fecha` identifican quién la disparó y cuándo, sin distinguir un campo

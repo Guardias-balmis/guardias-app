@@ -87,10 +87,10 @@ export function quienApruebaSolicitudes(hoy = todayISO()) {
 }
 
 /**
- * Lo que la pantalla de espera dice del correo de aviso (V-55). Solo afirma que se ha avisado si el
+ * Lo que la pantalla de espera dice del correo de aviso (V-57). Solo afirma que se ha avisado si el
  * servidor dice que el correo salió (`avisados` > 0); si dice que no pudo avisar a nadie, se lo
  * pide al solicitante, porque quien aprueba no tiene otra forma de enterarse a tiempo; y si no lo
- * sabe (solicitud reutilizada, o un servidor anterior a V-55 que no lo devuelve), no afirma nada.
+ * sabe (solicitud reutilizada, o un servidor anterior a V-57 que no lo devuelve), no afirma nada.
  */
 export function textoAvisoSolicitud(avisados) {
   if (typeof avisados !== "number") return "";

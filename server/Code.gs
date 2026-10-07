@@ -53,7 +53,7 @@ function deps_() {
     issueNonce: issueNonce_,
     consumeNonce: consumeNonce_,
     fetchTokeninfo: fetchTokeninfo_,
-    // Aviso por correo a quien puede aprobar una solicitud de acceso (V-53, V-54, V-55). Es solo
+    // Aviso por correo a quien puede aprobar una solicitud de acceso (V-53, V-54, V-57). Es solo
     // un aviso: la aprobación se hace dentro de la app. Necesita el permiso de Gmail/MailApp
     // (`script.send_mail`): la PRIMERA vez que se despliegue con esto, Apps Script pide autorizarlo.
     sendMail: function (para, asunto, cuerpo) { MailApp.sendEmail(para.join(","), asunto, cuerpo); },

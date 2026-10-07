@@ -22,7 +22,7 @@ test("accumulatedTally cuenta las guardias del residente dentro de SU año de re
 test("accumulatedTally: residente cuyo año de residencia en curso aún no ha empezado da todo a cero (sin lanzar)", () => {
   const asignaciones = [{ residenteId: "nuevo", fecha: "2026-07-12", codigo: "G" }]; // tras hasta, no cuenta igualmente
   const out = accumulatedTally([NUEVO], asignaciones, "2026-06-30"); // el periodo de NUEVO empieza el 10-jul
-  assert.deepEqual(out.get("nuevo"), { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 });
+  assert.deepEqual(out.get("nuevo"), { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0 });
 });
 
 test("accumulatedTally no mezcla guardias de otro residente", () => {
