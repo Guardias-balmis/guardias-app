@@ -365,6 +365,7 @@ Recordatorio de §0: si esta spec contradice la normativa, gana la normativa.
 | S-5 | Doblete de borde de mes contado por fechas reales, atribuido al mes del viernes | El Excel los pierde; la equidad anual es la que manda |
 | S-6 | Cero dependencias en el dominio (`node:test`, ES modules) | Durabilidad 10 años: sin toolchain que se pudra |
 | S-7 | Código en inglés, dominio documentado en español (JSDoc), códigos G/GF/GP/3P/V/R/B literales | Convención del proyecto |
+| S-8 | La sesión vive en `localStorage` (no en `sessionStorage`), caduca sola a las 12 h y `getSession` descarta la caducada; el botón «atrás» del móvil navega entre pantallas con el historial del navegador (`client/lib/navegacion.js`) | Decisión de Quique (2026-10-07): en el móvil, «atrás» sacaba de la app —no había historial— y, si la había abierto un enlace, cerraba la pestaña y con ella la sesión, así que cada salida sin querer obligaba a repetir el login entero. El token es propio (solo autoriza llamadas a este backend) y caduca solo; la contrapartida asumida es que en un móvil compartido quien lo coja entra con esa cuenta hasta que caduque o alguien cierre sesión |
 
 ## 7. Estado de implementación
 
