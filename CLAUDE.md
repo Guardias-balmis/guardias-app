@@ -97,6 +97,7 @@ Load-bearing contracts, easy to silently break:
   volvía a compararse sobre ceros en silencio. El aviso solo se emite cuando el invocador pasa
   `festivos` (los tests que inyectan `acumulados` a mano no lo ven) y cuando alguna cohorte tiene
   ≥2 miembros, que es cuando el eje se compara con alguien.
+- **Festivos (V-61):** la base de la Comunitat Valenciana la calcula `v2/domain/holidays.js:valencianHolidays` (fijos, Viernes Santo y Lunes de Pascua; los fijos en domingo se omiten, como en el decreto de 2026) y el servidor la une a la tabla `festivos` en `festivosEfectivos` (router.js): fila activa de la tabla gana a la base de su fecha, fila anulada la quita, id `auto:<fecha>` para anular un automático. **No leas `festivos` directamente** (`allFestivos` es solo la tabla): usa `festivosEfectivos`/`festivosInRange`, o un año sin cargar vuelve a parecer sin festivos. Locales de Alicante y traslados del Consell siguen siendo manuales, a revisar cada año tras el decreto de julio.
 - **Los 15 invariantes están implementados** (INV-12 desde V-17; INV-8 desde V-18; INV-10 e INV-13
   desde V-20). Dos matices que hay que tener presentes antes de dar algo por comprobado:
   **INV-13 (Imaginaria) NO lo comprueba `validateMonth`** y es deliberado — es una herramienta que

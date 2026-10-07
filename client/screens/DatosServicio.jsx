@@ -89,10 +89,14 @@ function Festivos({ api, anio, showToast, puedoEscribir }) {
   return (
     <Card title={`🎄 Festivos ${anio}`}>
       <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
-        Son <b>datos de entrada</b>: la app nunca los calcula ni se los pregunta a la IA. Sin ellos,
-        el validador no puede comprobar que una GF caiga en festivo (INV-12) ni repartir los puentes.
-        Incluye también los <b>locales de Alicante</b>: cambian de fecha cada año y sin ellos se
-        avisaría en falso sobre guardias correctas.
+        La app añade <b>sola</b> los festivos de la Comunitat Valenciana de cada año (los de fecha fija,
+        el Viernes Santo y el Lunes de Pascua), marcados como <i>automático</i>. Lo que hay que hacer
+        a mano, <b>una vez al año</b>: los <b>locales de Alicante</b> (cambian de fecha) y lo que
+        decida el Consell en su decreto de calendario laboral, que se publica en julio — por
+        ejemplo un festivo trasladado de domingo a lunes, que se añade abajo. Si algún automático no
+        consta en el decreto de ese año, anúlalo con la ✕. Nunca se le pregunta a la IA: sin
+        festivos correctos el validador no puede comprobar que una GF caiga en festivo (INV-12) ni
+        repartir los puentes.
       </div>
 
       {festivos === null ? (
@@ -109,6 +113,7 @@ function Festivos({ api, anio, showToast, puedoEscribir }) {
               }}>
                 <b>{fechaLarga(f.fecha)}</b>
                 {f.nombre ? <span style={{ opacity: 0.85 }}>{f.nombre}</span> : null}
+                {f.origen === "AUTO" ? <span style={{ opacity: 0.6, fontSize: 10, fontStyle: "italic" }}>automático</span> : null}
                 {puedoEscribir && (
                   <button onClick={() => anular(f.id, f.fecha)} disabled={busy} title="Anular"
                     style={{ border: "none", background: "transparent", color: COLOR.red, cursor: "pointer", fontSize: 14, padding: 0, lineHeight: 1 }}>×</button>
