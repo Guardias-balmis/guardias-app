@@ -8,7 +8,7 @@ Guardias · Dr. Balmis — an on-call-shift ("guardia") scheduling tool for Radi
 
 The "v2" rewrite is live: `main` served the old v1 client until the cutover on 2026-07-24, and now serves this codebase. Residents are testing it in production against the real Sheet, so treat anything reaching `main` as reaching them.
 
-Shift-code vocabulary used everywhere (domain, UI, Sheets) — never translate or rename: `G` guardia ordinaria · `GF` guardia festiva · `GP` guardia prefestivo · `3P` tercer puesto (voluntario) · `V` vacaciones · `R` rotación externa · `B` baja.
+Shift-code vocabulary used everywhere (domain, UI, Sheets) — never translate or rename: `G` guardia ordinaria · `GF` guardia festiva · `GP` guardia prefestivo · `3P` tercer puesto (voluntario) · `V` vacaciones · `R` rotación externa · `B` baja · `C` congreso (V-62).
 
 ## Commands
 
@@ -47,7 +47,7 @@ Governing principle (spec.md §1): **derive, don't store**. A resident's level (
 
 Dates are always ISO `"YYYY-MM-DD"` strings, validated strictly by `calendar.js:parseISO`, with all arithmetic through `Date.UTC(...)` — never the local-timezone `Date` constructor — and **months are 1–12 everywhere**, never JS's native 0–11. This convention exists specifically to make impossible a real v1 bug: a +1-month offset caused by `Date.getMonth()`. Never hand-roll `new Date(anio, mes, ...)`; always go through `calendar.js` helpers.
 
-`Bloqueo` (motivo BAJA | VACACIONES | ROTACION) is deliberately split from `Preferencias.fechasEvitar`: only `motivo=BAJA` is DURO (hard) and blocks assignment (INV-5); VACACIONES/ROTACION are informative — they never block by themselves but still feed INV-2/6/7 and equity's availability discount. `fechasEvitar` is pure soft preference and is never enforced by the validator. Don't collapse these into one table.
+`Bloqueo` (motivo BAJA | VACACIONES | ROTACION | CONGRESO) is deliberately split from `Preferencias.fechasEvitar`: only `motivo=BAJA` is DURO (hard) and blocks assignment (INV-5); VACACIONES/ROTACION/CONGRESO are informative — they never block by themselves but still feed INV-2/6/7 and equity's availability discount. `fechasEvitar` is pure soft preference and is never enforced by the validator. Don't collapse these into one table.
 
 **Toda lectura de `bloqueos` pasa por `v2/domain/absences.js` (decisión V-19).** Los criterios de
 cada invariante son distintos a propósito y están nombrados allí (`BLOQUEA_ASIGNACION` para INV-5,
