@@ -12,6 +12,7 @@
 // comprobar en cada acción; aquí solo se decide qué se enseña.
 import { COLOR, S } from "./client/lib/design-tokens.js";
 import { parseFestivos } from "./client/lib/festivos-parse.js";
+import { anioARevisar } from "./client/lib/revision-festivos.js";
 import { puedeMoverCiclo, esAccesoDesarrollador } from "./client/lib/permisos.js";
 import { periodsOfResident, levelOn } from "./v2/domain/residents.js";
 import { bridgesOfMonth } from "./v2/domain/calendar.js";
@@ -33,11 +34,26 @@ function nivelEn(residente, fecha) {
 }
 
 /** Festivos de un año: lo cargado, y el pegado en lote con vista previa antes de escribir. */
-function Festivos({ api, anio, showToast, puedoEscribir }) {
+function Festivos({ api, anio, showToast, puedoEscribir, puedeRevisar }) {
   const [festivos, setFestivos] = useState(null);
   const [error, setError] = useState(null);
   const [texto, setTexto] = useState("");
   const [busy, setBusy] = useState(false);
+  // Revisión anual (V-63): quién y cuándo comprobó el calendario de este año.
+  const [revision, setRevision] = useState(null);
+  const cargarRevision = async () => {
+    const pedido = anio;
+    const r = await api.estadoRevisionFestivos(pedido);
+    if (pedido === anioEnPantallaRef.current) setRevision(r.ok ? r : null);
+  };
+  useEffect(() => { setRevision(null); cargarRevision(); }, [anio]);
+  const confirmarRevision = async () => {
+    setBusy(true);
+    const r = await api.confirmarRevisionFestivos(anio);
+    setBusy(false);
+    if (r.ok) { showToast(`Festivos de ${anio} marcados como revisados ✓`); cargarRevision(); }
+    else showToast("No se pudo confirmar: " + r.error, "err");
+  };
 
   // Una respuesta que llega tarde de OTRO año no pisa la del año en pantalla (dos pulsaciones de ›
   // seguidas con latencia dispar de Apps Script): mismo guardarraíl que `mesEnPantallaRef` en Prefs.
@@ -98,6 +114,27 @@ function Festivos({ api, anio, showToast, puedoEscribir }) {
         festivos correctos el validador no puede comprobar que una GF caiga en festivo (INV-12) ni
         repartir los puentes.
       </div>
+
+      {revision && (
+        <div style={{ fontSize: 12, lineHeight: 1.5, padding: "8px 10px", borderRadius: 8, marginBottom: 10,
+          background: revision.revisado ? COLOR.greenLight : COLOR.amberLight, color: COLOR.blueDark }}>
+          {revision.revisado ? (
+            <>✅ Calendario de {anio} revisado{revision.por ? ` por ${revision.por}` : ""}{revision.fecha ? ` el ${fechaLarga(revision.fecha)}` : ""}.</>
+          ) : (
+            <>
+              ⏳ Calendario de {anio} <b>sin revisar</b>. En la reunión de guardias de comienzo de año,
+              con el decreto del Consell delante: comprueba los automáticos, añade los locales de Alicante
+              y los traslados, y marca el año como revisado.
+              {puedeRevisar && (
+                <div style={{ marginTop: 6 }}>
+                  <Btn onClick={confirmarRevision} disabled={busy} color={COLOR.blue} textColor="#fff">Marcar {anio} como revisado</Btn>
+                </div>
+              )}
+              {!puedeRevisar && <div style={{ marginTop: 4, opacity: 0.8 }}>Lo confirma el Responsable del contaje (o un R3/R4 si el mandato está sin decidir).</div>}
+            </>
+          )}
+        </div>
+      )}
 
       {festivos === null ? (
         <div style={{ fontSize: 13, color: COLOR.grayDark }}>Cargando…</div>
@@ -404,7 +441,8 @@ function Excepciones({ api, showToast, puedoEscribir }) {
 function DatosServicioScreen() {
   const app = window.useApp();
   const { api, residentes, showToast, setTab, myResidente } = app;
-  const [anio, setAnio] = useState(Number(todayISO().slice(0, 4)));
+  // Desde diciembre se abre en el año siguiente: es el que toca revisar (V-63).
+  const [anio, setAnio] = useState(anioARevisar(todayISO()));
   // Mismo criterio y misma fuente que Calendar.jsx y Prefs.jsx: `sinResponsable` lo dice el
   // servidor en estadoCuadrante, nunca el `rol` del token, que se firmó en el login.
   const [sinResponsable, setSinResponsable] = useState(false);
@@ -437,7 +475,7 @@ function DatosServicioScreen() {
         </div>
       </Card>
 
-      <Festivos api={api} anio={anio} showToast={showToast} puedoEscribir={true} />
+      <Festivos api={api} anio={anio} showToast={showToast} puedoEscribir={true} puedeRevisar={puedeExcepciones} />
       <Eventos api={api} residentes={residentes} showToast={showToast} puedoEscribir={true} />
 
       {!puedeExcepciones && (

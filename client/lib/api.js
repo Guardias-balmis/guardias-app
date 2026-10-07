@@ -34,7 +34,7 @@ const REINTENTABLES = new Set([
   "listResidentes", "listAsignaciones", "listAsignacionesRango",
   "misPreferencias", "listPreferencias", "misBloqueos", "listBloqueos", "listBloqueosRango",
   "listFestivosRango", "listEventos", "listExcepciones", "colaImaginaria",
-  "estadoResponsable", "listResponsables", "estadoCuadrante", "estadoVoluntariado3P", "lote",
+  "estadoResponsable", "listResponsables", "estadoCuadrante", "estadoVoluntariado3P", "estadoRevisionFestivos", "lote",
 ]);
 
 /**
@@ -48,7 +48,7 @@ const LOTEABLES = new Set([
   "misPreferencias", "listPreferencias", "misBloqueos", "listBloqueos", "listBloqueosRango",
   "listFestivosRango", "listEventos", "listExcepciones", "colaImaginaria",
   "estadoResponsable", "listResponsables", "estadoCuadrante", "estadoVoluntariado3P",
-  "listSolicitudesInvitado",
+  "listSolicitudesInvitado", "estadoRevisionFestivos",
 ]);
 const LOTE_VENTANA_MS = 10; // lo que se espera a que lleguen las demás lecturas de la misma pantalla
 const LOTE_MAX = 12;
@@ -250,6 +250,9 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession, onSessionInval
     listFestivosRango: (desde, hasta) => authed("listFestivosRango", { desde, hasta }),
     crearFestivos: (festivos) => authed("crearFestivos", { festivos }),
     anularFestivo: (id) => authed("anularFestivo", { id }),
+    /** Revisión anual de los festivos (V-63): quién y cuándo comprobó el calendario del año. */
+    estadoRevisionFestivos: (anio) => authed("estadoRevisionFestivos", { anio }),
+    confirmarRevisionFestivos: (anio) => authed("confirmarRevisionFestivos", { anio }),
     cancelarBloqueo: (id) => authed("cancelarBloqueo", { id }),
     /**
      * Tercer puesto (INV-8, P-16/V-55): lo que hace falta del mes pedido (`voluntarios`, `periodos`,

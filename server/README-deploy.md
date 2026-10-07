@@ -25,6 +25,8 @@ mano, cada vez que algo llega de verdad a producción.
 
 **Pendiente de desplegar (V-61, festivos automáticos):** `domain.gs` (módulo nuevo `holidays`) **y `server-lib.gs`**, juntos y en UNA «Nueva versión»; `Code.gs` no cambia. Si solo se pega `server-lib.gs`, el servidor sigue funcionando pero sin festivos automáticos (devuelve solo la tabla). El cliente es compatible con el servidor antiguo (sin la etiqueta «automático»). Para comprobarlo: en Cuadrante, octubre de 2026 con la tabla de festivos vacía debe marcar el 9 y el 12; y en Ajustes → Datos del servicio, «Festivos 2027» debe salir con sus festivos marcados «automático».
 
+**Pendiente de desplegar (V-62 congresos y V-63 revisión anual de festivos):** `domain.gs` **y `server-lib.gs`** juntos, en la misma «Nueva versión» que V-61 si aún no está desplegada; `Code.gs` no cambia. La hoja `revisionesFestivos` se crea sola al confirmar la primera revisión. Un servidor anterior rechaza el motivo `CONGRESO` («motivo inválido») y no conoce `estadoRevisionFestivos` («acción desconocida», y el aviso de Inicio simplemente no sale). Para comprobarlo: en Inicio, como Responsable o R3/R4, tarjeta «Revisar los festivos de 2026»; y en Preferencias, el motivo «Congreso» al añadir una ausencia.
+
 Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
 `/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el
 cliente está hablando con un backend que ya no es este (DR-4).

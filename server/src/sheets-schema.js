@@ -103,6 +103,11 @@ export const TABLES = {
   // segundos (no `date`: la ventana de aprobación es de 5 minutos). Guarda el email de quien pidió
   // entrar —es la traza de quién miró el cuadrante o se dio de alta— y NO crea ningún residente por sí sola.
   solicitudesInvitado: { name: "solicitudesInvitado", columns: [col("id"), col("email"), col("solicitadoEn", "number"), col("estado"), col("decididoPor"), col("decididoEn", "number"), col("tipo"), col("nombre"), col("fechaInicio", "date"), col("fechaFin", "date")] },
+  // Revisión anual de los festivos (V-63): una fila por año revisado, append-only. Quien dirige la
+  // reunión de guardias de comienzo de año marca que se ha comprobado el calendario del Consell
+  // (traslados, locales de Alicante); mientras no haya fila de ese año, Inicio se lo recuerda a
+  // quien puede confirmarlo. `fecha` es el día de la confirmación (ISO).
+  revisionesFestivos: { name: "revisionesFestivos", columns: [col("id"), col("anio", "number"), col("actorId"), col("fecha", "date")] },
   excepciones: { name: "excepciones", columns: [col("id"), col("tipo"), col("desde", "date"), col("hasta", "date"), col("justificacion"), col("registradaPor"), col("fecha", "date"), col("activo", "bool")] },
 };
 

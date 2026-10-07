@@ -171,3 +171,43 @@ test("V-61: un lote con listFestivosRango devuelve también los automáticos", (
   const r = call({ action: "lote", session, llamadas: [{ action: "listFestivosRango", desde: "2026-10-01", hasta: "2026-10-31" }, { action: "listEventos" }] }, deps);
   assert.equal(r.resultados[0].festivos.length, 2);
 });
+
+// ── revisión anual de los festivos (V-63) ────────────────────────────────────────────────────
+
+const revision = (deps, session, anio) => call({ action: "estadoRevisionFestivos", session, anio }, deps);
+
+test("V-63: un año sin revisar consta como pendiente, y cualquier sesión puede consultarlo", () => {
+  const deps = makeDeps();
+  const r = revision(deps, loggedIn(deps, "peque"), 2027);
+  assert.equal(r.ok, true);
+  assert.deepEqual([r.anio, r.revisado, r.por, r.fecha], [2027, false, "", ""]);
+});
+
+test("V-63: confirmar la revisión la deja registrada con quién y cuándo, y es idempotente", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps, "ana"); // sin Responsable designado, un Mayor puede (V-16)
+  const r = call({ action: "confirmarRevisionFestivos", session, anio: 2027 }, deps);
+  assert.equal(r.ok, true);
+  assert.deepEqual([r.revisado, r.por, r.fecha], [true, "Ana", "2027-07-16"]);
+  const filas = deps.store.readRecords("revisionesFestivos").length;
+  assert.equal(call({ action: "confirmarRevisionFestivos", session, anio: 2027 }, deps).ok, true);
+  assert.equal(deps.store.readRecords("revisionesFestivos").length, filas, "no apila otra fila");
+  assert.equal(revision(deps, session, 2028).revisado, false, "cada año se revisa por separado");
+});
+
+test("V-63: confirmar exige el permiso del ciclo; un Pequeño no puede apagar el recordatorio de todos", () => {
+  const deps = makeDeps();
+  const r = call({ action: "confirmarRevisionFestivos", session: loggedIn(deps, "peque"), anio: 2027 }, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /confirmar la revisión de los festivos/);
+  assert.equal(deps.store.readRecords("revisionesFestivos").length, 0);
+});
+
+test("V-63: un año inválido se rechaza y la consulta viaja en un lote", () => {
+  const deps = makeDeps();
+  const session = loggedIn(deps, "ana");
+  assert.equal(revision(deps, session, "2027").ok, false);
+  assert.equal(call({ action: "confirmarRevisionFestivos", session, anio: "x" }, deps).ok, false);
+  const l = call({ action: "lote", session, llamadas: [{ action: "estadoRevisionFestivos", anio: 2027 }] }, deps);
+  assert.equal(l.resultados[0].revisado, false);
+});
