@@ -602,6 +602,12 @@ function HomeScreen() {
   const hoy = new Date();
   const nombreMes = hoy.toLocaleDateString("es-ES", { month: "long", year: "numeric" });
 
+  // Mientras la lista del equipo no ha llegado (con la sesión guardada se pide aparte, y la primera
+  // petición tras un rato sin uso tarda segundos por el arranque en frío de Apps Script), Inicio
+  // enseñaba «0 residentes» en todo y parecía que faltaba gente. Un fallo NO cuenta como cargando:
+  // ese caso tiene su propia tarjeta roja con «Reintentar» (`residentesError`).
+  const cargandoEquipo = residentes.length === 0 && residentesIlegibles.length === 0 && !residentesError;
+
   // Agrupa por nivel derivado (no por un campo almacenado).
   const porNivel = { R4: [], R3: [], R2: [], R1: [] };
   for (const r of residentes) {
@@ -670,7 +676,7 @@ function HomeScreen() {
               los dos este botón abría otro mes bajo el rótulo «Mes en curso» (2026-10-07). */}
           <button onClick={() => { setMes(hoy.getMonth() + 1); setAnio(hoy.getFullYear()); setTab("calendar"); }} style={{ background: COLOR.blue, color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Ver cuadrante</button>
         </div>
-        <div style={{ fontSize: 13, color: COLOR.grayDark }}>Residentes activos: {residentes.length}</div>
+        <div style={{ fontSize: 13, color: COLOR.grayDark }}>{cargandoEquipo ? "Cargando equipo…" : `Residentes activos: ${residentes.length}`}</div>
       </Card>
 
       <Card title="⚙️ Mis preferencias del mes">
@@ -683,7 +689,12 @@ function HomeScreen() {
       </Card>
 
       <Card title="👥 Equipo">
-        {ANOS.map((n) => {
+        {cargandoEquipo && (
+          <div role="status" style={{ fontSize: 13, color: COLOR.grayDark, padding: "8px 0" }}>
+            Cargando equipo… (la primera consulta tras un rato sin usar la app puede tardar unos segundos)
+          </div>
+        )}
+        {!cargandoEquipo && ANOS.map((n) => {
           const abierto = nivelAbierto === n;
           return (
             <div key={n} style={{ borderBottom: n !== "R1" ? `1px solid ${COLOR.grayMid}` : "none" }}>
