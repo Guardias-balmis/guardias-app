@@ -18,6 +18,7 @@ import { violationText } from "./client/lib/violations.js";
 // de los meses dejan de poder validarse. Sin esto, eso se descubre al pulsar Validar.
 import { chainedNeighbour } from "./client/lib/rest.js";
 import { partirBloqueosLegibles, violacionesBloqueoIlegible } from "./client/lib/bloqueos.js";
+import { avisarAlSalir } from "./client/lib/aviso-salida.js";
 
 const { useState, useEffect, useRef } = React;
 const { Card, Btn, Aviso } = window.UI;
@@ -424,6 +425,10 @@ function CalendarScreen() {
     if (app.cambiosSinGuardarRef) app.cambiosSinGuardarRef.current = cambios.length;
     return () => { if (app.cambiosSinGuardarRef) app.cambiosSinGuardarRef.current = 0; };
   }, [cambios.length]);
+  // Recargar o cerrar la pestaña no pasa por App.jsx y se llevaba las celdas sin preguntar: eso lo
+  // pregunta el navegador, y solo mientras haya celdas pendientes (ver client/lib/aviso-salida.js).
+  const hayCambios = cambios.length > 0;
+  useEffect(() => avisarAlSalir(window, hayCambios), [hayCambios]);
 
   const guardar = async () => {
     if (cambios.length === 0) { showToast("No hay cambios que guardar"); return; }

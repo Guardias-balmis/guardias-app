@@ -56,6 +56,60 @@ export function puedeAnadirExtras({ isResponsable, grupo, sinResponsable, acceso
   return puedeMoverCiclo({ isResponsable, grupo, sinResponsable, accesoDesarrollador }) && (estado === "BORRADOR" || estado === "VALIDADO");
 }
 
+/**
+ * Qué enseña la tarjeta «Generar cuadrante» de Inicio para el mes seleccionado. `null` = la tarjeta
+ * no es para esta sesión; si no, la tarjeta se pinta, y con ella su selector de mes ◀/▶.
+ *
+ * Existe porque esconder la tarjeta era también esconder las flechas: un ◀ que caía en un mes
+ * PUBLICADO (o VALIDADO, antes de la fase 2) la hacía desaparecer entera y desde Inicio ya no había
+ * forma de volver al mes de hoy —«Mes en curso» seguía diciendo octubre y abría septiembre—. Y
+ * mientras respondía `estadoCuadrante` la tarjeta encogía a una línea sin flechas, así que el
+ * segundo toque de una ráfaga caía en otra cosa. De ahí las tres reglas:
+ *  - Se esconde SOLO cuando ya se sabe que no hay permiso del ciclo. Mientras no llega el estado
+ *    tampoco se sabe `sinResponsable` (viaja en la misma respuesta), así que hasta entonces se
+ *    enseña a quien PODRÍA tenerlo —el titular, el acceso de desarrollador o cualquier Mayor—;
+ *    esconderla ahí dejaba sin tarjeta, en el caso real de producción, a un Mayor sin Responsable.
+ *  - Con permiso, un mes en el que no se puede generar enseña POR QUÉ (`motivo`, `fases` vacía) en
+ *    vez de desaparecer.
+ *  - Mientras se comprueba, conserva la FORMA de la última vista resuelta (`anterior`): mismas
+ *    fases, mismo alto, nada pulsable. Solo así una ráfaga de ◀/▶ no mueve nada bajo el dedo.
+ * Las flechas se pintan siempre que se pinta la tarjeta, pero solo se pueden pulsar (`flechas`)
+ * con el permiso ya confirmado: si no, un Mayor con Responsable vigente podía cambiar de mes en el
+ * segundo que tarda la primera comprobación, ver desaparecer la tarjeta y quedarse en ese mes.
+ *
+ * Como el resto de este módulo, solo decide qué se ENSEÑA; el servidor vuelve a comprobarlo todo.
+ *
+ * @param {object} p  los cuatro de `puedeMoverCiclo` más:
+ *   - estado: el del mes según `estadoCuadrante`; null mientras se comprueba o si falló
+ *   - estadoError: el error de esa consulta, o null
+ *   - extrasDisponible: si el servidor desplegado entiende la fase 2 (`fasesGeneracion`)
+ *   - anterior: la última vista devuelta que no era «comprobando» ni error (o null)
+ * @returns {null | {fases: string[], motivo: null|"VALIDADO"|"PUBLICADO"|"OTRO", estado: string|null,
+ *   comprobando: boolean, error: string|null, activa: boolean, flechas: boolean}}
+ *   `fases` en orden de pantalla ("obligatorias" antes que "extras"); `activa` = se puede generar;
+ *   `flechas` = se puede cambiar de mes.
+ */
+export function vistaGenerador({ isResponsable, grupo, sinResponsable, accesoDesarrollador, estado, estadoError, extrasDisponible, anterior }) {
+  const quien = { isResponsable, grupo, sinResponsable, accesoDesarrollador };
+  const flechas = puedeMoverCiclo(quien);
+  if (estado == null) {
+    // `sinResponsable: true` es la hipótesis más generosa: quién tendría el permiso si resultara
+    // que no hay mandato. Quien no lo tendría ni así no va a ver la tarjeta pase lo que pase.
+    if (!puedeMoverCiclo({ ...quien, sinResponsable: true })) return null;
+    if (estadoError) return { fases: [], motivo: null, estado: null, comprobando: false, error: estadoError, activa: false, flechas };
+    return {
+      fases: anterior ? anterior.fases : [], motivo: anterior ? anterior.motivo : null,
+      estado: null, comprobando: true, error: null, activa: false, flechas,
+    };
+  }
+  if (!flechas) return null;
+  const fases = [];
+  if (puedeGenerarCuadrante({ ...quien, estado })) fases.push("obligatorias");
+  if (extrasDisponible && puedeAnadirExtras({ ...quien, estado })) fases.push("extras");
+  const motivo = estado === "BORRADOR" ? null : estado === "VALIDADO" ? "VALIDADO" : estado === "PUBLICADO" ? "PUBLICADO" : "OTRO";
+  return { fases, motivo, estado, comprobando: false, error: null, activa: fases.length > 0, flechas: true };
+}
+
 // Acceso de desarrollador para TODO el permiso del ciclo (decisión V-49, 2026-09-03, a pedido
 // explícito del autor de la app — amplía V-46, que cubría solo el botón de generar con IA): ahora
 // se pasa como `accesoDesarrollador` a `puedeMoverCiclo`, así que también se enseñan validar,

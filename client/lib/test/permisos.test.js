@@ -132,3 +132,94 @@ test("P-17: la fase de quintas y 3P se ofrece en Borrador y en Validado, nunca e
   assert.equal(puedeAnadirExtras({ ...RESPONSABLE, estado: "PUBLICADO" }), false);
   assert.equal(puedeAnadirExtras({ ...PEQUENO, estado: "VALIDADO" }), false);
 });
+
+// ── la tarjeta del generador de Inicio: cuándo se ve y qué ofrece (vistaGenerador) ─────────────
+//
+// El fallo que esto fija: esconder la tarjeta escondía también su selector de mes. Un ◀ hacia un
+// mes PUBLICADO la hacía desaparecer y desde Inicio no se podía volver; y mientras se comprobaba el
+// estado del mes encogía sin flechas, así que una ráfaga de toques caía en otra tarjeta.
+
+test("vistaGenerador: en Borrador ofrece las dos fases si el servidor entiende la segunda", async () => {
+  const { vistaGenerador } = await import("../permisos.js");
+  const v = vistaGenerador({ ...RESPONSABLE, estado: "BORRADOR", extrasDisponible: true });
+  assert.deepEqual(v, { fases: ["obligatorias", "extras"], motivo: null, estado: "BORRADOR", comprobando: false, error: null, activa: true, flechas: true });
+  assert.deepEqual(vistaGenerador({ ...RESPONSABLE, estado: "BORRADOR", extrasDisponible: false }).fases, ["obligatorias"], "servidor viejo: solo la fase 1");
+});
+
+test("vistaGenerador: un mes PUBLICADO no esconde la tarjeta (ni sus flechas): dice por qué no se genera", async () => {
+  const { vistaGenerador } = await import("../permisos.js");
+  const v = vistaGenerador({ ...RESPONSABLE, estado: "PUBLICADO", extrasDisponible: true });
+  assert.notEqual(v, null);
+  assert.deepEqual(v.fases, []);
+  assert.equal(v.motivo, "PUBLICADO");
+  assert.equal(v.activa, false);
+  assert.equal(v.flechas, true, "y se puede salir de él con ◀/▶");
+});
+
+test("vistaGenerador: un mes VALIDADO ofrece solo la fase 2 (V-59), y si el servidor no la entiende, dice por qué", async () => {
+  const { vistaGenerador } = await import("../permisos.js");
+  const con = vistaGenerador({ ...RESPONSABLE, estado: "VALIDADO", extrasDisponible: true });
+  assert.deepEqual([con.fases, con.motivo, con.activa], [["extras"], "VALIDADO", true]);
+  const sin = vistaGenerador({ ...RESPONSABLE, estado: "VALIDADO", extrasDisponible: false });
+  assert.notEqual(sin, null, "antes desaparecía la tarjeta entera, flechas incluidas");
+  assert.deepEqual([sin.fases, sin.motivo, sin.activa], [[], "VALIDADO", false]);
+});
+
+test("vistaGenerador: un estado desconocido tampoco la esconde ni ofrece nada", async () => {
+  const { vistaGenerador } = await import("../permisos.js");
+  const v = vistaGenerador({ ...RESPONSABLE, estado: "ARCHIVADO", extrasDisponible: true });
+  assert.deepEqual([v.fases, v.motivo, v.estado, v.activa], [[], "OTRO", "ARCHIVADO", false]);
+});
+
+test("vistaGenerador: sabido el estado, quien no tiene el permiso del ciclo no ve la tarjeta", async () => {
+  const { vistaGenerador } = await import("../permisos.js");
+  for (const estado of ["BORRADOR", "VALIDADO", "PUBLICADO"]) {
+    assert.equal(vistaGenerador({ ...MAYOR, estado, extrasDisponible: true }), null, `Mayor con Responsable vigente, ${estado}`);
+    assert.equal(vistaGenerador({ ...PEQUENO, estado, extrasDisponible: true }), null, `Pequeño, ${estado}`);
+    assert.equal(vistaGenerador({ ...PEQUENO, sinResponsable: true, estado, extrasDisponible: true }), null, `Pequeño sin Responsable, ${estado}`);
+  }
+  assert.notEqual(vistaGenerador({ ...MAYOR, sinResponsable: true, estado: "PUBLICADO" }), null, "sin Responsable, un Mayor sí (V-16)");
+  assert.notEqual(vistaGenerador({ ...PEQUENO, accesoDesarrollador: true, estado: "PUBLICADO" }), null, "acceso de desarrollador (V-49)");
+});
+
+test("vistaGenerador: mientras se comprueba, cualquier Mayor la ve aunque aún no se sepa si hay Responsable", async () => {
+  // `sinResponsable` viaja en la misma respuesta que el estado: hasta que llega vale false, y
+  // esconderla por eso dejaba sin tarjeta a un Mayor justo en el caso real (sin Responsable).
+  const { vistaGenerador } = await import("../permisos.js");
+  const v = vistaGenerador({ ...MAYOR, estado: null });
+  assert.deepEqual(v, { fases: [], motivo: null, estado: null, comprobando: true, error: null, activa: false, flechas: false });
+  assert.equal(vistaGenerador({ ...PEQUENO, estado: null }), null, "un Pequeño no la tendría ni sin Responsable");
+});
+
+test("vistaGenerador: las flechas solo se pulsan con el permiso confirmado, nunca con el «a lo mejor»", async () => {
+  // Un Mayor con Responsable vigente ve la tarjeta el segundo que tarda la primera comprobación:
+  // si pudiera cambiar de mes ahí, al llegar la respuesta la tarjeta desaparecería y se quedaría
+  // en ese mes sin forma de volver desde Inicio — el mismo fallo que esto viene a quitar.
+  const { vistaGenerador } = await import("../permisos.js");
+  assert.equal(vistaGenerador({ ...MAYOR, estado: null }).flechas, false);
+  assert.equal(vistaGenerador({ ...MAYOR, sinResponsable: true, estado: null }).flechas, true, "ya se sabe que no hay Responsable (meses siguientes)");
+  assert.equal(vistaGenerador({ ...RESPONSABLE, estado: null }).flechas, true);
+  assert.equal(vistaGenerador({ ...PEQUENO, accesoDesarrollador: true, estado: null }).flechas, true);
+  assert.equal(vistaGenerador({ ...RESPONSABLE, estado: null, estadoError: "x" }).flechas, true, "con un fallo también se puede ir a otro mes");
+});
+
+test("vistaGenerador: mientras se comprueba conserva la forma de la última vista, sin nada pulsable", async () => {
+  const { vistaGenerador } = await import("../permisos.js");
+  const borrador = vistaGenerador({ ...RESPONSABLE, estado: "BORRADOR", extrasDisponible: true });
+  const v = vistaGenerador({ ...RESPONSABLE, estado: null, extrasDisponible: true, anterior: borrador });
+  assert.deepEqual(v.fases, ["obligatorias", "extras"], "misma forma: la ráfaga de ◀ no mueve nada");
+  assert.equal(v.comprobando, true);
+  assert.equal(v.activa, false, "no saber si el mes está publicado no es saber que no lo está");
+  const publicado = vistaGenerador({ ...RESPONSABLE, estado: "PUBLICADO" });
+  const w = vistaGenerador({ ...RESPONSABLE, estado: null, anterior: publicado });
+  assert.deepEqual([w.fases, w.motivo, w.activa], [[], "PUBLICADO", false]);
+});
+
+test("vistaGenerador: un fallo al comprobar el estado no es «comprobando»: se dice, con la tarjeta (y las flechas) puestas", async () => {
+  const { vistaGenerador } = await import("../permisos.js");
+  const v = vistaGenerador({ ...RESPONSABLE, estado: null, estadoError: "sin respuesta del servidor" });
+  assert.deepEqual(v, { fases: [], motivo: null, estado: null, comprobando: false, error: "sin respuesta del servidor", activa: false, flechas: true });
+  // Tras un fallo Home deja `sinResponsable` en false; un Mayor sigue viendo el error para poder reintentar.
+  assert.equal(vistaGenerador({ ...MAYOR, estado: null, estadoError: "x" }).error, "x");
+  assert.equal(vistaGenerador({ ...PEQUENO, estado: null, estadoError: "x" }), null);
+});
