@@ -652,22 +652,13 @@ var Tally = (function () {
 // mejora del doblete de borde de mes (S-5). Deliberadamente "tonto": cuenta códigos
 // por fecha; la coherencia código-vs-festivo la valida otro invariante, no esto.
 //
-// Una guardia computable = código G/GF/GP sin `origen` (cedida/comprada/refuerzo). El 3P, las
-// cedidas/compradas y los refuerzos se registran en contadores propios y quedan fuera de la
-// equidad (INV-4, P-15). Los contadores se SOLAPAN: una GF en sábado suma a total, finde y festivos.
+// Una guardia computable = código G/GF/GP sin `origen` (cedida/comprada). El 3P y las
+// cedidas/compradas se registran en contadores propios y quedan fuera de la equidad
+// (INV-4). Los contadores se SOLAPAN: una GF en sábado suma a total, finde y festivos.
 
   const { weekday, addDays, compareISO, parseISO } = Calendar;
 
 const GUARDIA = new Set(["G", "GF", "GP"]);
-
-/**
- * `origen` de una guardia de REFUERZO (P-15): la que se pone sobre un día que ya tenía su Mayor y
- * su Pequeño, en vez de cubrir el hueco de un día con una sola persona. Es opcional y voluntaria,
- * así que va en su propio contaje y fuera de los seis ejes de INV-3 (como el 3P, INV-4), y no la
- * cuenta INV-2. Una guardia que SÍ cubre un hueco no lleva este origen y suma al contaje global.
- * Se exporta porque validate, equity y projection necesitan reconocerla con la misma cadena.
- */
-const ORIGEN_REFUERZO = "REFUERZO";
 
 /** ¿La asignación es una guardia computable (ocupa puesto y cuenta para equidad)? */
 function isComputable(asig) {
@@ -685,7 +676,7 @@ function inWindow(fecha, window) {
  *        la ventana) se usa para el lookahead del doblete; solo las de dentro cuentan.
  * @param {{start:string, end:string}} window
  * @returns {{total:number, finde:number, festivos:number, prefestivos:number,
- *            dobletes:number, tercerPuesto:number, cedidasCompradas:number, refuerzos:number}}
+ *            dobletes:number, tercerPuesto:number, cedidasCompradas:number}}
  */
 function tally(asignaciones, window) {
   parseISO(window.start);
@@ -700,13 +691,12 @@ function tally(asignaciones, window) {
   const byDate = new Map();
   for (const asg of asignaciones) byDate.set(asg.fecha, asg);
 
-  const counters = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0 };
+  const counters = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 };
 
   for (const asg of asignaciones) {
     if (!inWindow(asg.fecha, window)) continue; // solo cuenta lo de dentro de la ventana
 
     if (asg.codigo === "3P") { counters.tercerPuesto++; continue; }
-    if (asg.origen === ORIGEN_REFUERZO) { if (GUARDIA.has(asg.codigo)) counters.refuerzos++; continue; } // contaje aparte (P-15)
     if (asg.origen) { counters.cedidasCompradas++; continue; } // registrada aparte, no computa
 
     if (!GUARDIA.has(asg.codigo)) continue; // V/R/B: no suman a ningún contador
@@ -744,7 +734,7 @@ function tallyByResident(asignaciones, window) {
   return out;
 }
 
-  return { ORIGEN_REFUERZO, tally, tallyByResident };
+  return { tally, tallyByResident };
 })();
 
 // ── absences.js ──
@@ -1171,7 +1161,7 @@ var Accumulate = (function () {
   const { periodsOfResident, periodOn } = Residents;
   const { tally } = Tally;
 
-const ZERO = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0 };
+const ZERO = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 };
 
 /**
  * @param {{id:string, fechaInicio:string, fechaFin?:string}[]} residentes
@@ -1212,11 +1202,11 @@ function accumulatedTally(residentes, asignaciones, hasta) {
 // ── thirdpost.js ──
 var Thirdpost = (function () {
 // Validación del tercer puesto (INV-8, spec.md §5). El 3P es siempre voluntario y se
-// registra aparte. Cuatro reglas: (a) solo voluntarios; (b) rotación de días por
+// registra aparte. Cinco reglas: (a) solo voluntarios; (b) rotación de días por
 // residente (7 días L-D distintos antes de repetir, acumula entre meses, reinicia al
 // completar el ciclo); (c) equidad ≤1 entre voluntarios al cierre del año de residencia;
-// (d) prioridad a los días con R1 de "mochila". El 3P no computa en la equidad de
-// guardias obligatorias (eso lo garantiza tally excluyendo 3P; aquí no se re-verifica).
+// (d) prioridad a los días con R1 de "mochila"; (e) no hay 3P mientras algún día tenga
+// menos de dos personas. El 3P no computa en la equidad de guardias obligatorias (eso lo garantiza tally excluyendo 3P; aquí no se re-verifica).
 //
 // Las CUATRO son `aviso` (decisión V-18, que extiende V-14): ninguna impide validar. Las dos
 // que aún eran `error` —8a, 3P a quien no consta voluntario, y 8b, repetir día de semana— lo
@@ -1356,6 +1346,27 @@ function validateThirdPost(ctx) {
     violations.push(aviso(`Existe 3P el ${culpable.fecha} (día sin R1) mientras el día de mochila ${dia} queda sin 3P: los 3P deben cubrir primero los días con R1`, { fecha: dia, residenteId: culpable.residenteId }));
   }
 
+  // ── INV-8e: el tercer puesto no va mientras algún día tiene menos de dos personas (P-17/V-58) ──
+  // La tercera persona de un día es SIEMPRE un 3P (apoyo hasta las 20 h, el último que se añade a la
+  // guardia, sea del nivel que sea): no hay un «refuerzo» de 24 h distinto. Y no puede ir mientras
+  // algún día del mes está cubierto por una sola persona o por ninguna: ese hueco se cubre antes con
+  // una guardia completa —que puede ser la quinta o la sexta de alguien— y el 3P solo viene después.
+  // Aviso, como las demás (el tercer puesto es voluntario y la regla orienta, no bloquea).
+  const personasPorDia = new Map(days.map((d) => [d, 0]));
+  for (const a of asignaciones) {
+    if (!personasPorDia.has(a.fecha) || !["G", "GF", "GP"].includes(a.codigo)) continue;
+    const r = byId.get(a.residenteId);
+    if (r && ["R1", "R2", "R3", "R4"].includes(levelOn(periodsOfResident(r), a.fecha))) personasPorDia.set(a.fecha, personasPorDia.get(a.fecha) + 1);
+  }
+  // Sin ninguna guardia en el mes no hay cobertura que juzgar (INV-1 ya da cada día vacío como error).
+  const hayGuardias = [...personasPorDia.values()].some((n) => n > 0);
+  const huecoDelMes = hayGuardias ? days.find((d) => personasPorDia.get(d) < 2) : undefined;
+  if (huecoDelMes) {
+    for (const a of thisMonth3P) {
+      violations.push(aviso(`Tercer puesto de ${a.residenteId} el ${a.fecha} mientras el ${huecoDelMes} queda con menos de dos personas: el tercer puesto no va hasta que todos los días tengan sus dos guardias`, { fecha: a.fecha, residenteId: a.residenteId }));
+    }
+  }
+
   // ── INV-8c: equidad al cierre del año de residencia ──
   // Agrupa voluntarios que cierran su año de residencia ESTE mes, por cohorte.
   const cerrandoPorCohorte = new Map();
@@ -1492,7 +1503,7 @@ var Equity = (function () {
 // en el mes en que cierra el último de los dos (`earlierClosedPeers`).
 
   const { compareISO, addDays, addYears, datesOfMonth, toISO, daysInMonth, trimesterWindow, bridgesOfMonth, bridgesBetween } = Calendar;
-  const { tally, ORIGEN_REFUERZO } = Tally;
+  const { tally } = Tally;
   const { absences, DESCUENTA_DISPONIBILIDAD, AUSENTE_EN_PUENTE } = Absences;
   const { accumulatedTally } = Accumulate;
   const { periodsOfResident, closingPeriodOn, closedPeriodsBetween } = Residents;
@@ -2031,9 +2042,7 @@ function intersect(a, b) {
 function residentIsFreeOnBridge(id, asignaciones, puente, win, bloqueos = []) {
   if (!inRange(puente, win.start, win.end)) return false; // fuera de su ventana → no es suyo
   if (absences(bloqueos, { residenteId: id, motivos: AUSENTE_EN_PUENTE, fecha: puente }).length) return false;
-  // Un refuerzo (P-15) no le quita el puente a quien lo hace, igual que el 3P (INV-4): es voluntario y
-  // opcional, así que el eje mide si el REPARTO obligatorio se lo quitó, no si él eligió trabajar.
-  return !asignaciones.some((a) => a.residenteId === id && GUARDIA.includes(a.codigo) && a.origen !== ORIGEN_REFUERZO && a.fecha === puente);
+  return !asignaciones.some((a) => a.residenteId === id && GUARDIA.includes(a.codigo) && a.fecha === puente);
 }
 
 function daysInclusive(a, b) {
@@ -2108,7 +2117,7 @@ var Validate = (function () {
 
   const { datesOfMonth, weekday, compareISO, academicYearOf, toISO, addDays, isHoliday } = Calendar;
   const { periodsOfResident, levelOn, groupOf } = Residents;
-  const { tally, ORIGEN_REFUERZO } = Tally;
+  const { tally } = Tally;
   const { absences, isNearbyRotation, BLOQUEA_ASIGNACION, EXIME_DEL_MINIMO, AUSENCIA_SIMULTANEA } = Absences;
 
 const GUARDIA = new Set(["G", "GF", "GP"]);          // ocupan puesto obligatorio
@@ -2261,13 +2270,11 @@ function validateMonth(ctx) {
   // ── INV-1 / INV-9: paridad Mayor+Pequeño por día ──
   for (const fecha of days) {
     const guardias = byDay.get(fecha).filter((a) => GUARDIA.has(a.codigo));
-    const roles = guardias.map((a) => ({ id: a.residenteId, level: levelOnDay(a.residenteId, fecha), group: groupOf(levelOnDay(a.residenteId, fecha)), refuerzo: a.origen === ORIGEN_REFUERZO }));
-    // La composición se juzga sobre la BASE del día: los refuerzos (P-15) son una tercera persona
-    // voluntaria, de cualquier nivel, y con ella siempre coexisten dos de un mismo grupo — no es
-    // un defecto que avisar.
-    const base = roles.filter((r) => !r.refuerzo);
-    const mayores = base.filter((r) => r.group === "MAYOR");
-    const pequenos = base.filter((r) => r.group === "PEQUENO");
+    const roles = guardias.map((a) => ({ id: a.residenteId, level: levelOnDay(a.residenteId, fecha), group: groupOf(levelOnDay(a.residenteId, fecha)) }));
+    // La tercera persona de un día es un 3P (apoyo hasta las 20 h) y el 3P NO ocupa puesto: no está en
+    // `GUARDIA`, así que no entra aquí. Tres guardias G/GF/GP el mismo día sí avisan (P-14).
+    const mayores = roles.filter((r) => r.group === "MAYOR");
+    const pequenos = roles.filter((r) => r.group === "PEQUENO");
     const noAsignables = roles.filter((r) => r.group === null);
 
     // Asignaciones a quien no es asignable ese día (residencia terminada, no empezada, o id
@@ -2284,7 +2291,7 @@ function validateMonth(ctx) {
         { fecha, residenteId: r.id }));
     }
 
-    if (base.length === 2 && pequenos.length === 2 && pequenos.every((p) => p.level === "R2")) {
+    if (guardias.length === 2 && pequenos.length === 2 && pequenos.every((p) => p.level === "R2")) {
       // Candidato 2×R2 → lo gobierna INV-9
       if (!twoR2Justified(fecha)) {
         const antesDeDiciembre = compareISO(fecha, toISO(academicYearOf(fecha), 12, 1)) < 0;
@@ -2320,10 +2327,10 @@ function validateMonth(ctx) {
     if (mayores.length >= 2 || pequenos.length >= 2) {
       const n = mayores.length >= 2 ? `${mayores.length} Residentes Mayores` : `${pequenos.length} Residentes Pequeños`;
       const falta = mayores.length === 0 ? "; falta el puesto de Mayor" : pequenos.length === 0 ? "; falta el puesto de Pequeño" : "";
-      violations.push(aviso("INV-1", `El ${fecha} hay ${n}${falta}: la composición habitual es un Mayor y un Pequeño (si es un refuerzo, márcalo como tal)`, { fecha }));
+      violations.push(aviso("INV-1", `El ${fecha} hay ${n}${falta}: la composición habitual es un Mayor y un Pequeño (si es un apoyo de tarde, regístralo como tercer puesto)`, { fecha }));
       continue;
     }
-    if (noAsignables.length > 0 && roles.every((r) => r.group === null)) {
+    if (noAsignables.length > 0) {
       // El día TIENE nombres escritos en la rejilla: decirlo así, y no «sin cubrir», que es lo
       // que lo hacía indistinguible de un día vacío. Aviso por lo mismo que el bucle de arriba
       // (V-21) — el aviso de cada asignación ya dice a quién hay que arreglar.
@@ -2332,27 +2339,8 @@ function validateMonth(ctx) {
         { fecha }));
       continue;
     }
-    if (roles.length === 0) {
-      violations.push(err("INV-1", `Día ${fecha} sin cubrir: no hay nadie de guardia (mayores=0, pequeños=0)`, { fecha }));
-      continue;
-    }
-    // Hay alguien, pero ningún puesto de la base: solo refuerzos (o solo no asignables junto a ellos).
-    violations.push(aviso("INV-1", `Guardia del ${fecha} cubierta solo por refuerzo: falta el Mayor y el Pequeño de la base`, { fecha }));
-  }
-
-  // ── INV-1 (prioridad, P-17): un refuerzo no va mientras algún día no tiene sus dos personas ──
-  // La quinta o sexta guardia se coloca PRIMERO donde falta alguien; solo cuando todos los días del mes
-  // tienen su Mayor y su Pequeño puede ir como tercera persona. Es un aviso que orienta (P-14): no
-  // bloquea, pero evita que el reparto vuelva a regalar un refuerzo con un día cubierto por uno solo.
-  const refuerzos = asignaciones.filter((a) => GUARDIA.has(a.codigo) && a.origen === ORIGEN_REFUERZO && dayset.has(a.fecha));
-  if (refuerzos.length > 0) {
-    const hueco = days.find((d) => byDay.get(d)
-      .filter((a) => GUARDIA.has(a.codigo) && a.origen !== ORIGEN_REFUERZO && groupOf(levelOnDay(a.residenteId, d)) !== null).length < 2);
-    if (hueco) {
-      for (const a of refuerzos) {
-        violations.push(aviso("INV-1", `Refuerzo de ${a.residenteId} el ${a.fecha} mientras el ${hueco} queda con menos de dos personas: cubre primero ese día`, { fecha: a.fecha, residenteId: a.residenteId }));
-      }
-    }
+    // Sin nadie asignable y sin nadie escrito: el día vacío, lo único imposible (P-14).
+    violations.push(err("INV-1", `Día ${fecha} sin cubrir: no hay nadie de guardia (mayores=0, pequeños=0)`, { fecha }));
   }
 
   // ── INV-5: asignación sobre bloqueo BAJA (único motivo DURO — decisión V-8) ──
@@ -2871,7 +2859,6 @@ var Projection = (function () {
 
   const { datesOfMonth, weekday, addDays, addYears, academicYearOf, trimesterOf, toISO } = Calendar;
   const { periodsOfResident, levelOn, isActiveOn } = Residents;
-  const { ORIGEN_REFUERZO } = Tally;
 
 const GUARDIA_CODES = new Set(["G", "GF", "GP"]);
 
@@ -2991,8 +2978,7 @@ function buildMonthSheetRows({ anio, mes, residentes, asignaciones }) {
   const porResidenteDia = new Map();
   for (const a of asignaciones) {
     if (!porResidenteDia.has(a.residenteId)) porResidenteDia.set(a.residenteId, new Map());
-    // «+» = refuerzo (P-15), «*» = cedida/comprada: las dos quedan fuera del COUNTIF exacto, como en tally.
-    const marcado = a.origen && GUARDIA_CODES.has(a.codigo) ? `${a.codigo}${a.origen === ORIGEN_REFUERZO ? "+" : "*"}` : (a.codigo || "");
+    const marcado = a.origen && GUARDIA_CODES.has(a.codigo) ? `${a.codigo}*` : (a.codigo || "");
     porResidenteDia.get(a.residenteId).set(a.fecha, marcado);
   }
 

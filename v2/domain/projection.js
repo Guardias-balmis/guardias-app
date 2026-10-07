@@ -49,7 +49,6 @@
 
 import { datesOfMonth, weekday, addDays, addYears, academicYearOf, trimesterOf, toISO } from "./calendar.js";
 import { periodsOfResident, levelOn, isActiveOn } from "./residents.js";
-import { ORIGEN_REFUERZO } from "./tally.js";
 
 const GUARDIA_CODES = new Set(["G", "GF", "GP"]);
 
@@ -169,8 +168,7 @@ export function buildMonthSheetRows({ anio, mes, residentes, asignaciones }) {
   const porResidenteDia = new Map();
   for (const a of asignaciones) {
     if (!porResidenteDia.has(a.residenteId)) porResidenteDia.set(a.residenteId, new Map());
-    // «+» = refuerzo (P-15), «*» = cedida/comprada: las dos quedan fuera del COUNTIF exacto, como en tally.
-    const marcado = a.origen && GUARDIA_CODES.has(a.codigo) ? `${a.codigo}${a.origen === ORIGEN_REFUERZO ? "+" : "*"}` : (a.codigo || "");
+    const marcado = a.origen && GUARDIA_CODES.has(a.codigo) ? `${a.codigo}*` : (a.codigo || "");
     porResidenteDia.get(a.residenteId).set(a.fecha, marcado);
   }
 

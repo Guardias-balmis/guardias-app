@@ -97,9 +97,23 @@ test("INV-8d (mochila) llega hasta la pantalla, y como aviso", async () => {
     // Eva (R1) de guardia el día 11 sin 3P, y el único 3P cae el 12, que no tiene R1.
     asignacionesDelMes: [g("r1-eva", "2026-09-11"), p3("r2-bruno", "2026-09-12")],
   });
-  assert.equal(r.violaciones.length, 1);
-  assert.equal(r.violaciones[0].severidad, "aviso");
-  assert.match(r.violaciones[0].detalle, /deben cubrir primero los días con R1/);
+  // El 8e (cobertura) también salta: este mes esquemático solo tiene una guardia. Se filtra para mirar el 8d.
+  const mochila = r.violaciones.filter((v) => !/menos de dos personas/.test(v.detalle));
+  assert.equal(mochila.length, 1);
+  assert.equal(mochila[0].severidad, "aviso");
+  assert.match(mochila[0].detalle, /deben cubrir primero los días con R1/);
+});
+
+test("INV-8e (el 3P no va mientras algún día tenga menos de dos personas) llega hasta la pantalla, y como aviso (V-58)", async () => {
+  const api = fakeApi({ voluntarios: [{ residenteId: "r2-bruno", desde: "2026-09-01" }] });
+  const r = await thirdPostViolations({
+    api, mes: 9, anio: 2026, residentes: [EVA, BRUNO],
+    asignacionesDelMes: [g("r1-eva", "2026-09-11"), p3("r2-bruno", "2026-09-12")],
+  });
+  const cobertura = r.violaciones.filter((v) => /menos de dos personas/.test(v.detalle));
+  assert.equal(cobertura.length, 1);
+  assert.equal(cobertura[0].severidad, "aviso");
+  assert.equal(cobertura[0].residenteId, "r2-bruno");
 });
 
 test("un mes ANTERIOR al alta más antigua no pide histórico (y no manda un rango invertido)", async () => {

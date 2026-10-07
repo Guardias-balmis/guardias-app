@@ -765,3 +765,109 @@ test("si el lock expira en la escritura final (waitLock lanza), la generación r
   assert.equal(bitacora(deps).at(-1).resultado, "CONFLICTO");
   assert.equal(asignacionesDe(deps).length, 0);
 });
+
+// ── fase «extras» (P-17/V-59): quintas/sextas y tercer puestos, solo añadir ───────────────────
+
+const dia = (n) => `2027-07-${String(n).padStart(2, "0")}`;
+const semilla = (deps, filas) => deps.store.appendRecords("asignaciones", filas.map((f) => ({ puesto: "", ...f })));
+const validar = (deps) => deps.store.appendRecord("cuadrantes", { mes: 7, anio: 2027, estado: "VALIDADO", actorId: "resp-1", fecha: "2027-06-01" });
+const estadoDe = (deps, session) => call({ action: "estadoCuadrante", session, mes: 7, anio: 2027 }, deps).estado;
+const mesCompleto = () => Array.from({ length: 31 }, (_, i) => [
+  { fecha: dia(i + 1), residenteId: "resp-1", codigo: "G" }, { fecha: dia(i + 1), residenteId: "otro-1", codigo: "G" },
+]).flat();
+
+test("P-17: estadoCuadrante anuncia las fases que entiende el servidor", () => {
+  const deps = makeDeps({ llm: fakeLlm([ok(RESPUESTA_OK)]) });
+  const r = call({ action: "estadoCuadrante", session: loggedInAs(deps, "resp@gmail.com"), mes: 7, anio: 2027 }, deps);
+  assert.deepEqual(r.fasesGeneracion, ["obligatorias", "extras"]);
+});
+
+test("P-17: la fase extras añade una quinta en un día de una sola persona y NO revierte un mes VALIDADO", () => {
+  const base = [{ fecha: dia(1), residenteId: "resp-1", codigo: "G" }, { fecha: dia(2), residenteId: "resp-1", codigo: "G" }, { fecha: dia(2), residenteId: "otro-1", codigo: "G" }];
+  const llm = fakeLlm([ok(JSON.stringify({ asignaciones: [...base, { fecha: dia(1), residenteId: "otro-1", codigo: "G" }] }))]);
+  const deps = makeDeps({ llm });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  semilla(deps, base);
+  validar(deps);
+
+  const r = generar(deps, session, { fase: "extras" });
+  assert.equal(r.ok, true);
+  assert.equal(r.fase, "extras");
+  assert.equal(r.guardados, 1);
+  assert.equal(r.estado, "VALIDADO");
+  assert.equal(estadoDe(deps, session), "VALIDADO", "solo añade: el mes sigue validado");
+  assert.match(llm.prompts[0], /FASE 2/);
+  assert.equal(bitacora(deps)[0].modo, "EXTRAS");
+});
+
+test("P-17: una guardia extra en un día que ya tiene dos personas se rechaza y se explica en el reintento", () => {
+  const base = [{ fecha: dia(1), residenteId: "resp-1", codigo: "G" }, { fecha: dia(1), residenteId: "otro-1", codigo: "G" }];
+  const mala = JSON.stringify({ asignaciones: [...base, { fecha: dia(1), residenteId: "dev-1", codigo: "G" }] });
+  const llm = fakeLlm([ok(mala), ok(JSON.stringify({ asignaciones: base }))]);
+  const deps = makeDeps({ llm, extraSheets: conDev });
+  semilla(deps, base);
+
+  const r = generar(deps, loggedInAs(deps, "resp@gmail.com"), { fase: "extras" });
+  assert.equal(r.ok, true);
+  assert.equal(r.intentos, 2);
+  assert.match(llm.prompts[1], /ya tiene dos personas/);
+});
+
+test("P-17: el 3P no se acepta mientras algún día tenga menos de dos personas", () => {
+  const base = [{ fecha: dia(1), residenteId: "resp-1", codigo: "G" }];
+  const con3P = JSON.stringify({ asignaciones: [...base, { fecha: dia(3), residenteId: "otro-1", codigo: "3P" }] });
+  const llm = fakeLlm([ok(con3P)]);
+  const deps = makeDeps({ llm });
+  semilla(deps, base);
+
+  const r = generar(deps, loggedInAs(deps, "resp@gmail.com"), { fase: "extras" });
+  assert.equal(r.ok, false);
+  assert.equal(r.revisionManual, true);
+  assert.match(llm.prompts[1], /sigue con menos de dos personas/);
+  assert.equal(deps.store.readRecords("asignaciones").length, 1, "no se escribió nada");
+});
+
+test("P-17: con todos los días a dos personas el 3P sí entra", () => {
+  const base = mesCompleto();
+  const llm = fakeLlm([ok(JSON.stringify({ asignaciones: [...base, { fecha: dia(5), residenteId: "dev-1", codigo: "3P" }] }))]);
+  const deps = makeDeps({ llm, extraSheets: conDev });
+  semilla(deps, base);
+
+  const r = generar(deps, loggedInAs(deps, "resp@gmail.com"), { fase: "extras" });
+  assert.equal(r.ok, true);
+  assert.equal(r.guardados, 1);
+});
+
+test("P-17: la fase extras no cubre días vacíos y un mes sin guardias manda a generar las obligatorias", () => {
+  const deps = makeDeps({ llm: fakeLlm([ok(RESPUESTA_OK)]) });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const vacio = generar(deps, session, { fase: "extras" });
+  assert.equal(vacio.ok, false);
+  assert.match(vacio.error, /genera primero las obligatorias/);
+
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps2 = makeDeps({ llm });
+  semilla(deps2, [{ fecha: dia(1), residenteId: "resp-1", codigo: "G" }]);
+  const r = generar(deps2, loggedInAs(deps2, "resp@gmail.com"), { fase: "extras" });
+  assert.equal(r.ok, false, "PROPUESTA añade guardias en días vacíos: no se acepta");
+});
+
+test("P-17: las obligatorias no aceptan 3P; fases y modos raros se rechazan", () => {
+  const con3P = JSON.stringify({ asignaciones: [...PROPUESTA, { fecha: dia(9), residenteId: "otro-1", codigo: "3P" }] });
+  const llm = fakeLlm([ok(con3P), ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm });
+  const session = loggedInAs(deps, "resp@gmail.com");
+  const r = generar(deps, session);
+  assert.equal(r.ok, true);
+  assert.equal(r.intentos, 2);
+  assert.match(llm.prompts[1], /no va en esta fase/);
+
+  assert.match(generar(deps, session, { fase: "otra" }).error, /fase de generación inválida/);
+  assert.match(generar(deps, session, { fase: "extras", modo: "reemplazar" }).error, /solo admite el modo completar/);
+});
+
+test("P-17: la fase extras tampoco se ofrece sobre un mes PUBLICADO", () => {
+  const deps = makeDeps({ llm: fakeLlm([ok(RESPUESTA_OK)]) });
+  deps.store.appendRecord("cuadrantes", { mes: 7, anio: 2027, estado: "PUBLICADO", actorId: "resp-1", fecha: "2027-06-01" });
+  assert.match(generar(deps, loggedInAs(deps, "resp@gmail.com"), { fase: "extras" }).error, /PUBLICADO/);
+});

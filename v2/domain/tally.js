@@ -2,22 +2,13 @@
 // mejora del doblete de borde de mes (S-5). Deliberadamente "tonto": cuenta códigos
 // por fecha; la coherencia código-vs-festivo la valida otro invariante, no esto.
 //
-// Una guardia computable = código G/GF/GP sin `origen` (cedida/comprada/refuerzo). El 3P, las
-// cedidas/compradas y los refuerzos se registran en contadores propios y quedan fuera de la
-// equidad (INV-4, P-15). Los contadores se SOLAPAN: una GF en sábado suma a total, finde y festivos.
+// Una guardia computable = código G/GF/GP sin `origen` (cedida/comprada). El 3P y las
+// cedidas/compradas se registran en contadores propios y quedan fuera de la equidad
+// (INV-4). Los contadores se SOLAPAN: una GF en sábado suma a total, finde y festivos.
 
 import { weekday, addDays, compareISO, parseISO } from "./calendar.js";
 
 const GUARDIA = new Set(["G", "GF", "GP"]);
-
-/**
- * `origen` de una guardia de REFUERZO (P-15): la que se pone sobre un día que ya tenía su Mayor y
- * su Pequeño, en vez de cubrir el hueco de un día con una sola persona. Es opcional y voluntaria,
- * así que va en su propio contaje y fuera de los seis ejes de INV-3 (como el 3P, INV-4), y no la
- * cuenta INV-2. Una guardia que SÍ cubre un hueco no lleva este origen y suma al contaje global.
- * Se exporta porque validate, equity y projection necesitan reconocerla con la misma cadena.
- */
-export const ORIGEN_REFUERZO = "REFUERZO";
 
 /** ¿La asignación es una guardia computable (ocupa puesto y cuenta para equidad)? */
 function isComputable(asig) {
@@ -35,7 +26,7 @@ function inWindow(fecha, window) {
  *        la ventana) se usa para el lookahead del doblete; solo las de dentro cuentan.
  * @param {{start:string, end:string}} window
  * @returns {{total:number, finde:number, festivos:number, prefestivos:number,
- *            dobletes:number, tercerPuesto:number, cedidasCompradas:number, refuerzos:number}}
+ *            dobletes:number, tercerPuesto:number, cedidasCompradas:number}}
  */
 export function tally(asignaciones, window) {
   parseISO(window.start);
@@ -50,13 +41,12 @@ export function tally(asignaciones, window) {
   const byDate = new Map();
   for (const asg of asignaciones) byDate.set(asg.fecha, asg);
 
-  const counters = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0, refuerzos: 0 };
+  const counters = { total: 0, finde: 0, festivos: 0, prefestivos: 0, dobletes: 0, tercerPuesto: 0, cedidasCompradas: 0 };
 
   for (const asg of asignaciones) {
     if (!inWindow(asg.fecha, window)) continue; // solo cuenta lo de dentro de la ventana
 
     if (asg.codigo === "3P") { counters.tercerPuesto++; continue; }
-    if (asg.origen === ORIGEN_REFUERZO) { if (GUARDIA.has(asg.codigo)) counters.refuerzos++; continue; } // contaje aparte (P-15)
     if (asg.origen) { counters.cedidasCompradas++; continue; } // registrada aparte, no computa
 
     if (!GUARDIA.has(asg.codigo)) continue; // V/R/B: no suman a ningún contador

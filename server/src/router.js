@@ -35,6 +35,11 @@ const ASIG_CODIGOS = new Set(["G", "GF", "GP", "3P", "V", "R", "B", ""]);
 // sustituye el mes entero. Lista blanca porque un modo mal escrito no puede degradar en silencio
 // a «reemplazar» —que borra— cuando quien pulsó quería conservar.
 const MODOS_GENERACION = new Set(["completar", "reemplazar"]);
+// Fases del generador (P-17/V-59). «obligatorias»: las 4 de cada uno, sobre un Borrador (lo de
+// V-45/V-47). «extras»: quintas/sextas voluntarias y tercer puestos, que SOLO añaden, sobre un mes
+// Borrador o ya VALIDADO. Lista blanca por lo mismo que los modos: una fase mal escrita no puede
+// degradar en silencio a la que sustituye guardias.
+const FASES_GENERACION = new Set(["obligatorias", "extras"]);
 // Los niveles a los que se puede asignar guardia (los que el prompt lista), los códigos que ocupan
 // puesto en la rejilla y los marcadores apuntados a mano: mismos conjuntos que `residents.js:LEVELS`,
 // `validate.js:OCUPA_PUESTO` y `apply.js:MARCADORES_REJILLA`.
@@ -48,11 +53,10 @@ const BITACORA_MAX_VIOLACIONES = 50;
 // caracteres inventados por el modelo) seguirían pasando de 50.000. Margen sobre el límite de Sheets.
 const BITACORA_MAX_CHARS = 40000;
 const BITACORA_MAX_DETALLE = 300;
-// `origen` marca la guardia cedida o comprada (INV-4) o de REFUERZO (P-15), que se excluyen de los
-// seis ejes de INV-3 (el refuerzo, además, en un contaje propio).
+// `origen` marca la guardia cedida o comprada, que INV-4 excluye de los seis ejes de INV-3.
 // `tally.js:15` lo evalúa por TRUTHINESS, así que una errata cualquiera —no solo un valor de otro
 // enum— saca la guardia del cómputo y de los totales de la pestaña publicada, en silencio.
-const ASIG_ORIGENES = new Set(["CEDIDA", "COMPRADA", "REFUERZO"]);
+const ASIG_ORIGENES = new Set(["CEDIDA", "COMPRADA"]);
 // `puesto` (spec.md §2 Asignacion): hoy ningún cliente lo manda y ningún invariante lo lee —el
 // puesto se deriva del nivel—, pero la columna existe y el endpoint es público.
 const ASIG_PUESTOS = new Set(["MAYOR", "PEQUENO", "TERCERO"]);
@@ -263,8 +267,6 @@ export function handleRequest(rawBody, deps) {
           if (malCodigo) return { ok: false, error: `código de asignación inválido: ${JSON.stringify(malCodigo.codigo)} (válidos: ${[...ASIG_CODIGOS].filter(Boolean).join(", ")})` };
           const malOrigen = req.cambios.find((c) => c.origen !== undefined && c.origen !== "" && !ASIG_ORIGENES.has(c.origen));
           if (malOrigen) return { ok: false, error: `origen inválido: ${JSON.stringify(malOrigen.origen)} (válidos: ${[...ASIG_ORIGENES].join(", ")})` };
-          const malRefuerzo = req.cambios.find((c) => c.origen === "REFUERZO" && !["G", "GF", "GP"].includes(c.codigo));
-          if (malRefuerzo) return { ok: false, error: `un refuerzo solo puede ser una guardia (G, GF o GP), no ${JSON.stringify(malRefuerzo.codigo || "")}` };
           // El residente tiene que existir (2026-09-04): una fila con un id que no es de nadie no la
           // ve ninguna pantalla ni la puede borrar nadie, y se queda para siempre en una tabla
           // append-only —el mismo motivo por el que el generador rechaza los ids inventados (V-31).
@@ -284,23 +286,23 @@ export function handleRequest(rawBody, deps) {
             const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
             if (publicado) return { ok: false, error: `el cuadrante de ${publicado.mes}/${publicado.anio} está PUBLICADO y no admite ediciones` };
 
-            // Lo OPCIONAL no invalida un mes VALIDADO (P-16/V-55, P-17): quitar un 3P, y añadir o quitar un
-            // REFUERZO. Son apoyos voluntarios —el 3P casi nunca es de las cuatro obligatorias, y el
-            // refuerzo es por definición la guardia de más—, y la reunión que validó las obligatorias no
-            // tiene por qué repetirse cada vez que alguien se apunta una quinta. Se mira el estado ACTUAL
-            // de cada celda, dentro del lock: solo cuenta como «quitar» el cambio que deja vacía una celda
-            // que ahora es de ese tipo, y como «añadir» el que escribe un refuerzo en una celda VACÍA —
-            // reetiquetar como refuerzo una guardia de la base la cambia, y eso sí invalida.
+            // Lo OPCIONAL no invalida un mes VALIDADO (P-16, P-17/V-58): añadir o quitar un TERCER PUESTO. Es un
+            // apoyo voluntario —el que se añade el último a la guardia y se va a las 20 h—, casi nunca de
+            // las cuatro obligatorias, y la reunión que validó las obligatorias no tiene por qué repetirse
+            // cada vez que alguien se apunta uno o se lo quita. Se mira el estado ACTUAL de cada celda,
+            // dentro del lock: solo cuenta como «quitar» el cambio que deja vacía una celda que ahora es un
+            // 3P, y como «añadir» el que escribe un 3P en una celda VACÍA — convertir en 3P una guardia
+            // de la base la cambia, y eso sí invalida.
             const actuales = new Map(deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }).map((x) => [ASIG_KEY(x), x]));
             const vacia = (c) => (c.codigo || "") === "";
-            const quitaOpcional = (c) => { const a = actuales.get(ASIG_KEY(c)); return vacia(c) && Boolean(a) && (a.codigo === "3P" || a.origen === "REFUERZO"); };
-            const anadeRefuerzo = (c) => c.origen === "REFUERZO" && !vacia(c) && !actuales.has(ASIG_KEY(c));
-            const soloOpcional = req.cambios.every((c) => quitaOpcional(c) || anadeRefuerzo(c));
+            const quitaTercerPuesto = (c) => vacia(c) && actuales.get(ASIG_KEY(c))?.codigo === "3P";
+            const anadeTercerPuesto = (c) => c.codigo === "3P" && !actuales.has(ASIG_KEY(c));
+            const soloOpcional = req.cambios.every((c) => quitaTercerPuesto(c) || anadeTercerPuesto(c));
 
-            // Añadir un refuerzo a un mes VALIDADO no se hace a ciegas: tiene que pasar por lo que el mes
-            // ya tenía que cumplir (el descanso de INV-15, una baja de INV-5…). Se juzga el mes RESULTANTE
-            // y se rechaza solo por errores NUEVOS: uno que el mes ya traía no es culpa de este cambio.
-            if (soloOpcional && req.cambios.some(anadeRefuerzo)) {
+            // Añadir un 3P a un mes VALIDADO no se hace a ciegas: tiene que pasar por lo que el mes ya tenía
+            // que cumplir (el descanso de INV-15, una baja de INV-5…). Se juzga el mes RESULTANTE y se rechaza
+            // solo por errores NUEVOS: uno que el mes ya traía no es culpa de este cambio.
+            if (soloOpcional && req.cambios.some(anadeTercerPuesto)) {
               for (const m of meses.filter((x) => x.estado === "VALIDADO")) {
                 const snap = monthSnapshot(deps);
                 const prefix = monthPrefix(m.anio, m.mes);
@@ -311,7 +313,7 @@ export function handleRequest(rawBody, deps) {
                 const antes = new Set(errores(null).map(firma));
                 const nuevos = errores([...resultante.values()].filter((a) => a.codigo)).filter((v) => !antes.has(firma(v)));
                 if (nuevos.length > 0) {
-                  return { ok: false, error: `el refuerzo incumple una regla obligatoria (${nuevos[0].invariante}): ${nuevos[0].detalle}`, violaciones: nuevos };
+                  return { ok: false, error: `el tercer puesto incumple una regla obligatoria (${nuevos[0].invariante}): ${nuevos[0].detalle}`, violaciones: nuevos };
                 }
               }
             }
@@ -823,6 +825,8 @@ export function handleRequest(rawBody, deps) {
           return {
             ok: true, estado: currentCuadranteEstado(deps, req.mes, req.anio), sinResponsable: mandato === null,
             responsableId: mandato ? mandato.residenteId : null, modosGeneracion: [...MODOS_GENERACION],
+            // Como `modosGeneracion`: un servidor sin esto ignoraría `fase: "extras"` y generaría de otra forma.
+            fasesGeneracion: [...FASES_GENERACION],
           };
         });
 
@@ -1596,7 +1600,12 @@ function handleGenerarIA(req, deps, session) {
   const denegado = requireCicloPermiso(deps, session, "generar el cuadrante con IA");
   if (denegado) return denegado;
 
-  const modo = req.modo === undefined ? "completar" : req.modo;
+  const fase = req.fase === undefined ? "obligatorias" : req.fase;
+  if (!FASES_GENERACION.has(fase)) return { ok: false, error: `fase de generación inválida: ${JSON.stringify(req.fase)} (válidas: obligatorias, extras)` };
+  const extras = fase === "extras";
+  // Las extras solo AÑADEN: «reemplazar» no tiene sentido y se rechaza en vez de ignorarse.
+  if (extras && req.modo !== undefined && req.modo !== "completar") return { ok: false, error: "la fase de quintas y tercer puestos solo admite el modo completar: únicamente añade guardias" };
+  const modo = extras || req.modo === undefined ? "completar" : req.modo;
   if (!MODOS_GENERACION.has(modo)) return { ok: false, error: `modo de generación inválido: ${JSON.stringify(req.modo)} (válidos: completar, reemplazar)` };
 
   const estadoActual = validCuadranteMesAnio(req, deps);
@@ -1607,7 +1616,7 @@ function handleGenerarIA(req, deps, session) {
   // Decisión V-46 (2026-09-02, a pedido del autor): antes se ofrecía también sobre VALIDADO. Una
   // vez que el equipo se reúne y lo valida entre todos, regenerarlo por encima sería descartar en
   // silencio un mes que ya se revisó y se dio por bueno — así que ahora solo se ofrece en Borrador.
-  if (estadoActual === "VALIDADO") {
+  if (estadoActual === "VALIDADO" && !extras) {
     return { ok: false, error: `el cuadrante de ${req.mes}/${req.anio} ya está VALIDADO: el generador con IA solo se ofrece en Borrador, para no reescribir un mes que el equipo ya revisó y dio por bueno` };
   }
   if (!deps.llm || typeof deps.llm.generar !== "function") {
@@ -1663,7 +1672,7 @@ function handleGenerarIA(req, deps, session) {
   // anterior o el siguiente y el mes escrito incumple INV-15 (descanso, regla legal) sin que el juez
   // lo viera — porque juzgaba la propuesta sola, no lo que iba a quedar en la rejilla.
   const conservadas = completar ? [] : existentes.filter((a) => a.codigo === "3P");
-  const prompt = buildGenerationPrompt({ ...promptData(deps, req.mes, req.anio, snap), fijadas: completar ? fijadas : conservadas });
+  const prompt = buildGenerationPrompt({ ...promptData(deps, req.mes, req.anio, snap), fijadas: completar ? fijadas : conservadas, fase });
   const modelo = (deps.llm && deps.llm.modelo) || "(sin declarar)";
 
   // El juez: exactamente el mismo que usa `marcarValidado`, ni más estricto ni más laxo. Un
@@ -1709,6 +1718,37 @@ function handleGenerarIA(req, deps, session) {
         detalle: `la celda de "${x.marcador.residenteId}" el ${x.marcador.fecha} está marcada ${x.marcador.codigo} en la rejilla: no propongas guardia a esa persona ese día`,
       })),
     ];
+    // Reglas propias de cada fase, como rechazos de FORMATO: son el reparto de P-17, no invariantes.
+    const guardiasPorDia = new Map();
+    for (const f of fijadas) if (CODIGOS_GUARDIA.has(f.codigo)) guardiasPorDia.set(f.fecha, (guardiasPorDia.get(f.fecha) || 0) + 1);
+    if (!extras) {
+      for (const a of plan.cambios.filter((x) => x.codigo === "3P")) {
+        rechazos.push({ invariante: "FORMATO", severidad: "error", residenteId: a.residenteId, detalle: `el 3P del ${a.fecha} no va en esta fase: ahora solo G, GF y GP; los tercer puestos se añaden después` });
+      }
+    } else {
+      // El 3P solo va con TODOS los días de dos personas (P-17): INV-8e lo avisa, aquí es una regla
+      // del reparto y se rechaza para que el modelo no lo proponga.
+      const nuevosTresP = plan.cambios.filter((x) => x.codigo === "3P");
+      if (nuevosTresP.length > 0) {
+        const personas = new Map(guardiasPorDia);
+        for (const c of plan.cambios) if (c.codigo !== "3P") personas.set(c.fecha, (personas.get(c.fecha) || 0) + 1);
+        let dia = monthStart, hueco = null;
+        while (dia.startsWith(prefix) && !hueco) { if ((personas.get(dia) || 0) < 2) hueco = dia; dia = deps.domain.addDays(dia, 1); }
+        if (hueco) {
+          for (const a of nuevosTresP) {
+            rechazos.push({ invariante: "FORMATO", severidad: "error", residenteId: a.residenteId, detalle: `el 3P del ${a.fecha} no va todavía: el ${hueco} sigue con menos de dos personas y el tercer puesto solo se añade cuando todos los días tienen dos` });
+          }
+        }
+      }
+      for (const a of plan.cambios) {
+        if (a.codigo !== "3P" && (guardiasPorDia.get(a.fecha) || 0) >= 2) {
+          rechazos.push({ invariante: "FORMATO", severidad: "error", residenteId: a.residenteId, detalle: `el ${a.fecha} ya tiene dos personas: una guardia extra solo va en un día con una sola persona` });
+        }
+        if (a.codigo !== "3P" && (guardiasPorDia.get(a.fecha) || 0) === 0) {
+          rechazos.push({ invariante: "FORMATO", severidad: "error", residenteId: a.residenteId, detalle: `el ${a.fecha} no tiene a nadie: esta fase no cubre días vacíos, solo añade a días con una sola persona` });
+        }
+      }
+    }
     if (rechazos.length > 0) return rechazos; // no vale la pena juzgar un mes que ni siquiera es este
     // Se juzga siempre el mes RESULTANTE, lo que va a quedar escrito: en completar, lo fijado más lo
     // que la propuesta añade (juzgar solo la propuesta daría por bueno un día en que el modelo,
@@ -1732,6 +1772,9 @@ function handleGenerarIA(req, deps, session) {
   // se dice la causa real. Los INV-1 de los días sin cubrir se excluyen porque son justo lo que el
   // modelo va a rellenar. Desde P-14 la composición entre fijadas (dos del mismo grupo el mismo día) ya no
   // es `error`, así que esto queda como defensa: el único INV-1 duro es el día vacío.
+  if (extras && fijadas.length === 0) {
+    return { ok: false, error: "el mes no tiene ninguna guardia: genera primero las obligatorias y después añade las quintas y los tercer puestos" };
+  }
   if (completar && fijadas.length > 0) {
     // INV-1 se descarta SOLO donde es un hueco (menos de dos fijadas ocupando puesto ese día): con dos
     // o más, el error es de composición entre fijadas (dos Mayores el mismo día) y el modelo tampoco
@@ -1751,13 +1794,16 @@ function handleGenerarIA(req, deps, session) {
     }));
     const previos = [
       ...fijadasAjenas,
-      ...validar([]).filter((v) => v.severidad === "error" && (v.invariante !== "INV-1" || (fijadasPorDia.get(v.fecha) || 0) >= 2)),
+      // En «extras» no se excluye ningún INV-1: un día vacío es un hueco que esta fase no rellena.
+      ...validar([]).filter((v) => v.severidad === "error" && (extras || v.invariante !== "INV-1" || (fijadasPorDia.get(v.fecha) || 0) >= 2)),
     ];
     if (previos.length > 0) {
-      escribirBitacora(deps, session, req, modelo, 0, "FIJADAS_INVALIDAS", previos, modo);
+      escribirBitacora(deps, session, req, modelo, 0, "FIJADAS_INVALIDAS", previos, extras ? "extras" : modo);
       return {
         ok: false, resultado: "FIJADAS_INVALIDAS", modo, intentos: 0, revisionManual: false, violaciones: previos,
-        error: "las guardias que ya están en la rejilla incumplen por sí solas reglas obligatorias: corrígelas en el cuadrante antes de generar (no se ha llamado al modelo ni se ha escrito nada)",
+        error: extras
+          ? "el mes todavía incumple reglas obligatorias (por ejemplo, algún día sin cubrir): completa primero las guardias obligatorias y corrígelo antes de añadir quintas y tercer puestos (no se ha llamado al modelo ni se ha escrito nada)"
+          : "las guardias que ya están en la rejilla incumplen por sí solas reglas obligatorias: corrígelas en el cuadrante antes de generar (no se ha llamado al modelo ni se ha escrito nada)",
       };
     }
   }
@@ -1765,7 +1811,7 @@ function handleGenerarIA(req, deps, session) {
   const r = generateSchedule({ prompt, llm: deps.llm.generar, validar });
 
   if (!r.ok) {
-    escribirBitacora(deps, session, req, modelo, r.intentos, r.resultado, r.violaciones, modo);
+    escribirBitacora(deps, session, req, modelo, r.intentos, r.resultado, r.violaciones, extras ? "extras" : modo);
     return {
       ok: false, error: r.error, resultado: r.resultado, modo,
       revisionManual: r.resultado === "REVISION_MANUAL",
@@ -1808,28 +1854,29 @@ function handleGenerarIA(req, deps, session) {
     if (snapAhora.bloqueosCorruptos.length > 0) return null;
     if (validarCon(snapAhora)(r.asignaciones).some((v) => v.severidad === "error")) return null;
     deps.store.appendRecords("asignaciones", plan.cambios);
-    const siguiente = plan.cambios.length > 0 ? deps.domain.stateAfterEdit(estadoActual) : estadoActual;
+        // Las extras no revierten un VALIDADO (V-58): solo añaden, y lo añadido ya se juzgó contra el mes resultante.
+    const siguiente = plan.cambios.length > 0 && !extras ? deps.domain.stateAfterEdit(estadoActual) : estadoActual;
     if (siguiente !== estadoActual) writeCuadranteEstado(deps, session, req.mes, req.anio, siguiente);
     return { siguiente };
     });
   } catch (e) {
-    escribirBitacora(deps, session, req, modelo, r.intentos, "CONFLICTO", r.violaciones, modo);
+    escribirBitacora(deps, session, req, modelo, r.intentos, "CONFLICTO", r.violaciones, extras ? "extras" : modo);
     return {
       ok: false, resultado: "CONFLICTO", modo, intentos: r.intentos, violaciones: r.violaciones, revisionManual: false,
       error: `no se pudo escribir el cuadrante de ${req.mes}/${req.anio} porque otra operación tenía la hoja ocupada (${(e && e.message) || e}): no se ha escrito nada, vuelve a intentarlo`,
     };
   }
   if (!escrito) {
-    escribirBitacora(deps, session, req, modelo, r.intentos, "CONFLICTO", r.violaciones, modo);
+    escribirBitacora(deps, session, req, modelo, r.intentos, "CONFLICTO", r.violaciones, extras ? "extras" : modo);
     return {
       ok: false, resultado: "CONFLICTO", modo, intentos: r.intentos, violaciones: r.violaciones, revisionManual: false,
       error: `el cuadrante de ${req.mes}/${req.anio} cambió mientras se generaba (alguien guardó celdas, registró una ausencia o cambió su estado): no se ha escrito nada, vuelve a intentarlo`,
     };
   }
-  escribirBitacora(deps, session, req, modelo, r.intentos, "APLICADO", r.violaciones, modo);
+  escribirBitacora(deps, session, req, modelo, r.intentos, "APLICADO", r.violaciones, extras ? "extras" : modo);
 
   return {
-    ok: true, estado: escrito.siguiente, modelo, intentos: r.intentos, modo,
+    ok: true, estado: escrito.siguiente, modelo, intentos: r.intentos, modo, fase,
     guardados: plan.cambios.length, borradas: plan.borradas.length, respetadas: completar ? fijadas.length : plan.marcadores.filter((a) => CODIGOS_GUARDIA.has(a.codigo)).length,
     // Los avisos que quedan viajan de vuelta: no bloquean (V-14), pero quien acaba de guardar un
     // mes tiene derecho a ver que cojea en equidad antes de darlo por bueno.

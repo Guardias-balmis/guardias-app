@@ -22,7 +22,7 @@ function fechasDelMes(lista, anio, mes) {
 }
 
 const DEFAULT_PREFS = {
-  maxGuardias: 5,
+  maxGuardias: 4, // las 4 obligatorias; 5 o 6 = «quiero hacer más» (P-17: el generador las reparte en la fase 2)
   fechasEvitar: [],
   notas: "",
   tercerPuesto: false, // «¿Deseas hacer tercer puesto este mes?» (P-16/V-55): por mes, y por defecto no
@@ -351,7 +351,7 @@ function PrefsScreen() {
         <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 8 }}>
           {tieneAusenciaEsteMes
             ? "(normativa: 4–6, salvo excepciones — con una ausencia registrada este mes podés pedir menos)"
-            : "(normativa: 4–6)"}
+            : "(4 son las obligatorias; pon 5 o 6 si quieres hacer alguna más y el generador te la dará donde falte gente)"}
         </div>
       </Card>
 

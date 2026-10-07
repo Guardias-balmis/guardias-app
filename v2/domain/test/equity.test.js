@@ -453,16 +453,6 @@ test("buildYearCloseContext: un puente dentro de ROTACION/VACACIONES NO cuenta c
   assert.equal(ctx.acumulados.r3b.puentesLibres, 1);
 });
 
-test("P-15: un REFUERZO en un día puente NO le quita el puente a quien lo hace (como el 3P, INV-4); una guardia normal sí", () => {
-  const libres = (historicas) => buildYearCloseContext({
-    mes: 5, anio: 2027, residentes: [A, B], historicas, asignacionesDelMes: [], bloqueos: [], festivos: FESTIVOS,
-  }).acumulados.r3a.puentesLibres;
-  const base = libres([]);
-  assert.ok(base >= 1, "el calendario de prueba tiene al menos un puente (lunes 7-dic, con el martes 8 festivo)");
-  assert.equal(libres([{ residenteId: "r3a", fecha: "2026-12-07", codigo: "G" }]), base - 1, "una guardia normal sí se lo quita");
-  assert.equal(libres([{ residenteId: "r3a", fecha: "2026-12-07", codigo: "G", origen: "REFUERZO" }]), base, "un refuerzo no");
-});
-
 test("INV-3: puentesLibres se normaliza por disponibilidad igual que los demás ejes", () => {
   const v = validateResidencyYearClose({
     mes: 5, anio: 2027, residentes: [R2A, R2B],

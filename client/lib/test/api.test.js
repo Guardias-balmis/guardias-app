@@ -256,6 +256,15 @@ test("solicitarInvitado manda el pendingToken; estadoSolicitudInvitado el solici
   assert.deepEqual(cuerpos[1], { action: "estadoSolicitudInvitado", solicitudToken: "sol" });
 });
 
+test("generarCuadranteIA solo manda `fase` cuando no es la de siempre (P-17/V-59)", async () => {
+  const fetchImpl = fakeFetch(200, { ok: true });
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "tok" });
+  await api.generarCuadranteIA(2027, 7);
+  assert.equal("fase" in JSON.parse(fetchImpl.calls[0].init.body), false);
+  await api.generarCuadranteIA(2027, 7, "completar", "extras");
+  assert.equal(JSON.parse(fetchImpl.calls[1].init.body).fase, "extras");
+});
+
 // ── Contrato de las respuestas (2026-10-07, aviso del autor: «TypeError: Cannot read properties of
 // undefined (reading 'length')» en SolicitudesAcceso, junto a un 404 de
 // script.googleusercontent.com/macros/echo). La pantalla hacía `if (r.ok) setLista(r.solicitudes)`:

@@ -215,6 +215,7 @@ function seccionResidentes(porNivel, acumulados) {
  *     fijadas:[{fecha,residenteId,codigo}] }   ← las guardias ya puestas en la rejilla (V-47)
  */
 export function buildGenerationPrompt(datos) {
+  if (datos.fase === "extras") return buildExtrasPrompt(datos);
   const { mes, anio } = datos;
   const titulo = nombreMes(anio, mes);
   return `Eres el generador del cuadrante de guardias de Radiodiagnóstico (Hospital Dr. Balmis).
@@ -234,7 +235,8 @@ ${seccionMarcadores(datos.marcadores)}${seccionBloqueos(datos.bloqueos)}
 
 ${seccionFestivos(datos.festivos, datos.puentes)}
 
-${seccionVoluntarios3P(datos.voluntarios3P)}
+FASE 1 — GUARDIAS OBLIGATORIAS: en esta fase NO asignes ningún 3P (el tercer puesto y las quintas
+y sextas guardias voluntarias se añaden después, en otra fase). Solo G, GF y GP.
 
 ${seccionEventos(datos.eventos)}
 
@@ -244,13 +246,17 @@ NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
 1. Cada día lleva exactamente 1 guardia (G/GF/GP) de un residente Mayor (R3/R4) y 1 de un
    residente Pequeño (R1/R2). Excepción: 2 residentes R2 el mismo día solo se admite desde
    el 1 de diciembre y de forma justificada.
-2. Cada residente hace entre 4 y 6 guardias computables (G+GF+GP) al mes; un Pequeño puede
-   bajar excepcionalmente a 3 si la oferta de días no da para más.
+2. Cada residente hace 4 guardias computables (G+GF+GP) al mes: son las obligatorias. Reparte los
+   puestos del mes para que todos lleguen a 4 y no pases de ahí si con 4 por cabeza se cubren
+   todos los días. Solo si con 4 cada uno el mes NO se cubre (faltan manos por ausencias, rotaciones
+   o bajas), añade las guardias mínimas necesarias —cuentan como obligatorias— repartidas con
+   equidad entre quienes estén disponibles, empezando por quienes lleven menos. Un Pequeño puede
+   quedarse en 3 excepcionalmente si la oferta de días no da para más. Las quintas y sextas
+   guardias voluntarias NO se asignan en esta fase.
 3. Reparte con equidad (±1) dentro de cada año de residencia: total de guardias, findes,
    festivos, prefestivos y dobletes — usa el contaje acumulado de arriba como punto de
    partida, no repartas el mes como si todos empezaran de cero.
-4. El 3.º puesto (código 3P) y las guardias cedidas/compradas no cuentan para el mínimo ni
-   el máximo de guardias del punto 2.
+4. Las guardias cedidas/compradas no cuentan para el mínimo ni el máximo de guardias del punto 2.
 5. Respeta la sección BLOQUEOS ACTIVOS de arriba: BAJA es obligatorio no asignar; VACACIONES
    y ROTACIÓN evita asignar si puedes, pero puedes hacerlo si no hay alternativa razonable.
 6. Como máximo 2 residentes de la misma promoción (año de incorporación) pueden estar
@@ -258,8 +264,7 @@ NORMAS OPERATIVAS (resumen; ante la duda, prioriza la equidad):
 7. Si un residente rota en Alicante o provincia colindante (ver BLOQUEOS ACTIVOS), cúbrele
    guardia de viernes o de sábado durante esa rotación (basta con una de las dos, no hacen
    falta ambas — decisión P-6).
-8. El 3.º puesto (3P) SOLO puede recaer en los VOLUNTARIOS listados arriba, nunca en otro
-   residente. Recorre lunes→domingo antes de repetir día, con equidad entre ellos.
+8. No asignes el código 3P en esta fase. Si ya hay 3P entre las guardias fijadas, respétalos.
 9. 2 residentes R2 el mismo día solo se admite desde el 1 de diciembre y justificado, o en
    un día de evento del servicio (Navidad, despedida).
 10. Los eventos del servicio listados arriba se cubren con 2 R2 por sorteo documentado; si ya
@@ -285,6 +290,78 @@ alrededor:
 ${RESPONSE_SHAPE}
 
 Genera el cuadrante completo de ${titulo} (mes=${mes}, año=${anio}) respetando estas normas.`;
+}
+
+
+/** Recuento de guardias computables (G/GF/GP) por residente en las ya fijadas. */
+function recuentoComputables(fijadas) {
+  const n = {};
+  for (const a of fijadas || []) if (a.codigo === "G" || a.codigo === "GF" || a.codigo === "GP") n[a.residenteId] = (n[a.residenteId] || 0) + 1;
+  return n;
+}
+
+/** Quién ha pedido más de las 4 obligatorias (`maxGuardias` = cuántas guardias querría hacer). */
+function seccionPeticionesExtra(preferencias, fijadas, porNivel) {
+  const cuenta = recuentoComputables(fijadas);
+  const activos = new Set(NIVELES.flatMap((n) => ((porNivel && porNivel[n]) || []).map((r) => r.id)));
+  const lista = (preferencias || [])
+    .filter((p) => activos.has(p.residenteId) && tieneMax(p) && p.maxGuardias > 4)
+    .map((p) => `  - id="${p.residenteId}" — quiere hacer hasta ${p.maxGuardias} guardias; ya tiene ${cuenta[p.residenteId] || 0}`);
+  if (lista.length === 0) return "PETICIONES DE QUINTA/SEXTA GUARDIA: nadie ha pedido más de 4. NO añadas ninguna guardia G/GF/GP.";
+  return `PETICIONES DE QUINTA/SEXTA GUARDIA (solo ellos pueden recibir una guardia G/GF/GP extra, y sin pasar\nde lo que piden):\n${lista.join("\n")}`;
+}
+
+/**
+ * Fase 2 (P-17/V-59): sobre un mes ya con sus obligatorias, añade quintas/sextas voluntarias y
+ * tercer puestos. Es "completar" por construcción: todo lo que ya hay va como fijado.
+ */
+function buildExtrasPrompt(datos) {
+  const { mes, anio } = datos;
+  const titulo = nombreMes(anio, mes);
+  return `Eres el generador del cuadrante de guardias de Radiodiagnóstico (Hospital Dr. Balmis).
+
+FASE 2 — QUINTAS GUARDIAS Y TERCER PUESTO de ${titulo.toUpperCase()}. El mes ya tiene sus guardias
+obligatorias (lista de abajo). Tu trabajo es AÑADIR, nunca quitar ni mover nada.
+
+RESIDENTES ACTIVOS — usa el "id" EXACTO como residenteId:
+
+${seccionResidentes(datos.porNivel, datos.acumulados)}
+
+${seccionFijadas(datos.fijadas)}
+
+${seccionBordes(datos.bordes)}
+
+${seccionMarcadores(datos.marcadores)}${seccionBloqueos(datos.bloqueos)}
+
+${seccionFestivos(datos.festivos, datos.puentes)}
+
+${seccionPeticionesExtra(datos.preferencias, datos.fijadas, datos.porNivel)}
+
+${seccionVoluntarios3P(datos.voluntarios3P)}
+
+NORMAS DE ESTA FASE:
+1. Repite TAL CUAL todas las guardias ya fijadas y añade solo las nuevas.
+2. QUINTA/SEXTA GUARDIA (G, GF o GP según el día): solo en los días que tengan UNA sola persona
+   cubriendo la guardia. Se la das a alguien de la lista de peticiones, sin pasar de lo que pide, y
+   preferiblemente del grupo que falta ese día (si solo hay un Mayor, un Pequeño; si solo hay un
+   Pequeño, un Mayor). Reparte con equidad entre quienes lo piden, empezando por quien menos lleve.
+   Nunca en un día que ya tiene dos personas.
+3. TERCER PUESTO (3P): SOLO si, tras lo anterior, todos los días tienen ya dos personas. Solo a los
+   VOLUNTARIOS listados, uno por día como máximo, repartido con equidad entre ellos. Cada
+   voluntario hace un 3P por semana como mucho (ciclo lunes→domingo antes de repetir día de la
+   semana). Si queda algún día con menos de dos personas, NO asignes ningún 3P.
+4. DESCANSO OBLIGATORIO: nadie puede tener guardia (ni 3P) dos días consecutivos, contando los
+   bordes del mes. Nadie con una BAJA ese día; evita vacaciones y rotación si puedes. Nadie fuera de
+   su rango «solo desde/hasta». Junio-agosto: ningún R1.
+5. Si no hay nada que añadir, devuelve las guardias fijadas tal cual.
+6. Usa EXCLUSIVAMENTE los festivos de la lista: G ordinario, GP la víspera de festivo, GF el festivo.
+
+FORMATO DE RESPUESTA (obligatorio, sin excepciones):
+Responde ÚNICAMENTE con un JSON con esta forma exacta, sin texto ni bloques markdown
+alrededor:
+${RESPONSE_SHAPE}
+
+Genera el cuadrante completo de ${titulo} (mes=${mes}, año=${anio}): las fijadas más lo que añadas.`;
 }
 
 /**

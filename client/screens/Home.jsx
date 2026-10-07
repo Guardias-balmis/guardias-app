@@ -4,7 +4,7 @@ import { COLOR, ANOS, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js
 import { periodsOfResident, levelOn } from "./v2/domain/residents.js";
 import { todayISO } from "./client/lib/dates.js";
 import { S } from "./client/lib/design-tokens.js";
-import { puedeMoverCiclo, puedeGenerarCuadrante, esAccesoDesarrollador, puedeValidarCuadrante } from "./client/lib/permisos.js";
+import { puedeMoverCiclo, puedeGenerarCuadrante, puedeAnadirExtras, esAccesoDesarrollador, puedeValidarCuadrante } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 import { ESTADO_INICIAL, recibirSolicitudes, vistaSolicitudes } from "./client/lib/solicitudes.js";
 
@@ -253,7 +253,7 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
 const generacionEnCurso = new Map(); // "usuario|anio-mes" → promesa del resultado
 const ultimoResultado = new Map();   // "usuario|anio-mes" → último resultado enseñado
 
-function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, puedo, comprobando, estadoError, reintentar, verCuadrante, completarDisponible }) {
+function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, puedo, comprobando, estadoError, reintentar, verCuadrante, completarDisponible, puedoExtras, extrasDisponible }) {
   const claveMes = `${usuario || ""}|${anio}-${mes}`;
   const [confirmando, setConfirmando] = useState(false);
   const [generando, setGenerando] = useState(generacionEnCurso.has(claveMes));
@@ -270,6 +270,12 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, pue
   const [modoElegido, setModoElegido] = useState(null);
   const modo = !completarDisponible ? "reemplazar" : (modoElegido || "completar");
   const setModo = setModoElegido;
+  // Fase del generador (P-17/V-59). 1 = las 4 obligatorias de cada uno (solo en Borrador); 2 =
+  // quintas/sextas y tercer puestos (también sobre un mes validado, solo AÑADE). La 2 solo se
+  // ofrece si el servidor desplegado la entiende (`fasesGeneracion`): uno viejo la ignoraría.
+  const hayFase2 = Boolean(puedoExtras && extrasDisponible);
+  const [faseElegida, setFaseElegida] = useState(null);
+  const fase = faseElegida === "extras" && hayFase2 ? "extras" : (faseElegida === "obligatorias" && puedo ? "obligatorias" : (puedo ? "obligatorias" : (hayFase2 ? "extras" : "obligatorias")));
 
   // Al montar y al cambiar de mes: se engancha a la generación en curso de ESE mes si la hay, y
   // enseña su último resultado. Un resultado de agosto bajo el rótulo de septiembre sería peor que
@@ -311,7 +317,7 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, pue
       </Card>
     );
   }
-  if (!puedo) return null;
+  if (!puedo && !hayFase2) return null;
 
   const mover = (delta) => {
     const m = mes + delta;
@@ -326,7 +332,7 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, pue
     setResultado(null);
     ultimoResultado.delete(claveMes);
     // `api.*` nunca lanza (callBackend normaliza a {ok:false}): la entrada del mapa siempre se quita.
-    const promesa = api.generarCuadranteIA(anio, mes, modo);
+    const promesa = api.generarCuadranteIA(anio, mes, fase === "extras" ? "completar" : modo, fase);
     generacionEnCurso.set(claveMes, promesa);
     const r = await promesa;
     generacionEnCurso.delete(claveMes);
@@ -339,14 +345,32 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, pue
 
   return (
     <Card title="🤖 Generar cuadrante de guardias">
+      {puedo && hayFase2 && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          {[["obligatorias", "1 · Obligatorias"], ["extras", "2 · Quintas y tercer puestos"]].map(([v, t]) => (
+            <button key={v} disabled={generando} onClick={() => { setFaseElegida(v); setConfirmando(false); }}
+              style={{ ...S.smallBtn, flex: 1, background: fase === v ? COLOR.blue : COLOR.gray, color: fase === v ? "#fff" : COLOR.blueDark }}>{t}</button>
+          ))}
+        </div>
+      )}
+      {fase === "extras" ? (
+      <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
+        Sobre un mes que ya tiene sus guardias obligatorias, la IA <b>solo añade</b>: primero quintas
+        o sextas guardias en los días con una sola persona (a quien las pidió en sus preferencias) y,
+        si todos los días ya tienen dos, tercer puestos para quienes dijeron que sí este mes. No
+        mueve ni quita nada, y un mes ya validado sigue validado.
+      </div>
+      ) : (
       <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
         Le pide el cuadrante del mes a la IA con las preferencias y ausencias de todo el equipo, y
         lo comprueba contra las reglas antes de guardarlo. Si no consigue uno que las cumpla, no
         guarda nada. Las guardias que ya estén puestas en la rejilla —las que cada residente apuntó
-        de antemano— se respetan tal cual si eliges «completar».
+        de antemano— se respetan tal cual si eliges «completar». Esta fase reparte las 4 guardias
+        obligatorias de cada uno (más las mínimas necesarias si con 4 no se cubre el mes).
       </div>
+      )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+      {fase !== "extras" && <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
         {[
           ["completar", "Completar lo que falta", "respeta las guardias que ya hay en la rejilla y rellena el resto", !completarDisponible],
           ["reemplazar", "Reemplazar todo el mes", "sustituye todas las guardias del mes por las nuevas", false],
@@ -364,7 +388,7 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, pue
             </span>
           </label>
         ))}
-      </div>
+      </div>}
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <button onClick={() => mover(-1)} disabled={generando} style={{ ...S.smallBtn, background: COLOR.gray, color: COLOR.blueDark }}>◀</button>
@@ -376,14 +400,17 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, pue
 
       {!confirmando && (
         <Btn onClick={() => setConfirmando(true)} disabled={generando} color={COLOR.blue} textColor="#fff">
-          {generando ? "Generando… (puede tardar un minuto)" : "Generar cuadrante de guardias"}
+          {generando ? "Generando… (puede tardar un minuto)" : (fase === "extras" ? "Añadir quintas y tercer puestos" : "Generar las guardias obligatorias")}
         </Btn>
       )}
 
       {confirmando && (
         <div style={{ background: COLOR.gray, borderRadius: 8, padding: 10 }}>
           <div style={{ fontSize: 13, color: COLOR.blueDark, marginBottom: 8, lineHeight: 1.5 }}>
-            {modo === "completar" ? (
+            {fase === "extras" ? (
+              <>La IA va a <b>añadir</b> quintas guardias y tercer puestos al cuadrante de {nombreDeMes(anio, mes)}.
+              Lo que ya está puesto no se toca y, si el mes estaba validado, sigue validado.</>
+            ) : modo === "completar" ? (
               <>Se va a <b>completar</b> el cuadrante de {nombreDeMes(anio, mes)}: las guardias que
               ya tenga se quedan como están y la IA solo rellena los huecos. Las vacaciones,
               rotaciones y bajas marcadas en la rejilla se conservan.</>
@@ -479,6 +506,7 @@ function HomeScreen() {
   // Lo que el servidor desplegado sabe hacer al generar (V-47). `false` hasta que lo diga: un
   // servidor anterior a V-47 no manda `modosGeneracion`, y entonces solo se ofrece «reemplazar».
   const [completarDisponible, setCompletarDisponible] = useState(false);
+  const [extrasDisponible, setExtrasDisponible] = useState(false);
   // El fallo de `estadoCuadrante`, aparte del «aún no sé»: sin distinguirlos, la tarjeta del
   // generador decía «Comprobando…» para siempre. `reintento` vuelve a lanzar la consulta.
   const [estadoError, setEstadoError] = useState(null);
@@ -516,6 +544,7 @@ function HomeScreen() {
       setEstadoMes(rEstado.ok ? rEstado.estado : null);
       setEstadoError(rEstado.ok ? null : (rEstado.error || "sin respuesta del servidor"));
       setCompletarDisponible(Boolean(rEstado.ok && Array.isArray(rEstado.modosGeneracion) && rEstado.modosGeneracion.includes("completar")));
+      setExtrasDisponible(Boolean(rEstado.ok && Array.isArray(rEstado.fasesGeneracion) && rEstado.fasesGeneracion.includes("extras")));
       if (rEstado.ok && app.actualizaResponsable) app.actualizaResponsable(rEstado.responsableId);
     })();
     return () => { cancelled = true; };
@@ -524,6 +553,7 @@ function HomeScreen() {
   // sigue sin ofrecerse generar fuera de Borrador, para él igual que para cualquiera.
   const accesoDesarrollador = esAccesoDesarrollador(myResidente?.email);
   const puedoRegistrarImaginaria = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador });
+  const puedoExtras = puedeAnadirExtras({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador, estado: estadoMes });
   const puedoGenerar = puedeGenerarCuadrante({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador, estado: estadoMes });
   const puedoAprobarInvitados = puedeValidarCuadrante({ email: myResidente?.email, puedeMoverCiclo: puedoRegistrarImaginaria });
   const puedoOfrecerme = proximoMandato && !proximoMandato.mandato
@@ -645,7 +675,7 @@ function HomeScreen() {
           el síntoma del 2026-08-31 otra vez. Si al llegar resulta que hay Responsable y no es él,
           `puedo` sigue en false y la tarjeta desaparece, como ahora. */}
       <GeneradorIA api={app.api} usuario={app.auth && app.auth.residente && app.auth.residente.id} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
-        setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")} completarDisponible={completarDisponible}
+        setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")} completarDisponible={completarDisponible} puedoExtras={puedoExtras} extrasDisponible={extrasDisponible}
         estadoError={estadoError} reintentar={() => setReintento((n) => n + 1)}
         comprobando={estadoMes === null && (app.isResponsable || app.grupo === "MAYOR" || accesoDesarrollador)} />
 
