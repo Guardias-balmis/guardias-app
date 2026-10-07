@@ -11,22 +11,14 @@ import { datesOfMonth, weekday, compareISO, toISO, addMonths } from "./v2/domain
 import { rangoValido } from "./client/lib/fechas.js";
 import { puedeMoverCiclo, esAccesoDesarrollador } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
+import {
+  prefsPorDefecto, prefsParaGuardar, cargaEmpezada, cargaTerminada, faseDe, sePuedeEditar,
+  guardadoConfirmado, hayCambiosSinGuardar,
+} from "./client/lib/preferencias.js";
+import { avisarAlSalir } from "./client/lib/aviso-salida.js";
 
 const { useState, useEffect, useRef } = React;
 const { Card, SectionTitle, Btn, Aviso } = window.UI;
-
-/** Las fechas de `fechasEvitar` que pertenecen al mes en pantalla (las demás no se ven ni se mandan). */
-function fechasDelMes(lista, anio, mes) {
-  const prefijo = `${anio}-${String(mes).padStart(2, "0")}-`;
-  return (Array.isArray(lista) ? lista : []).filter((f) => typeof f === "string" && f.startsWith(prefijo));
-}
-
-const DEFAULT_PREFS = {
-  maxGuardias: 4, // las 4 obligatorias; 5 o 6 = «quiero hacer más» (P-17: el generador las reparte en la fase 2)
-  fechasEvitar: [],
-  notas: "",
-  tercerPuesto: false, // «¿Deseas hacer tercer puesto este mes?» (P-16/V-55): por mes, y por defecto no
-};
 const MOTIVO_LABEL = { VACACIONES: "Vacaciones", ROTACION: "Rotación externa", BAJA: "Baja" };
 // Etiquetas de los riesgos de P-13 (spec.md §8/§8.1, blockPreview.js) — el `tipo` que devuelve
 // el dominio es un identificador estable, no texto pensado para pantalla.
@@ -46,35 +38,37 @@ function fechaEs(iso) {
   return d.toLocaleDateString("es-ES", { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
-function Counter({ value, onChange, min, max, accent = COLOR.blue, bg = COLOR.bluePale }) {
+function Counter({ value, onChange, min, max, accent = COLOR.blue, bg = COLOR.bluePale, disabled = false }) {
   const btnStyle = { ...S.counterBtn, borderColor: accent, color: accent, background: bg };
+  const sinBajar = disabled || value <= min;
+  const sinSubir = disabled || value >= max;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-      <button style={{ ...btnStyle, opacity: value <= min ? 0.4 : 1 }} disabled={value <= min}
+    <div style={{ display: "flex", alignItems: "center", gap: 14, opacity: disabled ? 0.5 : 1 }}>
+      <button style={{ ...btnStyle, opacity: sinBajar ? 0.4 : 1 }} disabled={sinBajar}
         onClick={() => onChange(Math.max(min, value - 1))}>−</button>
-      <div style={{ fontSize: 20, fontWeight: 700, color: COLOR.blueDark, minWidth: 26, textAlign: "center" }}>{value}</div>
-      <button style={{ ...btnStyle, opacity: value >= max ? 0.4 : 1 }} disabled={value >= max}
+      <div style={{ fontSize: 20, fontWeight: 700, color: COLOR.blueDark, minWidth: 26, textAlign: "center" }}>{disabled ? "…" : value}</div>
+      <button style={{ ...btnStyle, opacity: sinSubir ? 0.4 : 1 }} disabled={sinSubir}
         onClick={() => onChange(Math.min(max, value + 1))}>+</button>
     </div>
   );
 }
 
 /** Rejilla de fechas del mes para marcar BLANDO (preferido/evitar) — sustituye a los toggles de día-de-semana del v1. */
-function DateGrid({ anio, mes, selected, onToggle, color, bloqueadas }) {
+function DateGrid({ anio, mes, selected, onToggle, color, bloqueadas, disabled = false }) {
   const dias = datesOfMonth(anio, mes);
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, opacity: disabled ? 0.5 : 1 }}>
       {dias.map((fecha) => {
         const active = selected.includes(fecha);
         const bloqueada = bloqueadas.has(fecha);
         return (
-          <button key={fecha} disabled={bloqueada} title={bloqueada ? "Ya tienes un bloqueo ese día" : fecha}
+          <button key={fecha} disabled={bloqueada || disabled} title={bloqueada ? "Ya tienes un bloqueo ese día" : fecha}
             onClick={() => onToggle(fecha)} style={{
               ...S.dayToggleBtn, padding: "6px 2px", display: "flex", flexDirection: "column", alignItems: "center", gap: 0,
               background: bloqueada ? COLOR.grayMid : active ? color : "#fff",
               color: bloqueada ? COLOR.grayDark : active ? "#fff" : COLOR.grayDark,
               border: active || bloqueada ? "none" : `1.5px solid ${COLOR.grayMid}`,
-              opacity: bloqueada ? 0.6 : 1, cursor: bloqueada ? "default" : "pointer",
+              opacity: bloqueada ? 0.6 : 1, cursor: bloqueada || disabled ? "default" : "pointer",
             }}>
             <span style={{ fontWeight: 700 }}>{Number(fecha.slice(8, 10))}</span>
             <span style={{ fontSize: 9, fontWeight: 400, opacity: 0.8 }}>{weekday(fecha)}</span>
@@ -172,7 +166,7 @@ function PrefsScreen() {
   const app = window.useApp();
   const { myResidente, anio, mes, setTab, showToast, api } = app;
 
-  const [prefs, setPrefs] = useState(DEFAULT_PREFS);
+  const [prefs, setPrefs] = useState(prefsPorDefecto);
   const [bloqueos, setBloqueos] = useState([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -197,6 +191,26 @@ function PrefsScreen() {
   // lista de residentes tuviera un hook más que el anterior — error #310 de React y la app en
   // blanco para quien recargaba y entraba en Preferencias antes de que respondiera Apps Script.
   const [cancelando, setCancelando] = useState(null);
+  // Qué hay guardado del mes en pantalla y si ya ha llegado (client/lib/preferencias.js). Hasta que
+  // llega, lo que se ve son los valores por defecto: no se puede escribir (la respuesta lo
+  // sustituiría) ni guardar (pisaría lo guardado). Si `misPreferencias` falla, Guardar se cambia por
+  // Reintentar, que vuelve a pedirlo (`recarga`). También antes del `return` temprano (error #310).
+  const [carga, setCarga] = useState(() => cargaEmpezada(anio, mes));
+  const [recarga, setRecarga] = useState(0);
+  const fase = faseDe(carga, anio, mes);
+  const editable = sePuedeEditar(carga, anio, mes);
+  const sinGuardar = hayCambiosSinGuardar(carga, anio, mes, prefs);
+  const nombreMes = nombreMesDe(anio, mes).toLowerCase();
+  // Lo no guardado se perdía sin avisar al salir de la pantalla. App.jsx pregunta antes de cambiar
+  // de pestaña, ir atrás o cerrar sesión si este ref dice el mes (contrato con App: null = nada que
+  // perder); recargar o cerrar la pestaña no pasa por App, y eso lo pregunta el navegador.
+  useEffect(() => {
+    const ref = app.prefsSinGuardarRef;
+    if (!ref) return undefined;
+    ref.current = sinGuardar ? nombreMes : null;
+    return () => { ref.current = null; };
+  }, [sinGuardar, nombreMes]);
+  useEffect(() => avisarAlSalir(window, sinGuardar), [sinGuardar]);
   const puedoRegistrarAjenas = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador: esAccesoDesarrollador(myResidente?.email) });
 
   // El mes que está en pantalla, para tirar las respuestas de un mes anterior que lleguen tarde:
@@ -224,24 +238,30 @@ function PrefsScreen() {
     (async () => {
       app.setLoading(true);
       // Al cambiar de mes se parte de cero ANTES de que responda el servidor: si no, un Guardar
-      // rápido mandaba las `fechasEvitar` del mes anterior con el mes nuevo.
-      setPrefs({ ...DEFAULT_PREFS });
+      // rápido mandaba las `fechasEvitar` del mes anterior con el mes nuevo. Las ausencias también:
+      // si no, las del mes anterior se seguían viendo (y contando para el mínimo) bajo la cabecera
+      // del nuevo hasta que respondía el servidor.
+      setCarga(cargaEmpezada(anio, mes));
+      setPrefs(prefsPorDefecto());
+      setBloqueos([]);
       const [rPrefs, , rEstado] = await Promise.all([api.misPreferencias(anio, mes), cargarBloqueos(), api.estadoCuadrante(anio, mes)]);
       if (cancelled) return;
       // Un fallo aquí solo esconde el selector de ausencia ajena: no se asume el permiso.
       setSinResponsable(rEstado.ok ? rEstado.sinResponsable === true : false);
-      // Solo las fechas DEL MES: una fila legada con una fecha de otro mes (escrita por un servidor
-      // anterior a la validación) no se ve en la rejilla, no se puede quitar, y el servidor nuevo
-      // rechazaría cada Guardar por ella — sin salida desde la app.
-      if (rPrefs.ok) setPrefs(rPrefs.prefs ? { ...DEFAULT_PREFS, ...rPrefs.prefs, fechasEvitar: fechasDelMes(rPrefs.prefs.fechasEvitar, anio, mes) } : { ...DEFAULT_PREFS });
-      else showToast("Error cargando preferencias: " + rPrefs.error, "err");
+      const terminada = cargaTerminada(anio, mes, rPrefs);
+      setCarga(terminada);
+      if (terminada.fase === "lista") setPrefs(terminada.guardadas);
+      else showToast("Error cargando preferencias: " + terminada.error, "err");
       app.setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [anio, mes, myResidente?.id]);
+  }, [anio, mes, myResidente?.id, recarga]);
 
-  // Aparte del efecto de carga: el permiso se conoce DESPUÉS de que responda estadoCuadrante.
-  useEffect(() => { cargarAjenas(); }, [anio, mes, puedoRegistrarAjenas]);
+  // Aparte del efecto de carga: el permiso se conoce DESPUÉS de que responda estadoCuadrante. Las
+  // del mes anterior se vacían AQUÍ y no en el efecto de carga: si las vaciara aquel sin que este se
+  // repitiera (quien entra antes de que llegue su residente), la lista se quedaba vacía. Y depende
+  // de `myResidente?.id` porque sin él el filtro de «ajenas» no sabe cuáles son las propias.
+  useEffect(() => { setAjenas([]); cargarAjenas(); }, [anio, mes, puedoRegistrarAjenas, myResidente?.id]);
 
   if (!myResidente) {
     return (
@@ -255,17 +275,25 @@ function PrefsScreen() {
   // podía cambiar de mes desde el cuadrante, así que cargar preferencias del mes en curso y de
   // los siguientes obligaba a ir y volver de pantalla en cada uno. `anio`/`mes` son estado
   // global de la app (compartido con Calendar.jsx) — cambiarlos aquí también mueve el cuadrante.
+  // Con cambios sin guardar se pregunta antes, y no se cambia mientras se guarda: la respuesta de
+  // ese guardado es del mes que se deja.
   const cambiarMes = (delta) => {
+    if (saving) return;
+    if (sinGuardar && !window.confirm(`Tienes cambios sin guardar en tus preferencias de ${nombreMes}. ¿Cambiar de mes y perderlos?`)) return;
     const iso = addMonths(toISO(anio, mes, 1), delta);
     app.setAnio(Number(iso.slice(0, 4)));
     app.setMes(Number(iso.slice(5, 7)));
   };
 
-  const set = (field) => (value) => setPrefs((p) => ({ ...p, [field]: value }));
-  const toggleFecha = (field, fecha) => setPrefs((p) => ({
-    ...p,
-    [field]: p[field].includes(fecha) ? p[field].filter((d) => d !== fecha) : [...p[field], fecha],
-  }));
+  // Los controles ya están deshabilitados mientras no se puede editar; esto es la segunda llave.
+  const set = (field) => (value) => { if (editable) setPrefs((p) => ({ ...p, [field]: value })); };
+  const toggleFecha = (field, fecha) => {
+    if (!editable) return;
+    setPrefs((p) => ({
+      ...p,
+      [field]: p[field].includes(fecha) ? p[field].filter((d) => d !== fecha) : [...p[field], fecha],
+    }));
+  };
 
   // El mínimo de 4 (normativa.pdf p.1) trae su propia excepción explícita — "salvo excepciones
   // (por ejemplo febrero o vacaciones)" — así que con cualquier bloqueo este mes (vacaciones,
@@ -288,11 +316,14 @@ function PrefsScreen() {
   }
 
   const guardar = async () => {
+    if (!editable || saving) return;
     setSaving(true);
     setSaved(false);
-    const r = await api.guardarPreferencias(anio, mes, { ...prefs, fechasEvitar: fechasDelMes(prefs.fechasEvitar, anio, mes) });
+    const enviadas = prefsParaGuardar(prefs, anio, mes);
+    const r = await api.guardarPreferencias(anio, mes, enviadas);
     setSaving(false);
     if (r.ok) {
+      setCarga((c) => guardadoConfirmado(c, anio, mes, enviadas));
       showToast("Preferencias guardadas ✓");
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -316,11 +347,11 @@ function PrefsScreen() {
 
       <Card>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-          <button onClick={() => cambiarMes(-1)} style={{ ...S.smallBtn, background: COLOR.bluePale, color: COLOR.blue }}>◀</button>
+          <button onClick={() => cambiarMes(-1)} disabled={saving} style={{ ...S.smallBtn, background: COLOR.bluePale, color: COLOR.blue, opacity: saving ? 0.5 : 1 }}>◀</button>
           <div style={{ fontSize: 16, fontWeight: 700, color: COLOR.blueDark, textTransform: "capitalize" }}>
             {nombreMesDe(anio, mes)}
           </div>
-          <button onClick={() => cambiarMes(1)} style={{ ...S.smallBtn, background: COLOR.bluePale, color: COLOR.blue }}>▶</button>
+          <button onClick={() => cambiarMes(1)} disabled={saving} style={{ ...S.smallBtn, background: COLOR.bluePale, color: COLOR.blue, opacity: saving ? 0.5 : 1 }}>▶</button>
         </div>
         <div style={{ marginTop: 10, textAlign: "center" }}>
           <button onClick={() => setTab("calendar")} style={{ ...S.smallBtn, background: COLOR.bluePale, color: COLOR.blue }}>
@@ -333,6 +364,18 @@ function PrefsScreen() {
         preferencias del mes en curso y de los siguientes, una por una — recordá guardar antes de
         cambiar de mes.
       </div>
+      {fase === "cargando" && (
+        <Aviso color={COLOR.blueDark} bg={COLOR.bluePale}>Cargando tus preferencias de {nombreMes}…</Aviso>
+      )}
+      {fase === "error" && (
+        <Aviso color={COLOR.red} bg={COLOR.redLight}>
+          No se han podido cargar tus preferencias de {nombreMes} ({carga.error}). Hasta que carguen no
+          se pueden cambiar: guardar ahora pisaría lo que ya tengas guardado.
+          <div style={{ marginTop: 8 }}>
+            <Btn onClick={() => setRecarga((n) => n + 1)} color={COLOR.red}>Reintentar</Btn>
+          </div>
+        </Aviso>
+      )}
 
       {/* Decisión V-47: lo que ya está comprometido no es una preferencia, es una guardia, y va a
           la rejilla — desde aquí solo se señala el camino, para que nadie lo escriba en «Notas»
@@ -347,7 +390,7 @@ function PrefsScreen() {
       </Card>
 
       <Card title="🎯 Guardias que quiero hacer este mes" accent={COLOR.turquoise}>
-        <Counter value={prefs.maxGuardias} min={tieneAusenciaEsteMes ? 0 : 4} max={6} onChange={set("maxGuardias")} accent={COLOR.turquoise} bg={COLOR.turquoiseLight} />
+        <Counter value={prefs.maxGuardias} min={tieneAusenciaEsteMes ? 0 : 4} max={6} onChange={set("maxGuardias")} accent={COLOR.turquoise} bg={COLOR.turquoiseLight} disabled={!editable} />
         <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 8 }}>
           {tieneAusenciaEsteMes
             ? "(normativa: 4–6, salvo excepciones — con una ausencia registrada este mes podés pedir menos)"
@@ -362,7 +405,9 @@ function PrefsScreen() {
           baja médica o el embarazo son distintos: <b>nunca</b> se te asignará guardia esos
           días, lo hace cumplir el validador.
         </div>
-        {bloqueos.length === 0 ? (
+        {fase === "cargando" ? (
+          <div style={{ fontSize: 13, color: COLOR.grayDark, fontStyle: "italic", marginBottom: 10 }}>Cargando las fechas de este mes…</div>
+        ) : bloqueos.length === 0 ? (
           <div style={{ fontSize: 13, color: COLOR.grayDark, fontStyle: "italic", marginBottom: 10 }}>Sin fechas registradas este mes.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
@@ -470,8 +515,8 @@ function PrefsScreen() {
         </div>
         <div style={{ fontSize: 14, fontWeight: 700, color: COLOR.blueDark, marginBottom: 8 }}>¿Deseas hacer tercer puesto este mes?</div>
         <div style={{ display: "flex", gap: 8 }}>
-          <Btn onClick={() => set("tercerPuesto")(true)} color={prefs.tercerPuesto ? COLOR.purple : COLOR.gray} textColor={prefs.tercerPuesto ? "#fff" : COLOR.grayDark}>Sí</Btn>
-          <Btn onClick={() => set("tercerPuesto")(false)} color={!prefs.tercerPuesto ? COLOR.blueDark : COLOR.gray} textColor={!prefs.tercerPuesto ? "#fff" : COLOR.grayDark}>No</Btn>
+          <Btn onClick={() => set("tercerPuesto")(true)} disabled={!editable} color={prefs.tercerPuesto ? COLOR.purple : COLOR.gray} textColor={prefs.tercerPuesto ? "#fff" : COLOR.grayDark}>Sí</Btn>
+          <Btn onClick={() => set("tercerPuesto")(false)} disabled={!editable} color={!prefs.tercerPuesto ? COLOR.blueDark : COLOR.gray} textColor={!prefs.tercerPuesto ? "#fff" : COLOR.grayDark}>No</Btn>
         </div>
         <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 8, lineHeight: 1.5 }}>
           Recuerda guardar. Si luego te toca uno y no puedes, puedes quitártelo tú mismo del cuadrante.
@@ -482,19 +527,28 @@ function PrefsScreen() {
         <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10 }}>
           Toca las fechas en las que preferirías no tener guardia (se minimiza, no se prohíbe).
         </div>
-        <DateGrid anio={anio} mes={mes} selected={prefs.fechasEvitar} bloqueadas={fechasBloqueadas}
+        <DateGrid anio={anio} mes={mes} selected={prefs.fechasEvitar} bloqueadas={fechasBloqueadas} disabled={!editable}
           onToggle={(f) => toggleFecha("fechasEvitar", f)} color={COLOR.amber} />
       </Card>
 
       <Card title="Notas">
-        <textarea value={prefs.notas} onChange={(e) => set("notas")(e.target.value)}
-          placeholder="Cualquier otra circunstancia a tener en cuenta…" rows={4}
+        <textarea value={prefs.notas} onChange={(e) => set("notas")(e.target.value)} disabled={!editable}
+          placeholder={editable ? "Cualquier otra circunstancia a tener en cuenta…" : ""} rows={4}
           style={{ ...S.input, width: "100%", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} />
       </Card>
 
-      <Btn onClick={guardar} disabled={saving}>
-        {saving ? "Guardando…" : saved ? "✓ Guardado" : "💾 Guardar preferencias"}
-      </Btn>
+      {sinGuardar && !saving && (
+        <div style={{ fontSize: 12, fontWeight: 700, color: COLOR.orange, textAlign: "center", marginBottom: -6 }}>
+          Tienes cambios sin guardar en {nombreMes}
+        </div>
+      )}
+      {fase === "error" ? (
+        <Btn onClick={() => setRecarga((n) => n + 1)} color={COLOR.red}>No se pudieron cargar tus preferencias · Reintentar</Btn>
+      ) : (
+        <Btn onClick={guardar} disabled={saving || !editable}>
+          {!editable ? "Cargando preferencias del mes…" : saving ? "Guardando…" : saved ? "✓ Guardado" : "💾 Guardar preferencias"}
+        </Btn>
+      )}
     </div>
   );
 }

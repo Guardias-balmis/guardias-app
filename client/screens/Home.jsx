@@ -4,11 +4,11 @@ import { COLOR, ANOS, ANO_COLORS, ANO_TEXT } from "./client/lib/design-tokens.js
 import { periodsOfResident, levelOn } from "./v2/domain/residents.js";
 import { todayISO } from "./client/lib/dates.js";
 import { S } from "./client/lib/design-tokens.js";
-import { puedeMoverCiclo, puedeGenerarCuadrante, puedeAnadirExtras, esAccesoDesarrollador, puedeValidarCuadrante } from "./client/lib/permisos.js";
+import { puedeMoverCiclo, vistaGenerador, esAccesoDesarrollador, puedeValidarCuadrante } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
 import { ESTADO_INICIAL, recibirSolicitudes, vistaSolicitudes } from "./client/lib/solicitudes.js";
 
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 const { Card, QuickCard, Btn, Aviso } = window.UI;
 
 const MESES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -251,8 +251,8 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
  *
  * Aquí no hay ni una regla de negocio. El servidor le pide el cuadrante al modelo, lo juzga con el
  * validador de siempre y solo escribe si pasa; esta tarjeta enseña el resultado. Lo único que
- * decide es a QUIÉN se le ofrece el botón (`puedeGenerarCuadrante`), y el servidor lo vuelve a
- * comprobar de todas formas.
+ * decide es a QUIÉN se le ofrece y qué fase (`vistaGenerador`, en permisos.js), y el servidor lo
+ * vuelve a comprobar de todas formas.
  *
  * Los dos pasos (pulsar → confirmar) no son ceremonia: generar REEMPLAZA el cuadrante del mes, así
  * que un click de más sobre un mes ya montado a mano se lleva por delante el trabajo de una tarde.
@@ -266,7 +266,9 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
 const generacionEnCurso = new Map(); // "usuario|anio-mes" → promesa del resultado
 const ultimoResultado = new Map();   // "usuario|anio-mes" → último resultado enseñado
 
-function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, puedo, comprobando, estadoError, reintentar, verCuadrante, completarDisponible, puedoExtras, extrasDisponible }) {
+// `vista` es lo que decide `permisos.js:vistaGenerador` (qué fases se ofrecen, por qué no, si se
+// está comprobando): aquí solo se pinta. La tarjeta solo se monta cuando `vista` no es null.
+function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vista, reintentar, verCuadrante, completarDisponible }) {
   const claveMes = `${usuario || ""}|${anio}-${mes}`;
   const [confirmando, setConfirmando] = useState(false);
   const [generando, setGenerando] = useState(generacionEnCurso.has(claveMes));
@@ -284,11 +286,15 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, pue
   const modo = !completarDisponible ? "reemplazar" : (modoElegido || "completar");
   const setModo = setModoElegido;
   // Fase del generador (P-17/V-59). 1 = las 4 obligatorias de cada uno (solo en Borrador); 2 =
-  // quintas/sextas y tercer puestos (también sobre un mes validado, solo AÑADE). La 2 solo se
-  // ofrece si el servidor desplegado la entiende (`fasesGeneracion`): uno viejo la ignoraría.
-  const hayFase2 = Boolean(puedoExtras && extrasDisponible);
+  // quintas/sextas y tercer puestos (también sobre un mes validado, solo AÑADE). Cuáles se ofrecen
+  // lo dice `vista.fases` (la 2, solo si el servidor desplegado la entiende); la elegida se
+  // respeta mientras siga ofrecida, y si no, la primera.
   const [faseElegida, setFaseElegida] = useState(null);
-  const fase = faseElegida === "extras" && hayFase2 ? "extras" : (faseElegida === "obligatorias" && puedo ? "obligatorias" : (puedo ? "obligatorias" : (hayFase2 ? "extras" : "obligatorias")));
+  const fase = vista.fases.includes(faseElegida) ? faseElegida : (vista.fases[0] || "obligatorias");
+  // Nada se pulsa mientras se comprueba el estado ni en un mes que no admite generar; las flechas
+  // sí (salvo generando, o sin el permiso confirmado: `vista.flechas`), porque son la única forma
+  // de salir de ese mes desde Inicio.
+  const inerte = !vista.activa;
 
   // Al montar y al cambiar de mes: se engancha a la generación en curso de ESE mes si la hay, y
   // enseña su último resultado. Un resultado de agosto bajo el rótulo de septiembre sería peor que
@@ -302,35 +308,6 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, pue
     if (enCurso) enCurso.then((r) => { if (vivo) { setGenerando(false); setResultado(r); } });
     return () => { vivo = false; };
   }, [claveMes]);
-
-  // Mientras no se sepa el estado del mes, la tarjeta NO se esconde: se enseña inerte diciendo
-  // que está comprobando. Esconderla era indistinguible de «no tienes permiso», y con una
-  // conexión lenta eso son varios segundos en los que el botón sencillamente no está y quien
-  // mira concluye que la aplicación está rota o que no le dejan (pasó de verdad, 2026-08-31).
-  // Sigue sin ofrecerse el botón: no saber si el mes está publicado no es saber que no lo está.
-  if (comprobando) {
-    // Un fallo al consultar el estado NO es «comprobando»: para el Responsable (cuyo permiso no
-    // depende de `sinResponsable`) la tarjeta se quedaba en «Comprobando…» para siempre, sin decir
-    // que había fallado ni ofrecer reintentar.
-    if (estadoError) {
-      return (
-        <Card title="🤖 Generar cuadrante de guardias">
-          <Aviso color={COLOR.red} bg={COLOR.redLight}>No se pudo comprobar el estado del mes: {estadoError}</Aviso>
-          <div style={{ marginTop: 8 }}>
-            <button onClick={reintentar} style={{ ...S.smallBtn, background: COLOR.blue, color: "#fff" }}>Reintentar</button>
-          </div>
-        </Card>
-      );
-    }
-    return (
-      <Card title="🤖 Generar cuadrante de guardias">
-        <div style={{ fontSize: 12, color: COLOR.grayDark, lineHeight: 1.5 }}>
-          Comprobando el estado del mes…
-        </div>
-      </Card>
-    );
-  }
-  if (!puedo && !hayFase2) return null;
 
   const mover = (delta) => {
     const m = mes + delta;
@@ -356,88 +333,133 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, pue
 
   const avisos = (resultado && resultado.violaciones) || [];
 
+  // Por qué no se ofrece nada en este mes, dicho en la propia tarjeta: antes la tarjeta
+  // desaparecía, y con ella las flechas para salir del mes.
+  const porQueNo = vista.motivo === "PUBLICADO"
+    ? <>El cuadrante de {nombreDeMes(anio, mes)} ya está <b>publicado</b>: la IA no genera ni añade guardias en un mes publicado. Si hay que cambiar algo, despublícalo antes desde el cuadrante.</>
+    : vista.motivo === "VALIDADO"
+      ? <>El cuadrante de {nombreDeMes(anio, mes)} ya está <b>validado</b>: las guardias obligatorias ya no se generan, y el servidor desplegado todavía no sabe añadir quintas y tercer puestos (hasta que se redespliegue).</>
+      : <>El cuadrante de {nombreDeMes(anio, mes)} está en estado «{vista.estado}»: no se genera con la IA.</>;
+
   return (
     <Card title="🤖 Generar cuadrante de guardias">
-      {puedo && hayFase2 && (
-        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-          {[["obligatorias", "1 · Obligatorias"], ["extras", "2 · Quintas y tercer puestos"]].map(([v, t]) => (
-            <button key={v} disabled={generando} onClick={() => { setFaseElegida(v); setConfirmando(false); }}
-              style={{ ...S.smallBtn, flex: 1, background: fase === v ? COLOR.blue : COLOR.gray, color: fase === v ? "#fff" : COLOR.blueDark }}>{t}</button>
-          ))}
-        </div>
-      )}
-      {fase === "extras" ? (
-      <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
-        Sobre un mes que ya tiene sus guardias obligatorias, la IA <b>solo añade</b>: primero quintas
-        o sextas guardias en los días con una sola persona (a quien las pidió en sus preferencias) y,
-        si todos los días ya tienen dos, tercer puestos para quienes dijeron que sí este mes. No
-        mueve ni quita nada, y un mes ya validado sigue validado.
-      </div>
-      ) : (
-      <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
-        Le pide el cuadrante del mes a la IA con las preferencias y ausencias de todo el equipo, y
-        lo comprueba contra las reglas antes de guardarlo. Si no consigue uno que las cumpla, no
-        guarda nada. Las guardias que ya estén puestas en la rejilla —las que cada residente apuntó
-        de antemano— se respetan tal cual si eliges «completar». Esta fase reparte las 4 guardias
-        obligatorias de cada uno (más las mínimas necesarias si con 4 no se cubre el mes).
-      </div>
-      )}
-
-      {fase !== "extras" && <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
-        {[
-          ["completar", "Completar lo que falta", "respeta las guardias que ya hay en la rejilla y rellena el resto", !completarDisponible],
-          ["reemplazar", "Reemplazar todo el mes", "sustituye todas las guardias del mes por las nuevas", false],
-        ].map(([valor, titulo, detalle, noDisponible]) => (
-          <label key={valor} style={{
-            display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, cursor: generando || noDisponible ? "default" : "pointer",
-            background: modo === valor ? COLOR.bluePale : COLOR.gray, border: `1.5px solid ${modo === valor ? COLOR.blue : COLOR.grayMid}`,
-            opacity: noDisponible ? 0.55 : 1,
-          }}>
-            <input type="radio" name="modo-generacion" value={valor} checked={modo === valor} disabled={generando || noDisponible}
-              onChange={() => setModo(valor)} style={{ marginTop: 2 }} />
-            <span style={{ fontSize: 13, color: COLOR.blueDark, lineHeight: 1.4 }}>
-              <b>{titulo}</b> — <span style={{ color: COLOR.grayDark }}>{detalle}</span>
-              {noDisponible && <span style={{ display: "block", color: COLOR.orange, fontSize: 12 }}>El servidor desplegado todavía no admite este modo: hasta que se redespliegue, solo se puede reemplazar.</span>}
-            </span>
-          </label>
-        ))}
-      </div>}
-
+      {/* El selector va ARRIBA y en todas las variantes —comprobando, error, mes que no admite
+          generar—: pegado al título, su sitio no depende de lo que haya debajo, así que una ráfaga
+          de ◀/▶ toca siempre las flechas. Abajo del todo se movía con cada variante, y en
+          «Comprobando…» no estaba: el segundo toque caía en otra tarjeta. */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <button onClick={() => mover(-1)} disabled={generando} style={{ ...S.smallBtn, background: COLOR.gray, color: COLOR.blueDark }}>◀</button>
+        <button onClick={() => mover(-1)} disabled={generando || !vista.flechas} style={{ ...S.smallBtn, background: COLOR.gray, color: COLOR.blueDark }}>◀</button>
         <div style={{ flex: 1, textAlign: "center", fontSize: 15, fontWeight: 700, color: COLOR.blueDark, textTransform: "capitalize" }}>
           {nombreDeMes(anio, mes)}
         </div>
-        <button onClick={() => mover(1)} disabled={generando} style={{ ...S.smallBtn, background: COLOR.gray, color: COLOR.blueDark }}>▶</button>
+        <button onClick={() => mover(1)} disabled={generando || !vista.flechas} style={{ ...S.smallBtn, background: COLOR.gray, color: COLOR.blueDark }}>▶</button>
       </div>
 
-      {!confirmando && (
-        <Btn onClick={() => setConfirmando(true)} disabled={generando} color={COLOR.blue} textColor="#fff">
-          {generando ? "Generando… (puede tardar un minuto)" : (fase === "extras" ? "Añadir quintas y tercer puestos" : "Generar las guardias obligatorias")}
-        </Btn>
-      )}
-
-      {confirmando && (
-        <div style={{ background: COLOR.gray, borderRadius: 8, padding: 10 }}>
-          <div style={{ fontSize: 13, color: COLOR.blueDark, marginBottom: 8, lineHeight: 1.5 }}>
-            {fase === "extras" ? (
-              <>La IA va a <b>añadir</b> quintas guardias y tercer puestos al cuadrante de {nombreDeMes(anio, mes)}.
-              Lo que ya está puesto no se toca y, si el mes estaba validado, sigue validado.</>
-            ) : modo === "completar" ? (
-              <>Se va a <b>completar</b> el cuadrante de {nombreDeMes(anio, mes)}: las guardias que
-              ya tenga se quedan como están y la IA solo rellena los huecos. Las vacaciones,
-              rotaciones y bajas marcadas en la rejilla se conservan.</>
-            ) : (
-              <>Se va a <b>reemplazar</b> el cuadrante de {nombreDeMes(anio, mes)}: las guardias que ya
-              tenga se sustituyen por las nuevas. Las vacaciones, rotaciones y bajas marcadas en la
-              rejilla se conservan.</>
-            )}
+      {/* Un fallo al consultar el estado NO es «comprobando»: para el Responsable (cuyo permiso no
+          depende de `sinResponsable`) la tarjeta se quedaba en «Comprobando…» para siempre, sin
+          decir que había fallado ni ofrecer reintentar. */}
+      {vista.error ? (
+        <>
+          <Aviso color={COLOR.red} bg={COLOR.redLight}>No se pudo comprobar el estado del mes: {vista.error}</Aviso>
+          <div style={{ marginTop: 8 }}>
+            <button onClick={reintentar} style={{ ...S.smallBtn, background: COLOR.blue, color: "#fff" }}>Reintentar</button>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={generar} style={{ ...S.smallBtn, background: COLOR.blue, color: "#fff" }}>Sí, generar</button>
-            <button onClick={() => setConfirmando(false)} style={{ ...S.smallBtn, background: "#fff", color: COLOR.blueDark }}>Cancelar</button>
-          </div>
+        </>
+      ) : vista.fases.length === 0 ? (
+        // Mientras no se sepa el estado del mes la tarjeta NO se esconde: esconderla era
+        // indistinguible de «no tienes permiso», y con una conexión lenta eso son varios segundos
+        // en los que quien mira concluye que la app está rota (pasó de verdad, 2026-08-31).
+        <div style={{ fontSize: 12, color: COLOR.grayDark, lineHeight: 1.5, background: COLOR.gray, borderRadius: 8, padding: "8px 10px" }}>
+          {vista.comprobando ? "Comprobando el estado del mes…" : porQueNo}
+          {vista.motivo && (
+            <div>
+              <button onClick={verCuadrante} style={{ ...S.smallBtn, background: "#fff", color: COLOR.blue, marginTop: 8 }}>Ver el cuadrante →</button>
+            </div>
+          )}
         </div>
+      ) : (
+        <>
+          {vista.fases.length > 1 && (
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              {[["obligatorias", "1 · Obligatorias"], ["extras", "2 · Quintas y tercer puestos"]].map(([v, t]) => (
+                <button key={v} disabled={generando || inerte} onClick={() => { setFaseElegida(v); setConfirmando(false); }}
+                  style={{ ...S.smallBtn, flex: 1, background: fase === v ? COLOR.blue : COLOR.gray, color: fase === v ? "#fff" : COLOR.blueDark }}>{t}</button>
+              ))}
+            </div>
+          )}
+          {fase === "extras" ? (
+          <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
+            {vista.motivo === "VALIDADO" && !vista.comprobando && (
+              <><b>Este mes ya está validado</b>, así que las guardias obligatorias ya no se generan: solo queda añadir. </>
+            )}
+            Sobre un mes que ya tiene sus guardias obligatorias, la IA <b>solo añade</b>: primero quintas
+            o sextas guardias en los días con una sola persona (a quien las pidió en sus preferencias) y,
+            si todos los días ya tienen dos, tercer puestos para quienes dijeron que sí este mes. No
+            mueve ni quita nada, y un mes ya validado sigue validado.
+          </div>
+          ) : (
+          <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
+            Le pide el cuadrante del mes a la IA con las preferencias y ausencias de todo el equipo, y
+            lo comprueba contra las reglas antes de guardarlo. Si no consigue uno que las cumpla, no
+            guarda nada. Las guardias que ya estén puestas en la rejilla —las que cada residente apuntó
+            de antemano— se respetan tal cual si eliges «completar». Esta fase reparte las 4 guardias
+            obligatorias de cada uno (más las mínimas necesarias si con 4 no se cubre el mes).
+          </div>
+          )}
+
+          {fase !== "extras" && <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+            {[
+              ["completar", "Completar lo que falta", "respeta las guardias que ya hay en la rejilla y rellena el resto", !completarDisponible],
+              ["reemplazar", "Reemplazar todo el mes", "sustituye todas las guardias del mes por las nuevas", false],
+            ].map(([valor, titulo, detalle, noDisponible]) => (
+              <label key={valor} style={{
+                display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, cursor: generando || noDisponible || inerte ? "default" : "pointer",
+                background: modo === valor ? COLOR.bluePale : COLOR.gray, border: `1.5px solid ${modo === valor ? COLOR.blue : COLOR.grayMid}`,
+                opacity: noDisponible ? 0.55 : 1,
+              }}>
+                <input type="radio" name="modo-generacion" value={valor} checked={modo === valor} disabled={generando || noDisponible || inerte}
+                  onChange={() => setModo(valor)} style={{ marginTop: 2 }} />
+                <span style={{ fontSize: 13, color: COLOR.blueDark, lineHeight: 1.4 }}>
+                  <b>{titulo}</b> — <span style={{ color: COLOR.grayDark }}>{detalle}</span>
+                  {noDisponible && <span style={{ display: "block", color: COLOR.orange, fontSize: 12 }}>El servidor desplegado todavía no admite este modo: hasta que se redespliegue, solo se puede reemplazar.</span>}
+                </span>
+              </label>
+            ))}
+          </div>}
+
+          {/* Mientras se comprueba, el botón sigue en su sitio pero inerte: no saber si el mes está
+              publicado no es saber que no lo está. */}
+          {(!confirmando || inerte) && (
+            <Btn onClick={() => setConfirmando(true)} disabled={generando || inerte} color={COLOR.blue} textColor="#fff">
+              {generando ? "Generando… (puede tardar un minuto)"
+                : vista.comprobando ? "Comprobando el estado del mes…"
+                : (fase === "extras" ? "Añadir quintas y tercer puestos" : "Generar las guardias obligatorias")}
+            </Btn>
+          )}
+
+          {confirmando && !inerte && (
+            <div style={{ background: COLOR.gray, borderRadius: 8, padding: 10 }}>
+              <div style={{ fontSize: 13, color: COLOR.blueDark, marginBottom: 8, lineHeight: 1.5 }}>
+                {fase === "extras" ? (
+                  <>La IA va a <b>añadir</b> quintas guardias y tercer puestos al cuadrante de {nombreDeMes(anio, mes)}.
+                  Lo que ya está puesto no se toca y, si el mes estaba validado, sigue validado.</>
+                ) : modo === "completar" ? (
+                  <>Se va a <b>completar</b> el cuadrante de {nombreDeMes(anio, mes)}: las guardias que
+                  ya tenga se quedan como están y la IA solo rellena los huecos. Las vacaciones,
+                  rotaciones y bajas marcadas en la rejilla se conservan.</>
+                ) : (
+                  <>Se va a <b>reemplazar</b> el cuadrante de {nombreDeMes(anio, mes)}: las guardias que ya
+                  tenga se sustituyen por las nuevas. Las vacaciones, rotaciones y bajas marcadas en la
+                  rejilla se conservan.</>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={generar} style={{ ...S.smallBtn, background: COLOR.blue, color: "#fff" }}>Sí, generar</button>
+                <button onClick={() => setConfirmando(false)} style={{ ...S.smallBtn, background: "#fff", color: COLOR.blueDark }}>Cancelar</button>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {resultado && resultado.ok && (
@@ -566,8 +588,14 @@ function HomeScreen() {
   // sigue sin ofrecerse generar fuera de Borrador, para él igual que para cualquiera.
   const accesoDesarrollador = esAccesoDesarrollador(myResidente?.email);
   const puedoRegistrarImaginaria = puedeMoverCiclo({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador });
-  const puedoExtras = puedeAnadirExtras({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador, estado: estadoMes });
-  const puedoGenerar = puedeGenerarCuadrante({ isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador, estado: estadoMes });
+  // La última vista resuelta del generador: mientras se comprueba el mes siguiente, la tarjeta
+  // conserva esa forma (ver `vistaGenerador`) para que nada se mueva bajo una ráfaga de ◀/▶.
+  const formaGeneradorRef = useRef(null);
+  const vistaGen = vistaGenerador({
+    isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable, accesoDesarrollador,
+    estado: estadoMes, estadoError, extrasDisponible, anterior: formaGeneradorRef.current,
+  });
+  if (vistaGen && !vistaGen.comprobando && !vistaGen.error) formaGeneradorRef.current = vistaGen;
   const puedoAprobarInvitados = puedeValidarCuadrante({ email: myResidente?.email, puedeMoverCiclo: puedoRegistrarImaginaria });
   const puedoOfrecerme = proximoMandato && !proximoMandato.mandato
     && proximoMandato.elegibles.includes(myResidente?.id) && !proximoMandato.meHeOfrecido;
@@ -637,7 +665,10 @@ function HomeScreen() {
       <Card title="📅 Mes en curso">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: COLOR.blueDark, textTransform: "capitalize" }}>{nombreMes}</div>
-          <button onClick={() => setTab("calendar")} style={{ background: COLOR.blue, color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Ver cuadrante</button>
+          {/* Abre el mes que dice el rótulo, el de HOY, no el seleccionado: `mes`/`anio` son estado
+              compartido con el selector del generador y con la rejilla, y tras mover cualquiera de
+              los dos este botón abría otro mes bajo el rótulo «Mes en curso» (2026-10-07). */}
+          <button onClick={() => { setMes(hoy.getMonth() + 1); setAnio(hoy.getFullYear()); setTab("calendar"); }} style={{ background: COLOR.blue, color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Ver cuadrante</button>
         </div>
         <div style={{ fontSize: 13, color: COLOR.grayDark }}>Residentes activos: {residentes.length}</div>
       </Card>
@@ -682,15 +713,16 @@ function HomeScreen() {
         })}
       </Card>
 
-      {/* `comprobando` para CUALQUIER Mayor mientras no llegue `estadoCuadrante`: `sinResponsable` viaja
-          en esa misma respuesta, así que gatear la tarjeta inerte por `puedeMoverCiclo` la escondía
-          justo en el caso real de producción (sin Responsable) hasta que respondía Apps Script —
-          el síntoma del 2026-08-31 otra vez. Si al llegar resulta que hay Responsable y no es él,
-          `puedo` sigue en false y la tarjeta desaparece, como ahora. */}
-      <GeneradorIA api={app.api} usuario={app.auth && app.auth.residente && app.auth.residente.id} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
-        setAnio={setAnio} puedo={puedoGenerar} verCuadrante={() => setTab("calendar")} completarDisponible={completarDisponible} puedoExtras={puedoExtras} extrasDisponible={extrasDisponible}
-        estadoError={estadoError} reintentar={() => setReintento((n) => n + 1)}
-        comprobando={estadoMes === null && (app.isResponsable || app.grupo === "MAYOR" || accesoDesarrollador)} />
+      {/* Mientras no llega `estadoCuadrante` la ve CUALQUIER Mayor: `sinResponsable` viaja en esa
+          misma respuesta, y esconderla hasta entonces dejaba sin tarjeta al caso real de producción
+          (sin Responsable) — el síntoma del 2026-08-31. Si al llegar resulta que hay Responsable y
+          no es él, desaparece. Con permiso ya NO desaparece por el estado del mes: dice por qué no
+          se genera y conserva sus flechas (todo eso lo decide `vistaGenerador`). */}
+      {vistaGen && (
+        <GeneradorIA api={app.api} usuario={app.auth && app.auth.residente && app.auth.residente.id} residentes={residentes} mes={mes} anio={anio} setMes={setMes}
+          setAnio={setAnio} vista={vistaGen} verCuadrante={() => setTab("calendar")} completarDisponible={completarDisponible}
+          reintentar={() => setReintento((n) => n + 1)} />
+      )}
 
       {puedoAprobarInvitados && !app.esInvitado && <SolicitudesAcceso api={app.api} showToast={app.showToast} />}
 

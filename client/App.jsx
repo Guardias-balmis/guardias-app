@@ -2,11 +2,11 @@
 // derivado, nunca un flag editable), sin selector de mes/año en texto (mes/anio son números
 // 1-12, no "Junio"/"2026" — mata la clase de bug de desfase del v1). La sesión vive en
 // `localStorage` desde la decisión S-8 (ver client/lib/auth.js), y el botón «atrás» del móvil
-// navega entre pantallas (client/lib/navegacion.js) en vez de sacar de la app.
+// navega entre pantallas con Inicio como raíz (client/lib/navegacion.js) en vez de sacar de la app.
 import { COLOR, S } from "./client/lib/design-tokens.js";
 import { makeApi } from "./client/lib/api.js";
 import { getSession, clearSession, CLAVE_SESION } from "./client/lib/auth.js";
-import { crearNavegacion } from "./client/lib/navegacion.js";
+import { crearNavegacion, pantallaGuardada } from "./client/lib/navegacion.js";
 import { todayISO } from "./client/lib/dates.js";
 import { EXEC_URL } from "./client/config.js";
 import { levelOn, groupOf, periodsOfResident } from "./v2/domain/residents.js";
@@ -14,51 +14,82 @@ import { partirResidentesLegibles } from "./client/lib/residentes.js";
 
 const { useState, useEffect, useCallback, createContext, useContext } = React;
 
+// Las pantallas que la app sabe pintar (el `tab` de abajo). Una entrada del historial que diga otra
+// —de una versión anterior— no se restaura al recargar.
+const NAVEGACION = { raiz: "home", pantallas: ["home", "prefs", "calendar", "settings", "responsable", "datos-servicio", "residentes"] };
+
 const AppCtx = createContext(null);
 function useApp() { return useContext(AppCtx); }
 window.useApp = useApp; // las pantallas .jsx no pueden `import` este módulo (decisión C-1); se exponen así
 
 function App() {
   const [auth, setAuth] = useState(() => getSession());
+  // «¿Está la app pintando una sesión?» lo responde este estado, no el almacén: desde S-8
+  // `getSession()` descarta un token caducado, así que con la app abierta más de 12 h devolvía null
+  // mientras la pantalla seguía siendo de alguien. Las guardas que miraban el almacén fallaban justo
+  // entonces: `onSessionInvalid` no volvía al login (cada pantalla se quedaba con su error) y «atrás»
+  // dejaba de funcionar (2026-10-07). Se lee en un ref porque lo usan callbacks creados una vez.
+  const authRef = React.useRef(auth);
+  authRef.current = auth;
   const [residentes, setResidentes] = useState([]);
   // Los que tienen una fecha ilegible en la hoja (client/lib/residentes.js): apartados de
   // `residentes` para que ninguna pantalla reviente al derivar su nivel, y nombrados en un aviso.
   const [residentesIlegibles, setResidentesIlegibles] = useState([]);
   const [residentesError, setResidentesError] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [tab, setTabRaw] = useState("home");
-  // Celdas sin guardar del cuadrante (lo escribe Calendar.jsx): cambiar de pestaña o cerrar
-  // sesión desmonta esa pantalla y las perdería en silencio, así que se pregunta antes.
+  // Tras una recarga, la pantalla en la que estaba (la guarda el historial: client/lib/navegacion.js);
+  // solo con sesión —sin ella se enseña el login, y la entrada se desapila al montar—.
+  const [tab, setTabRaw] = useState(() => (auth && pantallaGuardada(window.history, NAVEGACION)) || "home");
+  // Celdas sin guardar del cuadrante (lo escribe Calendar.jsx) y preferencias sin guardar (el
+  // nombre del mes, p. ej. "octubre de 2026", o null; lo escribe Prefs.jsx): cambiar de pestaña,
+  // ir atrás o cerrar sesión desmonta esa pantalla y los perdería en silencio, así que se pregunta.
   const cambiosSinGuardarRef = React.useRef(0);
-  const confirmaPerderCambios = () => cambiosSinGuardarRef.current === 0
-    || window.confirm(`Tienes ${cambiosSinGuardarRef.current} cambios sin guardar en el cuadrante. ¿Salir y perderlos?`);
+  const prefsSinGuardarRef = React.useRef(null);
+  const confirmaPerderCambios = () => {
+    if (cambiosSinGuardarRef.current !== 0
+      && !window.confirm(`Tienes ${cambiosSinGuardarRef.current} cambios sin guardar en el cuadrante. ¿Salir y perderlos?`)) return false;
+    if (prefsSinGuardarRef.current
+      && !window.confirm(`Tienes cambios sin guardar en tus preferencias de ${prefsSinGuardarRef.current}. ¿Salir y perderlos?`)) return false;
+    return true;
+  };
   // La pestaña YA activa no se «abandona»: sin esta guarda, pulsar «Cuadrante» estando en el
   // cuadrante preguntaba «¿Salir y perderlos?» sin salir, y al aceptar ponía el contador a 0 con la
   // pantalla aún montada —así que el siguiente cambio de pestaña ya no preguntaba y las celdas se
   // perdían en silencio. El contador lo pone a 0 el propio Calendar.jsx al desmontarse, que es el
-  // único momento en que de verdad se pierden.
-  const tabRef = React.useRef("home");
+  // único momento en que de verdad se pierden. Se actualiza también a mano al cambiar de pantalla:
+  // el `popstate` de un «atrás» puede llegar antes de que el efecto haya corrido.
+  const tabRef = React.useRef(tab);
   useEffect(() => { tabRef.current = tab; }, [tab]);
-  // Historial del navegador (client/lib/navegacion.js): cada cambio de pantalla que hace el usuario
-  // deja una entrada, y el botón «atrás» del móvil vuelve a la anterior en vez de sacar de la app.
-  // Ir atrás desde el cuadrante con celdas sin guardar pregunta lo mismo que cambiar de pestaña; si
-  // el usuario se queda, se vuelve a poner delante la pantalla en la que está.
+  // Historial del navegador (client/lib/navegacion.js): Inicio es la raíz y cada cambio de pantalla
+  // que hace el usuario deja una entrada —o desapila, si va a Inicio o a la pantalla anterior—, así
+  // que el botón «atrás» del móvil vuelve a la anterior y, desde Inicio, sale de la app. Ir atrás
+  // con cambios sin guardar pregunta lo mismo que cambiar de pestaña; si el usuario se queda,
+  // navegacion.js devuelve el historial a la entrada de la pantalla en la que está.
   const navRef = React.useRef(null);
   useEffect(() => {
     const nav = crearNavegacion({
-      historial: window.history, ventana: window, inicial: "home",
+      historial: window.history, ventana: window, ...NAVEGACION,
+      // La sesión con la que ha arrancado la app, que es con la que se ha elegido `tab` arriba.
+      restaurar: auth !== null,
       alVolver: (t) => {
-        if (t === tabRef.current) return;
-        if (!confirmaPerderCambios()) { nav.ir(tabRef.current); return; }
+        // Sin sesión se está en el login: el historial no puede llevar a pantallas de nadie.
+        if (!authRef.current) return false;
+        if (t === tabRef.current) return true;
+        if (!confirmaPerderCambios()) return false;
+        tabRef.current = t;
         setTabRaw(t);
+        return true;
       },
     });
     navRef.current = nav;
     return () => nav.desmontar();
   }, []);
+  // Todo cambio de pantalla que haga el usuario pasa por aquí (nunca por `setTabRaw`), o «atrás» se
+  // saltaría esa pantalla.
   const setTab = useCallback((t) => {
     if (t === tabRef.current) return;
     if (!confirmaPerderCambios()) return;
+    tabRef.current = t;
     if (navRef.current) navRef.current.ir(t);
     setTabRaw(t);
   }, []);
@@ -99,10 +130,15 @@ function App() {
     setResidentesIlegibles([]);
     setResidentesError(null);
     cambiosSinGuardarRef.current = 0;
+    prefsSinGuardarRef.current = null;
+    tabRef.current = "home";
     setTabRaw("home"); // si no, el siguiente login hereda la pestaña de la sesión anterior
-    if (navRef.current) navRef.current.reemplazar("home");
+    // Y el historial, igual: se desapila hasta Inicio. Si solo se reescribía la entrada actual, los
+    // primeros «atrás» en el login consumían las pantallas de la sesión anterior sin que se viera
+    // nada, y quien entrara después caía en una de ellas.
+    if (navRef.current) navRef.current.aLaRaiz();
   }, []);
-  // El botón de cerrar sesión pregunta si hay celdas sin guardar; la caducidad (abajo) no puede
+  // El botón de cerrar sesión pregunta si hay cambios sin guardar; la caducidad (abajo) no puede
   // preguntar nada: la sesión ya no sirve y los cambios no se podrían guardar de todas formas.
   const logout = useCallback(() => { if (confirmaPerderCambios()) cerrarSesion(); }, [cerrarSesion]);
 
@@ -110,7 +146,7 @@ function App() {
   // antes la app se quedaba en pie enseñando «sesión expirada» en cada pantalla, sin ofrecer
   // volver a entrar. Ahora se cierra y se vuelve al login con el motivo, una sola vez.
   const onSessionInvalid = useCallback(() => {
-    if (sesionCaducadaRef.current || !getSession()) return;
+    if (sesionCaducadaRef.current || !authRef.current) return;
     cerrarSesion();
     sesionCaducadaRef.current = true;
     // Directo, sin `showToast`: es el único aviso que tiene que verse después de cerrar la sesión.
@@ -194,7 +230,7 @@ function App() {
   const ctx = {
     api, auth, onLoggedIn, logout,
     residentes, residentesIlegibles, residentesError, loadResidentes, myResidente, nivel, grupo, isResponsable, actualizaResponsable, esInvitado,
-    loading, setLoading, showToast, cambiosSinGuardarRef,
+    loading, setLoading, showToast, cambiosSinGuardarRef, prefsSinGuardarRef,
     tab, setTab, mes, setMes, anio, setAnio,
   };
 
