@@ -27,6 +27,50 @@ const { Card, Btn, Aviso } = window.UI;
 // 4 min: por debajo de los 5 de vida del nonce en el servidor (Code.gs issueNonce_), con margen
 // para la latencia de Apps Script y para un temporizador que el navegador retrase.
 const NONCE_REFRESCO_MS = 4 * 60 * 1000;
+// A partir de aquí, «Entrando…» explica que el servidor puede estar arrancando en frío.
+const ENTRANDO_LENTO_MS = 6000;
+
+/**
+ * Lo que se ve entre elegir la cuenta de Google y entrar en la app (2026-10-07, a pedido de
+ * Quique: «una ruedecita o una barra de carga, algo chulo, para que no parezca que se ha
+ * colgado»). El login a Apps Script tarda unos segundos y antes la pantalla no cambiaba nada.
+ * La foto, el nombre y el email salen del token de Google (`perfilDelToken`) solo para mostrarlos;
+ * si no se pueden leer (o la foto no carga), queda la inicial o un «Entrando…» a secas.
+ */
+function Entrando({ perfil, lento }) {
+  const [fotoRota, setFotoRota] = useState(false);
+  const nombre = perfil && perfil.nombre;
+  const email = perfil && perfil.email;
+  const foto = perfil && perfil.foto && !fotoRota ? perfil.foto : null;
+  const inicial = (nombre || email) ? (nombre || email).charAt(0).toUpperCase() : "👤";
+  return (
+    <div className="gapp-rise" role="status" aria-live="polite" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "4px 0 2px" }}>
+      <div style={{ position: "relative", width: 72, height: 72 }}>
+        <svg className="gapp-anillo" width="72" height="72" viewBox="0 0 72 72" aria-hidden="true" style={{ position: "absolute", inset: 0 }}>
+          <circle cx="36" cy="36" r="33" fill="none" stroke={COLOR.grayMid} strokeWidth="4" />
+          <circle cx="36" cy="36" r="33" fill="none" stroke={COLOR.blue} strokeWidth="4" strokeLinecap="round" strokeDasharray="60 148" />
+        </svg>
+        <div style={{ position: "absolute", inset: 8, borderRadius: "50%", overflow: "hidden", background: COLOR.bluePale, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 800, color: COLOR.blueDark }}>
+          {foto
+            ? <img src={foto} alt="" referrerPolicy="no-referrer" onError={() => setFotoRota(true)} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            : inicial}
+        </div>
+      </div>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: COLOR.blueDark }}>{nombre ? `Entrando como ${nombre}…` : "Entrando…"}</div>
+        {email && <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 2 }}>{email}</div>}
+      </div>
+      <div aria-hidden="true" style={{ position: "relative", width: "100%", maxWidth: 240, height: 4, borderRadius: 2, background: COLOR.bluePale, overflow: "hidden" }}>
+        <div className="gapp-barra" style={{ background: COLOR.blue, borderRadius: 2 }} />
+      </div>
+      <div style={{ fontSize: 12, color: COLOR.grayDark, textAlign: "center", lineHeight: 1.5 }}>
+        {lento
+          ? "Está tardando un poco más de lo normal: el servidor a veces necesita unos segundos para arrancar. No cierres esta pantalla."
+          : "Comprobando tu cuenta…"}
+      </div>
+    </div>
+  );
+}
 
 function LoginScreen() {
   const app = window.useApp();
@@ -39,6 +83,15 @@ function LoginScreen() {
   // se ofrece reintentar, que vuelve a correr el efecto de abajo.
   const [sinAcceso, setSinAcceso] = useState(false);
   const [reintento, setReintento] = useState(0);
+  // null, o el perfil (puede ser {}) mientras el servidor verifica la cuenta que se eligió en Google.
+  const [entrando, setEntrando] = useState(null);
+  const [lento, setLento] = useState(false);
+
+  useEffect(() => {
+    if (!entrando) { setLento(false); return undefined; }
+    const t = setTimeout(() => setLento(true), ENTRANDO_LENTO_MS);
+    return () => clearTimeout(t);
+  }, [entrando]);
 
   useEffect(() => {
     if (pending) return undefined; // el formulario de alta está en pantalla: no hay botón que pintar
@@ -72,9 +125,10 @@ function LoginScreen() {
       }
       asa = await setupGoogleSignIn({
         api: app.api, clientId: GOOGLE_CLIENT_ID, gis, buttonEl: buttonRef.current,
+        onStart: (perfil) => { setError(null); setEntrando(perfil || {}); },
         onSuccess: (r) => app.onLoggedIn(r),
-        onNeedsAlta: (info) => setPending(info),
-        onError: (e) => setError(e),
+        onNeedsAlta: (info) => { setEntrando(null); setPending(info); },
+        onError: (e) => { setEntrando(null); setError(e); },
       });
       ultimaInit = Date.now();
       if (cancelado) return;
@@ -105,8 +159,11 @@ function LoginScreen() {
           <div style={{ fontSize: 14, color: COLOR.grayDark, marginTop: 4 }}>Hospital Dr. Balmis · Radiodiagnóstico</div>
         </div>
         <Card>
-          <div ref={buttonRef} style={{ display: "flex", justifyContent: "center", minHeight: 44 }} />
-          {esperandoGoogle && !error && (
+          {/* El contenedor del botón se oculta, no se desmonta: GIS vuelve a pintar en él si el login
+              falla, y un `ref` a un nodo desmontado dejaría el botón fuera de la pantalla. */}
+          <div ref={buttonRef} style={{ display: entrando ? "none" : "flex", justifyContent: "center", minHeight: 44 }} />
+          {entrando && <Entrando perfil={entrando} lento={lento} />}
+          {esperandoGoogle && !error && !entrando && (
             <div style={{ textAlign: "center", fontSize: 12, color: COLOR.grayDark, marginTop: 8 }}>Cargando el acceso con Google…</div>
           )}
           {error && <div style={{ marginTop: 12 }}><Aviso color={COLOR.red} bg={COLOR.redLight}>{error}</Aviso></div>}
