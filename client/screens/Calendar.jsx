@@ -2,7 +2,7 @@
 // PrefsScreen: no se crea un selector de mes propio aquí). Guarda por residenteId,
 // nunca por nombre (bug del v1); datesOfMonth/weekday para todo el cálculo de fechas
 // (nunca `new Date(anio, mes, ...)` a mano, para no reintroducir el desfase de mes).
-import { COLOR, S, RADIUS, ANOS, ANO_COLORS, ANO_TEXT, CODE_COLORS, CODE_LABELS, CODES_CYCLE, ESTADO_CUADRANTE, pillBtn } from "./client/lib/design-tokens.js";
+import { COLOR, S, RADIUS, ANOS, ANO_COLORS, ANO_TEXT, CODE_COLORS, CODE_LABELS, ESTADO_CUADRANTE, pillBtn } from "./client/lib/design-tokens.js";
 import { levelOn, isActiveOn, periodsOfResident } from "./v2/domain/residents.js";
 import { datesOfMonth, weekday, isWeekend, addDays, compareISO, autoGuardCode, isHoliday } from "./v2/domain/calendar.js";
 import { tally } from "./v2/domain/tally.js";
@@ -25,9 +25,11 @@ const { Card, Btn, Aviso } = window.UI;
 
 // Códigos que pueden llevar `origen` CEDIDA/COMPRADA (INV-4): los tres puestos de guardia y el
 // 3P, no V/R/B (esas no son guardias, no las lee `tally`). Mantener presionado ~500ms abre el
-// selector; un click normal sigue ciclando el código, instantáneo, sin demora (decisión: un
-// doble-click habría obligado a retrasar CADA click simple de la grilla más usada de la app).
+// selector (y, desde 2026-10-08, el resto de opciones de la celda: 3P, V, R, B); un click normal
+// pone o quita la guardia, instantáneo, sin demora (decisión: un doble-click habría obligado a
+// retrasar CADA click simple de la grilla más usada de la app).
 const ORIGEN_ELEGIBLE = new Set(["G", "GF", "GP", "3P"]);
+const GUARDIA_COMPLETA = new Set(["G", "GF", "GP"]);
 const PRESS_MS = 500;
 
 /**
@@ -98,9 +100,10 @@ function FilaRejilla({
         const codigo = porFecha[fecha] || "";
         const origen = (origenPorFecha && origenPorFecha[fecha]) || "";
         const editando = origenEditFecha === fecha;
-        const prensable = onPressStart && ORIGEN_ELEGIBLE.has(codigo);
+        const prensable = onPressStart && pulsable(codigo);
         return (
           <td key={fecha} onClick={() => onCelda(fecha, codigo)}
+            title={onPressStart && pulsable(codigo) ? "Clic: poner o quitar la guardia · mantén pulsado: cedida/comprada, 3.º puesto, vacaciones, rotación, baja" : undefined}
             onMouseDown={prensable ? () => onPressStart(fecha, codigo) : undefined}
             onMouseUp={prensable ? onPressEnd : undefined}
             onMouseLeave={prensable ? onPressEnd : undefined}
@@ -117,13 +120,25 @@ function FilaRejilla({
               fontWeight: codigo ? 700 : 400, fontSize: codigo ? 14 : 12, color: codigo ? COLOR.cellText : COLOR.grayMid, position: "relative",
             }}>
             {editando ? (
-              <select autoFocus value={origen} onClick={(e) => e.stopPropagation()}
+              <select autoFocus value={ORIGEN_ELEGIBLE.has(codigo) ? (origen || "NORMAL") : (codigo || "VACIA")} onClick={(e) => e.stopPropagation()}
                 onChange={(e) => onSeleccionaOrigen(fecha, e.target.value)}
                 onBlur={() => onSeleccionaOrigen(null)}
-                style={{ fontSize: 10, width: 44, padding: 0 }}>
-                <option value="">normal</option>
-                <option value="CEDIDA">cedida</option>
-                <option value="COMPRADA">comprada</option>
+                style={{ fontSize: 11, width: 96, padding: 0 }}>
+                {ORIGEN_ELEGIBLE.has(codigo) ? (
+                  <>
+                    <option value="NORMAL">guardia normal</option>
+                    <option value="CEDIDA">cedida</option>
+                    <option value="COMPRADA">comprada</option>
+                  </>
+                ) : (
+                  <option value="GUARDIA">poner guardia</option>
+                )}
+                {codigo !== "3P" && <option value="3P">3.º puesto</option>}
+                {codigo !== "V" && <option value="V">vacaciones</option>}
+                {codigo !== "R" && <option value="R">rotación</option>}
+                {codigo !== "B" && <option value="B">baja</option>}
+                {codigo !== "" && <option value="VACIA">dejar vacía</option>}
+                {codigo === "" && <option value="VACIA">sin cambios</option>}
               </select>
             ) : (
               `${codigo || "·"}${origen ? "*" : ""}`
@@ -385,10 +400,12 @@ function CalendarScreen() {
     // en guardarAsignaciones, esto solo evita que la celda parezca editable en la UI.
     if (busy || bloqueadoPorPublicado) return;
     const actual = (asignaciones[residenteId] || {})[fecha] || "";
-    // Celda vacía → G/GF/GP según el calendario de festivos (decisión V-41), no siempre G: el
-    // resto del ciclo sigue igual, así que forzar GF/GP a mano desde ahí sigue disponible.
-    const siguiente = actual === "" ? autoGuardCode(fecha, festivos) : CODES_CYCLE[(CODES_CYCLE.indexOf(actual) + 1) % CODES_CYCLE.length];
-    aplica(residenteId, fecha, siguiente);
+    // Un clic pone o quita la guardia, y el código NUNCA se elige a mano: G, GF o GP salen del
+    // calendario de festivos (V-41), así que no se puede marcar festiva una fecha que no lo es ni
+    // dejar sin marcar la que sí (INV-12 por construcción). Antes el clic recorría
+    // G→GF→GP→3P→V→R→B→vacío y era fácil pasarse. 3.º puesto, vacaciones, rotación, baja y la
+    // marca cedida/comprada se piden con la pulsación larga (menú de la celda).
+    aplica(residenteId, fecha, actual === "" ? autoGuardCode(fecha, festivos) : "");
   };
 
   // Celda de la fila de un no asignable (V-23): SOLO borra, nunca asigna. Es el único gesto con
@@ -404,7 +421,7 @@ function CalendarScreen() {
   // retrasar CADA click simple de la grilla para poder distinguirlo de la primera mitad de un
   // doble-click, y esta es la interacción más repetida de toda la app.
   const iniciaPress = (residenteId, fecha, codigo) => {
-    if (busy || bloqueadoPorPublicado || !ORIGEN_ELEGIBLE.has(codigo)) return;
+    if (busy || bloqueadoPorPublicado) return;
     clearTimeout(pressTimerRef.current);
     pressTimerRef.current = setTimeout(() => {
       longPressFiredRef.current = true;
@@ -414,14 +431,22 @@ function CalendarScreen() {
   const terminaPress = () => clearTimeout(pressTimerRef.current);
 
   // `fecha === null` es solo "cerrar sin cambiar" (blur del <select> al perder foco sin elegir).
-  const seleccionaOrigen = (fecha, origen) => {
+  const seleccionaOrigen = (fecha, opcion) => {
     // Si tras la pulsación larga no llegó ningún click (pasa en táctil), la marca se quedaba
     // puesta y se comía el SIGUIENTE click de cualquier celda.
     longPressFiredRef.current = false;
     if (fecha === null) { setOrigenEditando(null); return; }
     const [residenteId] = origenEditando.split("|");
     const codigoActual = (asignaciones[residenteId] || {})[fecha] || "";
-    aplica(residenteId, fecha, codigoActual, origen);
+    if (opcion === "NORMAL" || opcion === "CEDIDA" || opcion === "COMPRADA") {
+      aplica(residenteId, fecha, codigoActual, opcion === "NORMAL" ? "" : opcion);
+    } else if (opcion === "GUARDIA") {
+      aplica(residenteId, fecha, autoGuardCode(fecha, festivos));
+    } else if (opcion === "3P" || opcion === "V" || opcion === "R" || opcion === "B") {
+      aplica(residenteId, fecha, opcion);
+    } else if (opcion === "VACIA" && codigoActual !== "") {
+      aplica(residenteId, fecha, "");
+    }
     setOrigenEditando(null);
   };
 
@@ -899,8 +924,10 @@ function CalendarScreen() {
             <span style={{ fontSize: 12, color: COLOR.grayDark }}>Columna de un día festivo</span>
           </div>
           <div style={{ fontSize: 12, color: COLOR.grayDark, flexBasis: "100%", lineHeight: 1.5 }}>
-            <b>G*</b> cedida o comprada: no cuenta en el contaje de cada uno (mantén pulsada la celda para
-            marcarla). <b>3P</b> es el apoyo de tarde que se añade el último a la guardia y se marcha a las
+            Un <b>clic</b> en una celda pone o quita la guardia; el tipo (<b>G</b>, <b>GF</b> o <b>GP</b>)
+            lo calcula la app con el calendario de festivos y no se elige a mano. <b>Mantén pulsada</b> una
+            celda para marcarla cedida o comprada, o poner 3.º puesto, vacaciones, rotación o baja.{" "}
+            <b>G*</b> cedida o comprada: no cuenta en el contaje de cada uno. <b>3P</b> es el apoyo de tarde que se añade el último a la guardia y se marcha a las
             20 h: tiene su contaje aparte y no se pone mientras algún día tenga menos de dos personas.
           </div>
         </div>
