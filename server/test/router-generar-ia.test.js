@@ -21,6 +21,7 @@ import { parseISO, addDays, bridgesOfMonth, academicYearOf } from "../../v2/doma
 import { accumulatedTally } from "../../v2/domain/accumulate.js";
 import { monthReplacementPlan, monthCompletionPlan } from "../../v2/domain/apply.js";
 import { canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
+import { valencianHolidays } from "../../v2/domain/holidays.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -870,4 +871,17 @@ test("P-17: la fase extras tampoco se ofrece sobre un mes PUBLICADO", () => {
   const deps = makeDeps({ llm: fakeLlm([ok(RESPUESTA_OK)]) });
   deps.store.appendRecord("cuadrantes", { mes: 7, anio: 2027, estado: "PUBLICADO", actorId: "resp-1", fecha: "2027-06-01" });
   assert.match(generar(deps, loggedInAs(deps, "resp@gmail.com"), { fase: "extras" }).error, /PUBLICADO/);
+});
+
+// ── festivos automáticos (V-61) también llegan al generador ──────────────────────────────────
+
+test("V-61: el prompt del generador lleva los festivos automáticos de la Comunitat sin que nadie los haya cargado", () => {
+  const llm = fakeLlm([ok(RESPUESTA_OK)]);
+  const deps = makeDeps({ llm });
+  deps.domain.valencianHolidays = valencianHolidays;
+  generar(deps, loggedInAs(deps, "resp@gmail.com"), { mes: 10 });
+  assert.ok(llm.prompts.length >= 1);
+  assert.match(llm.prompts[0], /2027-10-09 — Día de la Comunitat Valenciana/);
+  assert.match(llm.prompts[0], /2027-10-12 — Fiesta Nacional de España/);
+  assert.doesNotMatch(llm.prompts[0], /no hay ninguno cargado/);
 });
