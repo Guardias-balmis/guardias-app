@@ -197,6 +197,11 @@ function CalendarScreen() {
   // bloqueada porque nadie haya lanzado el sorteo. Lo dice `estadoCuadrante`, no el token.
   const [sinResponsable, setSinResponsable] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
+  // Mientras llegan las guardias del mes (la primera petición tras un rato sin uso tarda segundos)
+  // la rejilla se enseñaba vacía y editable, y parecía un mes sin guardias — o dejaba pulsar una
+  // celda antes de saber qué había. Ahora se dice que está cargando y no se puede editar hasta
+  // que llegan los datos.
+  const [cargando, setCargando] = useState(true);
   const busy = guardando || validando || cambiandoEstado;
   // Mismo criterio que el servidor: el Responsable, o —si el mandato está sin decidir— cualquier
   // Mayor. Aquí solo decide qué botones se ven; quien manda es requireCicloPermiso en el router.
@@ -204,12 +209,13 @@ function CalendarScreen() {
   const puedeMoverCiclo = reglaCiclo({ isResponsable, grupo, sinResponsable, accesoDesarrollador: esAccesoDesarrollador(myResidente?.email) });
   // V-52: validar es, por ahora, cosa de los administradores (el servidor lo vuelve a comprobar).
   const puedeValidar = puedeValidarCuadrante({ email: myResidente?.email, puedeMoverCiclo });
-  const bloqueadoPorPublicado = !canEdit(estado) || estadoError || cargaError || esInvitado;
+  const bloqueadoPorPublicado = !canEdit(estado) || estadoError || cargaError || esInvitado || cargando;
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       app.setLoading(true);
+      setCargando(true);
       // Los dos días de FUERA del mes: sin ellos, el par que cruza el borde (día 1 con el último
       // del mes anterior) es invisible para el aviso de descanso. Es el mismo agujero del
       // contrato C-1, y el que tenía el banco de equidad hasta que se corrigió.
@@ -270,6 +276,7 @@ function CalendarScreen() {
       setCierresError(null);
       setAvisoDescanso(null); // el aviso es de una celda concreta: al cambiar de mes deja de aplicar
       app.setLoading(false);
+      setCargando(false);
     })();
     return () => { cancelled = true; };
   }, [anio, mes, retryTick]);
@@ -721,12 +728,18 @@ function CalendarScreen() {
             </button>
           )}
         </div>
+        {cargando && (
+          <div role="status" style={{ fontSize: 13, color: COLOR.blueDark, background: COLOR.bluePale, borderRadius: 6, padding: "8px 10px", marginBottom: 10, lineHeight: 1.5 }}>
+            ⏳ Cargando el cuadrante de {nombreMesDe(anio, mes)}… puede tardar unos segundos si hace rato
+            que nadie usa la app.
+          </div>
+        )}
         {sinResponsable && soyMayor && (
           <div style={{ fontSize: 12, color: COLOR.orange, background: COLOR.orangeLight, borderRadius: 6, padding: "6px 10px", marginBottom: 10 }}>
             ⚖️ No hay Responsable del contaje designado para este periodo. Hasta que se decida, cualquier R3 o R4 puede publicar — decídelo en ⚙️ → Responsable.
           </div>
         )}
-        {!estadoError && !cargaError && bloqueadoPorPublicado && (
+        {!estadoError && !cargaError && !cargando && bloqueadoPorPublicado && (
           <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10 }}>
             {esInvitado ? "Perfil de invitado: solo lectura." : <>Este cuadrante está publicado: no se puede editar{puedeMoverCiclo ? " — usa Despublicar para corregirlo." : "."}</>}
           </div>
@@ -744,7 +757,7 @@ function CalendarScreen() {
         {/* Contenedor con esquinas redondeadas (a pedido del autor, "más grande y vistosa"): el
             `overflow: hidden` es lo que recorta las esquinas de la propia `<table>`, que no
             puede llevar `border-radius` directamente sobre `border-collapse: collapse`. */}
-        <div style={{ overflowX: "auto", borderRadius: RADIUS.sm, border: `1.5px solid ${COLOR.grayMid}` }}>
+        <div style={{ overflowX: "auto", borderRadius: RADIUS.sm, border: `1.5px solid ${COLOR.grayMid}`, opacity: cargando ? 0.45 : 1, transition: "opacity .15s" }}>
           <table style={{ borderCollapse: "collapse", minWidth: 260 + dias.length * 44, fontSize: 14 }}>
             <thead>
               <tr>
