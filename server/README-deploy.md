@@ -18,7 +18,9 @@ mano, cada vez que algo llega de verdad a producción.
 
 `Code.gs` cambió el 2026-10-06 (añade `sendMail` con `MailApp`, V-53); antes seguía en la versión del 2026-09-05 (V-47).
 
-Con `domain.gs`, `server-lib.gs` y `Code.gs` al día no queda ningún cambio de backend pendiente de desplegar.
+**Pendiente de desplegar (P-16/V-55, tercer puesto mensual):** `domain.gs` **y `server-lib.gs`** (`Code.gs` no cambia). Pasos: pega los dos archivos y crea la «Nueva versión» sobre la implementación existente. **Orden: servidor primero, cliente después.** Un cliente nuevo contra el servidor viejo muestra la pregunta «¿Deseas hacer tercer puesto este mes?» pero el servidor viejo descarta el campo sin avisar (lista blanca de `guardarPreferencias`), así que la respuesta no se guardaría. La hoja `preferencias` gana una columna **al final** (`tercerPuesto`): las filas antiguas se leen como «no», y la cabecera de esa columna no aparece en el Sheet hasta que alguien la escriba a mano (es solo cosmética: el esquema mapea por posición, como pasó con `modo` en `generaciones`). Para comprobarlo: guarda unas preferencias con «Sí» y verifica que el 3P de ese mes deja de avisar de INV-8a al validar.
+
+Salvo lo anterior, `domain.gs`, `server-lib.gs` y `Code.gs` están al día.
 Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
 `/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el
 cliente está hablando con un backend que ya no es este (DR-4).
