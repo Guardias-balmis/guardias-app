@@ -885,3 +885,50 @@ test("V-61: el prompt del generador lleva los festivos automáticos de la Comuni
   assert.match(llm.prompts[0], /2027-10-12 — Fiesta Nacional de España/);
   assert.doesNotMatch(llm.prompts[0], /no hay ninguno cargado/);
 });
+
+// ── límite de tiempo de Apps Script (2026-10-08, fallo en producción) ─────────────────────────
+// Google mata la ejecución a los 6 minutos y contesta con una página suya sin CORS: en el
+// navegador, «blocked by CORS policy» y nada en la bitácora. El router le da al ciclo un reloj
+// (`deps.relojMs`, de Code.gs) y un límite que deja sitio a la escritura bajo el lock.
+
+test("con deps.relojMs, no se pide un intento que no cabe en los 6 minutos: TIEMPO_AGOTADO, con su fila y sin escribir nada", () => {
+  let t = 1_000_000 * 1000; // el reloj empieza donde `deps.now` (segundos)
+  const llm = fakeLlm([() => { t += 150_000; return ok(RESPUESTA_OK); }]);
+  const deps = { ...makeDeps({ llm, violaciones: () => ERROR_INV1 }), relojMs: () => t };
+
+  const r = generar(deps, loggedInAs(deps, "resp@gmail.com"));
+  // Intentos de 150 s: el 2.º empieza a los 150 s y acaba a los 300; un 3.º acabaría a los 450,
+  // más allá de lo que deja libre la escritura.
+  assert.equal(r.ok, false);
+  assert.equal(r.resultado, "TIEMPO_AGOTADO");
+  assert.equal(r.revisionManual, false, "no es «móntalo a mano»: no se ha podido intentar las veces acordadas");
+  assert.equal(r.intentos, 2);
+  assert.equal(llm.prompts.length, 2);
+  assert.match(r.error, /6 minutos/);
+  assert.equal(asignacionesDe(deps).length, 0);
+  const log = bitacora(deps);
+  assert.equal(log.length, 1);
+  assert.equal(log[0].resultado, "TIEMPO_AGOTADO");
+  assert.equal(log[0].intentos, 2);
+});
+
+test("con deps.relojMs, una generación rápida no cambia nada: 3 intentos si hacen falta", () => {
+  let t = 1_000_000 * 1000;
+  const llm = fakeLlm([() => { t += 20_000; return ok(RESPUESTA_OK); }]);
+  const deps = { ...makeDeps({ llm, violaciones: () => ERROR_INV1 }), relojMs: () => t };
+
+  const r = generar(deps, loggedInAs(deps, "resp@gmail.com"));
+  assert.equal(r.resultado, "REVISION_MANUAL");
+  assert.equal(llm.prompts.length, 3);
+});
+
+test("el límite se cuenta desde que empezó la PETICIÓN, no desde que se llama al modelo", () => {
+  // Si leer el Sheet y preparar el prompt ya se comió 200 s, a un intento de 100 s no le cabe otro.
+  let t = 1_000_000 * 1000 + 200_000;
+  const llm = fakeLlm([() => { t += 100_000; return ok(RESPUESTA_OK); }]);
+  const deps = { ...makeDeps({ llm, violaciones: () => ERROR_INV1 }), relojMs: () => t };
+
+  const r = generar(deps, loggedInAs(deps, "resp@gmail.com"));
+  assert.equal(r.resultado, "TIEMPO_AGOTADO");
+  assert.equal(llm.prompts.length, 1);
+});

@@ -167,3 +167,78 @@ test("valida SIEMPRE lo parseado, nunca lo que el modelo dice de sí mismo", () 
   assert.deepEqual(visto, PROPUESTA);
   assert.equal(r.ok, false);
 });
+
+// ── Límite de tiempo (2026-10-08, fallo en producción) ─────────────────────────────────────────
+// Apps Script mata la ejecución a los 6 minutos y entonces no contesta JSON sino una página suya
+// SIN cabeceras CORS: en el navegador es «blocked by CORS policy» y el responsable solo ve que ha
+// fallado, sin bitácora ni motivo. Con tres intentos de un minuto largo, el ciclo puede pasarse.
+// Por eso el ciclo, si se le da un reloj, no EMPIEZA otro intento que no le quepa antes del límite.
+
+/** Reloj falso: cada llamada al modelo hace avanzar el tiempo `ms`. */
+function relojQueAvanza(ms) {
+  let t = 0;
+  return { reloj: () => t, llm: (respuestas) => fakeLlm(respuestas.map((r) => () => { t += ms; return r; })) };
+}
+
+test("con reloj: no empieza otro intento si no le cabe antes del límite (TIEMPO_AGOTADO, nada aceptado)", () => {
+  const { reloj, llm: hacer } = relojQueAvanza(100_000);
+  const llm = hacer([ok(RESPUESTA), ok(RESPUESTA), ok(RESPUESTA)]);
+  // A 100 s cabe otro de 100 s (200 ≤ 250); a 200 s ya no (300 > 250).
+  const r = generateSchedule({ prompt: "P", llm, validar: () => [ERROR_INV1], reloj, limiteMs: 250_000 });
+
+  assert.equal(r.ok, false);
+  assert.equal(r.resultado, "TIEMPO_AGOTADO");
+  assert.equal(r.intentos, 2);
+  assert.equal(llm.prompts.length, 2, "el tercero no cabía: no se pide");
+  assert.deepEqual(r.violaciones, [ERROR_INV1], "las violaciones del último intento viajan de vuelta");
+  assert.match(r.error, /tiempo/i);
+  assert.match(r.error, /200 s/, "dice cuánto se ha tardado");
+});
+
+test("con reloj, el tiempo no estorba a un acierto: el intento que cabe y acierta se acepta", () => {
+  const { reloj, llm: hacer } = relojQueAvanza(100_000);
+  const llm = hacer([ok(RESPUESTA), ok(RESPUESTA)]);
+  let vez = 0;
+  const r = generateSchedule({ prompt: "P", llm, validar: () => (++vez < 2 ? [ERROR_INV1] : []), reloj, limiteMs: 250_000 });
+
+  assert.equal(r.ok, true);
+  assert.equal(r.intentos, 2);
+});
+
+test("con reloj, el primer intento se hace siempre: sin él no hay nada que medir", () => {
+  const { reloj, llm: hacer } = relojQueAvanza(100_000);
+  const llm = hacer([ok(RESPUESTA)]);
+  const r = generateSchedule({ prompt: "P", llm, validar: () => [], reloj, limiteMs: 0 });
+
+  assert.equal(r.ok, true);
+  assert.equal(llm.prompts.length, 1);
+});
+
+test("con reloj, se estima con el intento MÁS LARGO hasta ahora, no con el último", () => {
+  // 1.º tarda 200 s, 2.º 10 s: a 210 s, otro como el más largo acabaría a 410 > 400.
+  let t = 0;
+  const duraciones = [200_000, 10_000, 10_000];
+  const llm = fakeLlm(duraciones.map((d) => () => { t += d; return ok(RESPUESTA); }));
+  const r = generateSchedule({ prompt: "P", llm, validar: () => [ERROR_INV1], reloj: () => t, limiteMs: 400_000 });
+
+  assert.equal(r.resultado, "TIEMPO_AGOTADO");
+  assert.equal(llm.prompts.length, 2);
+});
+
+test("con reloj, si ningún intento dio algo legible, el tiempo agotado conserva el error del modelo", () => {
+  const { reloj, llm: hacer } = relojQueAvanza(100_000);
+  const llm = hacer([{ ok: false, error: "HTTP 503: overloaded" }, { ok: false, error: "HTTP 503: overloaded" }]);
+  const r = generateSchedule({ prompt: "P", llm, validar: () => [], reloj, limiteMs: 250_000 });
+
+  assert.equal(r.resultado, "TIEMPO_AGOTADO");
+  assert.equal(r.intentos, 2);
+  assert.match(r.error, /503/);
+});
+
+test("sin reloj, como siempre: los 3 intentos, aunque se diera un límite", () => {
+  const llm = fakeLlm([ok(RESPUESTA), ok(RESPUESTA), ok(RESPUESTA)]);
+  const r = generateSchedule({ prompt: "P", llm, validar: () => [ERROR_INV1], limiteMs: 0 });
+
+  assert.equal(r.resultado, "REVISION_MANUAL");
+  assert.equal(llm.prompts.length, 3);
+});

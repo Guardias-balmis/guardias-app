@@ -59,7 +59,34 @@ test("callBackend nunca lanza: fallo de red se convierte en {ok:false}", async (
   const fetchImpl = async () => { throw new TypeError("Failed to fetch"); };
   const r = await callBackend("https://exec.example/x", { action: "x" }, { fetchImpl });
   assert.equal(r.ok, false);
-  assert.match(r.error, /Failed to fetch/);
+  assert.match(r.error, /Failed to fetch/, "el texto original se conserva: es lo que sirve para diagnosticar");
+});
+
+// 2026-10-08, fallo en producción al generar el cuadrante: Google mató la ejecución (6 min) y
+// contestó con una página suya sin CORS. En el navegador eso es un TypeError «Failed to fetch», y la
+// tarjeta enseñaba «No se pudo generar — Failed to fetch». Para una ESCRITURA eso es engañoso: no
+// se sabe si se guardó. Quien llama tiene que poder distinguir «el servidor dijo que no» de «no
+// llegó respuesta».
+test("un fallo de red se explica en español, sin perder el original", async () => {
+  const fetchImpl = async () => { throw new TypeError("Failed to fetch"); };
+  const r = await callBackend("https://exec.example/x", { action: "x" }, { fetchImpl });
+  assert.match(r.error, /no llegó (la )?respuesta del servidor de Google/);
+});
+
+test("todo fallo de transporte lleva `transporte: true`; un rechazo del servidor, no", async () => {
+  const casos = [
+    async () => { throw new TypeError("Failed to fetch"); },
+    async () => ({ ok: false, status: 404, json: async () => ({}) }),
+    async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("Unexpected token '<'"); } }),
+    async () => ({ ok: true, status: 200, json: async () => [1, 2] }),
+  ];
+  for (const fetchImpl of casos) {
+    const r = await callBackend("https://exec.example/x", { action: "generarCuadranteIA" }, { fetchImpl });
+    assert.equal(r.ok, false);
+    assert.equal(r.transporte, true, r.error);
+  }
+  const rechazo = await callBackend("https://exec.example/x", { action: "generarCuadranteIA" }, { fetchImpl: fakeFetch(200, { ok: false, error: "no" }) });
+  assert.equal(rechazo.transporte, undefined, "un {ok:false} del router es una respuesta, no un fallo de transporte");
 });
 
 test("makeApi: cada método manda la action correcta y adjunta la sesión si se provee", async () => {
