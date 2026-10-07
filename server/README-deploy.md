@@ -14,14 +14,11 @@ mano, cada vez que algo llega de verdad a producción.
 | Fecha | Qué se subió | Cómo | Decisiones que pasaron a estar vivas | Comprobado con |
 |---|---|---|---|---|
 | 2026-09-07 | `domain.gs` + `server-lib.gs` | pegado a mano + *Editar implementación → Nueva versión* | V-43, V-44, V-48, V-49, V-50, V-51 | El botón «Anular» de la tarjeta de Imaginaria aparece tras registrar una cobertura (es el campo `coberturas` de `colaImaginaria`, que solo devuelve el `server-lib.gs` nuevo) |
+| 2026-10-06 | `server-lib.gs` + `Code.gs` (`domain.gs` no cambió) | pegado a mano desde la rama de la PR (antes del merge) + autorizar `script.send_mail` ejecutando `doGet` + *Editar implementación → Nueva versión* (**versión 16**) | V-52 (solo administradores validan), V-53 (perfil de invitado), V-54 (alta con aprobación), memoización de lecturas del store | Pendiente de comprobar en producción por el autor: el aviso por correo llega y la tarjeta «Solicitudes de acceso» de Inicio permite aprobar a un invitado. Si el correo no llega pero la tarjeta sí, falta el permiso de correo |
 
-`Code.gs` sigue en la versión del 2026-09-05 (V-47): no ha cambiado desde entonces.
+`Code.gs` cambió el 2026-10-06 (añade `sendMail` con `MailApp`, V-53); antes seguía en la versión del 2026-09-05 (V-47).
 
-**Pendiente de desplegar (2026-10-06):** `server-lib.gs` con V-52 (solo administradores validan) y la memoización de lecturas del store. Hasta pegarlo y crear la «Nueva versión», el servidor sigue dejando validar a Responsable/Mayores aunque el cliente ya oculte el botón.
-
-**Pendiente de desplegar (V-53 perfil de invitado y V-54 alta con aprobación):** `server-lib.gs` **y `Code.gs`** (esta vez cambia el adaptador: añade `sendMail` con `MailApp`). Pasos: (1) pega `server-lib.gs` y `Code.gs`; (2) la primera vez, Apps Script pedirá **autorizar el permiso de envío de correo** (`script.send_mail`): en el editor ejecuta cualquier función (por ejemplo `doGet` si existe, o crea una temporal que llame a `MailApp.getRemainingDailyQuota()`) y acepta el aviso de permisos con la cuenta propietaria — sin ese paso el correo falla en silencio (la solicitud sigue apareciendo en Inicio del administrador); (3) *Implementar → Administrar implementaciones → Nueva versión*. La hoja `solicitudesInvitado` se crea sola al primer uso. **Ojo con el orden:** el cliente nuevo ya no llama a `altaResidente`, y el servidor nuevo la rechaza; un cliente viejo contra servidor nuevo no podría darse de alta, y un cliente nuevo contra servidor viejo pediría `solicitarAlta`, que el viejo no conoce. Despliega el servidor primero y mergea el cliente justo después. Mientras tanto nadie nuevo puede entrar, pero los residentes que ya existen no se ven afectados.
-
-Con `domain.gs` y `server-lib.gs` al día no queda ningún cambio de backend pendiente de desplegar.
+Con `domain.gs`, `server-lib.gs` y `Code.gs` al día no queda ningún cambio de backend pendiente de desplegar.
 Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
 `/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el
 cliente está hablando con un backend que ya no es este (DR-4).
