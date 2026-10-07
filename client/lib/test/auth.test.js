@@ -3,7 +3,7 @@
 // `google.accounts.id`, cargado por index.html vía CDN — aquí lo simulamos.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { setupGoogleSignIn, getSession, storeSession, clearSession } from "../auth.js";
+import { setupGoogleSignIn, getSession, storeSession, clearSession, perfilDelToken } from "../auth.js";
 
 function fakeStorage() {
   const m = new Map();
@@ -272,4 +272,45 @@ test("pedirAcceso con un alta: al aprobarse guarda la sesión del residente reci
   assert.equal(fin, "APROBADA");
   assert.equal(entro.residente.nombre, "Nueva");
   assert.equal(JSON.parse(storage.m.guardias_session).session, "S-RES");
+});
+
+// ── «Entrando…» mientras el servidor verifica el login (2026-10-07) ──
+const jwtCon = (payload) => ["h", Buffer.from(JSON.stringify(payload), "utf8").toString("base64url"), "firma"].join(".");
+
+test("perfilDelToken lee nombre, email y foto del ID token, con acentos", () => {
+  const p = perfilDelToken(jwtCon({ given_name: "Agustín", name: "Agustín L.", email: "a@gmail.com", picture: "https://lh3.googleusercontent.com/a/x" }));
+  assert.deepEqual(p, { nombre: "Agustín", email: "a@gmail.com", foto: "https://lh3.googleusercontent.com/a/x" });
+  assert.equal(perfilDelToken(jwtCon({ name: "Ana Pérez" })).nombre, "Ana Pérez", "sin given_name, el nombre completo");
+});
+
+test("perfilDelToken no rompe con lo que no es un JWT legible: devuelve null", () => {
+  for (const malo of [undefined, "", "dev:ana@gmail.com:n1", "a.b", "a.%%%.c", "a." + Buffer.from("no json").toString("base64url") + ".c"]) {
+    assert.equal(perfilDelToken(malo), null, String(malo));
+  }
+  assert.equal(perfilDelToken(jwtCon({ picture: "javascript:alert(1)" })).foto, null, "solo fotos https");
+});
+
+test("onStart se llama con el perfil en cuanto Google devuelve la cuenta, ANTES de esperar al servidor", async () => {
+  const gis = fakeGis();
+  const orden = [];
+  let soltarLogin;
+  const api = fakeApi({ login: () => { orden.push("login"); return new Promise((r) => { soltarLogin = r; }); } });
+  await setupGoogleSignIn({
+    api, clientId: "cid", gis, buttonEl: {}, storage: fakeStorage(),
+    onStart: (perfil) => orden.push(["start", perfil && perfil.nombre]),
+    onSuccess: () => orden.push("success"), onNeedsAlta() {}, onError() {},
+  });
+  const fin = gis._fireCredential(jwtCon({ given_name: "Quique", email: "q@gmail.com" }));
+  assert.deepEqual(orden, [["start", "Quique"], "login"], "el aviso sale mientras el login sigue en vuelo");
+  soltarLogin({ ok: true, session: "s", residente: { id: "r1", nombre: "Quique", rol: "residente" } });
+  await fin;
+  assert.deepEqual(orden.at(-1), "success");
+});
+
+test("sin onStart el login funciona igual (pantallas que no lo usan)", async () => {
+  const gis = fakeGis();
+  let ok = false;
+  await setupGoogleSignIn({ api: fakeApi(), clientId: "cid", gis, buttonEl: {}, storage: fakeStorage(), onSuccess: () => { ok = true; }, onNeedsAlta() {}, onError() {} });
+  await gis._fireCredential("dev:ana@gmail.com:server-nonce");
+  assert.equal(ok, true);
 });

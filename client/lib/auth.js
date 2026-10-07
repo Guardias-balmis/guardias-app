@@ -101,6 +101,32 @@ export async function waitForGis({ getGis, intervaloMs = 100, maxMs = 15000, esp
 const ERROR_NONCE_RE = /nonce/i;
 
 /**
+ * Nombre, email y foto que trae el ID token de Google, SOLO para enseñarlos mientras el servidor
+ * verifica el login («Entrando como …»). No se confía en nada de esto ni se guarda: quien decide
+ * quién eres es el servidor, que valida el token entero (verify-token.js). Devuelve null si el
+ * token no tiene forma de JWT (p. ej. el `dev:` del dev-server) o no se puede leer, para que la
+ * pantalla caiga a un «Entrando…» sin nombre en vez de romperse.
+ */
+export function perfilDelToken(credential) {
+  try {
+    const partes = String(credential || "").split(".");
+    if (partes.length !== 3) return null;
+    const b64 = partes[1].replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(partes[1].length / 4) * 4, "=");
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const p = JSON.parse(new TextDecoder().decode(bytes));
+    const texto = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+    const foto = texto(p.picture);
+    return {
+      nombre: texto(p.given_name) || texto(p.name),
+      email: texto(p.email),
+      foto: foto && foto.startsWith("https://") ? foto : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Pide un nonce, inicializa GIS con él y pinta el botón. Cuando el usuario completa el
  * login, GIS invoca el callback con el ID token; aquí lo canjeamos por una sesión.
  * - Login correcto → guarda sesión, `onSuccess({session, residente, residentes?})`.
@@ -108,11 +134,14 @@ const ERROR_NONCE_RE = /nonce/i;
  *   pedir el formulario de alta sin repetir el login de Google).
  * - Cualquier otro fallo → `onError(mensaje)`, y se vuelve a inicializar con un nonce nuevo
  *   para que el siguiente clic pueda funcionar.
+ * `onStart(perfil)`, si se pasa, se llama en cuanto Google devuelve la cuenta elegida y ANTES de
+ * llamar al servidor: el login a Apps Script tarda unos segundos y sin esto la pantalla no cambiaba
+ * nada, así que parecía colgada (2026-10-07). `perfil` es `perfilDelToken(...)` (puede ser null).
  *
  * @returns {Promise<{refrescar: () => Promise<boolean>}|null>} null si no se pudo ni empezar
  *   (sin nonce); si no, un asa con `refrescar()`, que pide otro nonce y reinicializa GIS.
  */
-export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage = sessionStorage, onSuccess, onNeedsAlta, onError }) {
+export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage = sessionStorage, onSuccess, onNeedsAlta, onError, onStart }) {
   let nonce = null;
   const opcionesBoton = { theme: "outline", size: "large", width: 320, text: "continue_with" };
 
@@ -123,6 +152,7 @@ export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage 
   // `consumeNonce(claims.nonce)` sobre el nonce DEL TOKEN (verify-token.js) y hoy no compara el del
   // cuerpo con nada — así que el desfase nunca hizo fallar un login (verificado 2026-09-05).
   const callbackPara = (nonceDeEsta) => async (response) => {
+    if (onStart) onStart(perfilDelToken(response.credential));
     const r = await api.login(response.credential, nonceDeEsta);
     if (r.ok) {
       storeSession(r, storage);

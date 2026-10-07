@@ -66,9 +66,20 @@
   .gapp-rise{animation:gapp-rise .28s cubic-bezier(.2,0,0,1) both}
   .gapp-pop{animation:gapp-pop .22s cubic-bezier(.2,0,0,1) both}
 
+  /* «Entrando…» tras elegir la cuenta de Google (2026-10-07, Login.jsx): el login a Apps Script
+     tarda unos segundos y la pantalla no cambiaba, así que parecía colgada. Un anillo que gira
+     alrededor de la foto de la cuenta y una barra indeterminada al estilo Material. Con
+     `prefers-reduced-motion` no se apagan —son la única señal de que la app sigue trabajando—,
+     solo van más despacio. */
+  @keyframes gapp-girar{to{transform:rotate(360deg)}}
+  @keyframes gapp-barra{from{left:-40%}to{left:100%}}
+  .gapp-anillo{animation:gapp-girar 1.1s linear infinite;transform-origin:50% 50%}
+  .gapp-barra{position:absolute;top:0;bottom:0;width:40%;animation:gapp-barra 1.4s cubic-bezier(.4,0,.2,1) infinite}
+
   @media (prefers-reduced-motion:reduce){
     .gapp-rise,.gapp-pop{animation:none}
     .gapp-tap,.gapp-card,.gapp-navind{transition:none}
+    .gapp-anillo,.gapp-barra{animation-duration:3s}
   }
 </style>
 </head>
