@@ -151,10 +151,12 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession, onSessionInval
     crearFestivos: (festivos) => authed("crearFestivos", { festivos }),
     anularFestivo: (id) => authed("anularFestivo", { id }),
     cancelarBloqueo: (id) => authed("cancelarBloqueo", { id }),
-    /** Tercer puesto (INV-8): autoservicio puro, «será siempre voluntario» (V-18). */
-    estadoVoluntariado3P: () => authed("estadoVoluntariado3P"),
-    ofrecerse3P: (compromisoAceptado) => authed("ofrecerse3P", { compromisoAceptado }),
-    retirarVoluntariado3P: () => authed("retirarVoluntariado3P"),
+    /**
+     * Tercer puesto (INV-8, P-16/V-55): lo que hace falta del mes pedido (`voluntarios`, `periodos`,
+     * `delMes`, `yo`). Solo lee: la respuesta a «¿Deseas hacer tercer puesto este mes?» va en las
+     * preferencias del mes (`guardarPreferencias`, campo `tercerPuesto`).
+     */
+    estadoVoluntariado3P: (mes, anio) => authed("estadoVoluntariado3P", { mes, anio }),
     /** Eventos del servicio (INV-10, V-20): dato de entrada, como los festivos. */
     listEventos: () => authed("listEventos"),
     crearEvento: (tipo, fecha, voluntarios = []) => authed("crearEvento", { tipo, fecha, voluntarios }),

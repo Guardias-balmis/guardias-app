@@ -4,10 +4,7 @@
 // (c) equidad ≤1 entre voluntarios al cierre del año de residencia; (d) prioridad mochila.
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  validateThirdPost, thirdPostHistoryStart, canWithdrawThirdPost,
-  thirdPostCommitmentEnd, THIRD_POST_PERMANENCIA_MESES,
-} from "../thirdpost.js";
+import { validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs } from "../thirdpost.js";
 
 const R = (id, fechaInicio, fechaFin) => ({ id, fechaInicio, fechaFin });
 const p3 = (residenteId, fecha) => ({ residenteId, fecha, codigo: "3P" });
@@ -238,19 +235,48 @@ test("INV-8: NINGUNA de las cuatro reglas bloquea; las cuatro son aviso (V-18)",
   assert.deepEqual([...new Set(v.map((x) => x.severidad))], ["aviso"]);
 });
 
-// --- Permanencia del voluntariado (decisión V-18) ------------------------------------------
+// --- Voluntarios del mes, derivados de las preferencias (P-16, decisión V-55) --------------
 
-test("permanencia: son 4 meses desde el día en que se apunta, y el mes corto se recorta", () => {
-  assert.equal(THIRD_POST_PERMANENCIA_MESES, 4);
-  assert.equal(thirdPostCommitmentEnd("2026-08-02"), "2026-12-01");
-  // 31-oct + 4 meses cae en un febrero de 28: se recorta como en addYears (§3.1).
-  assert.equal(thirdPostCommitmentEnd("2026-10-31"), "2027-02-27");
+// Residente que empieza el 2026-05-25: su año de residencia 1 va del 2026-05-25 al 2027-05-24.
+const PV = [R("ana", "2026-05-25", "2030-05-24"), R("bea", "2024-05-27", "2028-05-26")];
+const pref = (residenteId, anio, mes, tercerPuesto) => ({ residenteId, anio, mes, tercerPuesto });
+
+test("thirdPostVolunteersFromPrefs: «sí» este mes → voluntaria del mes, con `desde` = inicio de su año de residencia", () => {
+  const r = thirdPostVolunteersFromPrefs([pref("ana", 2026, 10, true)], PV, 10, 2026);
+  assert.deepEqual(r.delMes, ["ana"]);
+  assert.deepEqual(r.voluntarios, [{ residenteId: "ana", desde: "2026-05-25" }]);
+  assert.deepEqual(r.periodos, [{ residenteId: "ana", desde: "2026-10-01", hasta: "2026-10-31" }]);
 });
 
-test("permanencia: no se puede retirar antes de cumplirla, sí el día siguiente", () => {
-  assert.equal(canWithdrawThirdPost("2026-08-02", "2026-08-02"), false);
-  assert.equal(canWithdrawThirdPost("2026-08-02", "2026-12-01"), false, "el último día aún cuenta");
-  assert.equal(canWithdrawThirdPost("2026-08-02", "2026-12-02"), true);
+test("thirdPostVolunteersFromPrefs: «no» (o sin respuesta) no hace voluntario a nadie", () => {
+  const r = thirdPostVolunteersFromPrefs([pref("ana", 2026, 10, false), { residenteId: "bea", anio: 2026, mes: 10 }], PV, 10, 2026);
+  assert.deepEqual(r, { periodos: [], voluntarios: [], delMes: [] });
+});
+
+test("thirdPostVolunteersFromPrefs: quien dijo «sí» un mes de su año pero «no» este mes sigue en la equidad del año, no en el reparto del mes", () => {
+  const r = thirdPostVolunteersFromPrefs([pref("ana", 2026, 9, true), pref("ana", 2026, 10, false)], PV, 10, 2026);
+  assert.deepEqual(r.delMes, [], "este mes no puede recibir un 3P");
+  assert.deepEqual(r.voluntarios.map((v) => v.residenteId), ["ana"], "pero cuenta para INV-8b/8c de su año");
+  assert.equal(r.periodos.length, 1, "el 3P de septiembre sí era legítimo ese mes");
+});
+
+test("thirdPostVolunteersFromPrefs: un «sí» de un año de residencia anterior no cuenta para el actual", () => {
+  // Bea cambió de año el 2026-05-27: su «sí» de noviembre de 2025 es de su año 1, no del 2.
+  const r = thirdPostVolunteersFromPrefs([pref("bea", 2025, 11, true)], PV, 10, 2026);
+  assert.deepEqual(r.voluntarios, []);
+  assert.equal(r.periodos.length, 1, "pero queda el periodo de aquel mes para INV-8a");
+});
+
+test("thirdPostVolunteersFromPrefs: un mes de transición cuenta si toca su año de residencia", () => {
+  // El año de Ana empieza el 25 de mayo: el «sí» de mayo (mes partido) ya es de su año 1.
+  const r = thirdPostVolunteersFromPrefs([pref("ana", 2026, 5, true)], PV, 10, 2026);
+  assert.deepEqual(r.voluntarios.map((v) => v.residenteId), ["ana"]);
+});
+
+test("thirdPostVolunteersFromPrefs: residente desconocido o fuera de residencia se ignora sin lanzar", () => {
+  const r = thirdPostVolunteersFromPrefs([pref("fantasma", 2026, 10, true), pref("ana", 2026, 3, true)], PV, 3, 2026);
+  assert.deepEqual(r.voluntarios, [], "fantasma no existe y Ana aún no había empezado en marzo");
+  assert.deepEqual(r.delMes, ["ana"], "el «sí» de marzo de Ana queda como del mes, aunque no sea asignable");
 });
 
 // --- thirdPostHistoryStart -----------------------------------------------------------------

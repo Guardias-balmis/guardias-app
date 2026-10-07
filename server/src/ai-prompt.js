@@ -77,16 +77,16 @@ function seccionFestivos(festivos, puentes) {
 }
 
 /**
- * Voluntarios del tercer puesto. El 3P es autoservicio puro («será siempre voluntario», V-18): sin
- * esta sección, la norma del 3P le pedía repartirlo «con equidad entre voluntarios» sin decirle
- * nunca quiénes son. El `desde` viaja porque arranca el ciclo L-D de INV-8b (contrato C-4).
+ * Quienes han dicho «sí» a «¿Deseas hacer tercer puesto este mes?» (P-16/V-55). El 3P es siempre
+ * voluntario («será siempre voluntario», normativa p.2) y se decide mes a mes: sin esta sección,
+ * la norma del 3P le pedía repartirlo «con equidad entre voluntarios» sin decirle nunca quiénes son.
  */
 function seccionVoluntarios3P(voluntarios) {
   if (!voluntarios || voluntarios.length === 0) {
-    return "VOLUNTARIOS DEL 3.º PUESTO: ninguno. NO asignes ningún código 3P este mes.";
+    return "VOLUNTARIOS DEL 3.º PUESTO ESTE MES: ninguno. NO asignes ningún código 3P este mes.";
   }
-  const lista = voluntarios.map((v) => `  - id="${v.residenteId}" — voluntario desde ${v.desde}`).join("\n");
-  return `VOLUNTARIOS DEL 3.º PUESTO (los ÚNICOS que pueden llevar código 3P):\n${lista}`;
+  const lista = voluntarios.map((v) => `  - id="${v.residenteId}"`).join("\n");
+  return `VOLUNTARIOS DEL 3.º PUESTO ESTE MES (han dicho que sí; los ÚNICOS que pueden llevar código 3P):\n${lista}`;
 }
 
 /** Eventos del servicio del curso (INV-10). Dato de entrada, como los festivos: no se deducen. */

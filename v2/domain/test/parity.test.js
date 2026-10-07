@@ -19,10 +19,7 @@ import { imaginariaQueue, nextForImaginaria } from "../imaginaria.js";
 import { levelOn, groupOnDate } from "../residents.js";
 import { tally } from "../tally.js";
 import { validateMonth, buildMonthContext } from "../validate.js";
-import {
-  validateThirdPost, thirdPostHistoryStart, thirdPostCommitmentEnd,
-  canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES,
-} from "../thirdpost.js";
+import { validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs } from "../thirdpost.js";
 import {
   validateResidencyYearClose, validateQuarterClose, quarterCloseWindow,
   yearCloseHistoryStart, yearCloseFestivosRange, buildYearCloseContext,
@@ -132,7 +129,8 @@ function runAll(api) {
       api.thirdPostHistoryStart(TP_VOLUNTARIOS, TP_CTX.residentes, TP_CTX.mes, TP_CTX.anio),
       api.thirdPostHistoryStart([], TP_CTX.residentes, TP_CTX.mes, TP_CTX.anio),
     ],
-    thirdPostCommitment: [api.thirdPostCommitmentEnd("2026-10-31"), api.canWithdrawThirdPost("2026-10-31", "2027-02-27"), api.THIRD_POST_PERMANENCIA_MESES],
+    thirdPostVolunteers: api.thirdPostVolunteersFromPrefs(
+      [{ residenteId: TP_CTX.residentes[0].id, anio: TP_CTX.anio, mes: TP_CTX.mes, tercerPuesto: true }], TP_CTX.residentes, TP_CTX.mes, TP_CTX.anio),
     equity: api.validateResidencyYearClose(EQ_CTX),
     trimesterWindow: api.trimesterWindow("2027-01-15"),
     quarterCloseWindow: [api.quarterCloseWindow(11, 2026), api.quarterCloseWindow(10, 2026)],
@@ -183,7 +181,7 @@ function runAll(api) {
 
 const esm = {
   weekday, levelOn, groupOnDate, tally, validateMonth, validateThirdPost, validateResidencyYearClose,
-  thirdPostHistoryStart, thirdPostCommitmentEnd, canWithdrawThirdPost, THIRD_POST_PERMANENCIA_MESES,
+  thirdPostHistoryStart, thirdPostVolunteersFromPrefs,
   trimesterWindow, validateQuarterClose, quarterCloseWindow, yearCloseHistoryStart, yearCloseFestivosRange,
   buildYearCloseContext, bridgesBetween,
   buildMonthContext, canValidate, canPublish, canUnpublish, canEdit, stateAfterEdit, equityWarnings,

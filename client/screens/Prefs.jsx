@@ -7,7 +7,7 @@
 // autor. Acentos de color: rojo=BAJA (sigue bloqueando), naranja=vacaciones/rotación/evitar
 // (informativo, no bloquea).
 import { COLOR, S } from "./client/lib/design-tokens.js";
-import { datesOfMonth, weekday, compareISO, addDays, toISO, addMonths } from "./v2/domain/calendar.js";
+import { datesOfMonth, weekday, compareISO, toISO, addMonths } from "./v2/domain/calendar.js";
 import { rangoValido } from "./client/lib/fechas.js";
 import { puedeMoverCiclo, esAccesoDesarrollador } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
@@ -25,6 +25,7 @@ const DEFAULT_PREFS = {
   maxGuardias: 5,
   fechasEvitar: [],
   notas: "",
+  tercerPuesto: false, // «¿Deseas hacer tercer puesto este mes?» (P-16/V-55): por mes, y por defecto no
 };
 const MOTIVO_LABEL = { VACACIONES: "Vacaciones", ROTACION: "Rotación externa", BAJA: "Baja" };
 // Etiquetas de los riesgos de P-13 (spec.md §8/§8.1, blockPreview.js) — el `tipo` que devuelve
@@ -164,120 +165,6 @@ function NuevoBloqueo({ anio, mes, onCreated, showToast, api, paraOtros, residen
         {saving ? "Añadiendo…" : "Añadir"}
       </Btn>
     </div>
-  );
-}
-
-/**
- * Voluntariado del tercer puesto (INV-8, decisión V-18). Autoservicio: nadie apunta a nadie,
- * porque el 3P «será siempre voluntario». Lo único que hay que aceptar explícitamente es el
- * compromiso de permanencia — y se acepta aquí, no en un aviso que se cierra sin leer, porque
- * es lo que después impide retirarse.
- */
-function Voluntariado3P({ api, showToast }) {
-  const [estado, setEstado] = useState(null);
-  const [error, setError] = useState(null);
-  const [acepto, setAcepto] = useState(false);
-  const [busy, setBusy] = useState(false);
-  // El compromiso de permanencia y el checkbox solo se muestran cuando alguien pide apuntarse
-  // de verdad — antes salían siempre, apenas se entraba a la pantalla, como si fuera el estado
-  // por defecto de la sección en vez de una acción que hay que solicitar.
-  const [solicitando, setSolicitando] = useState(false);
-
-  const cargar = async () => {
-    const r = await api.estadoVoluntariado3P();
-    if (r.ok) { setEstado(r); setError(null); } else setError(r.error);
-  };
-  useEffect(() => { cargar(); }, []);
-
-  const accion = async (fn, ok) => {
-    setBusy(true);
-    const r = await fn();
-    setBusy(false);
-    if (r.ok) { showToast(ok); setAcepto(false); setSolicitando(false); cargar(); }
-    else showToast(r.error, "err");
-  };
-
-  // Con reintento: sin él, un fallo de red al abrir la pantalla dejaba la tarjeta muerta y sin
-  // ninguna forma de apuntarse hasta recargar la página entera.
-  if (error) {
-    return (
-      <Card title="🩺 Tercer puesto" accent={COLOR.purple}>
-        <Aviso>No se pudo cargar: {error}</Aviso>
-        <div style={{ marginTop: 10 }}>
-          <Btn onClick={() => { setError(null); cargar(); }} color={COLOR.gray} textColor={COLOR.blueDark}>Reintentar</Btn>
-        </div>
-      </Card>
-    );
-  }
-  if (!estado) return <Card title="🩺 Tercer puesto" accent={COLOR.purple}><div style={{ fontSize: 13, color: COLOR.grayDark }}>Cargando…</div></Card>;
-
-  const meses = estado.permanenciaMeses;
-  return (
-    <Card title="🩺 Tercer puesto" accent={COLOR.purple}>
-      <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
-        El tercer puesto es <b>siempre voluntario</b>: te apuntas tú, cuando quieras, y puedes
-        empezar por el día de la semana que prefieras. A partir de ahí no se repite día hasta
-        completar el ciclo de los siete.
-      </div>
-
-      {estado.mio ? (
-        <>
-          <div style={{
-            background: COLOR.bluePale, borderLeft: `4px solid ${COLOR.blue}`,
-            borderRadius: 8, padding: "8px 10px", fontSize: 13, color: COLOR.blueDark, marginBottom: 10,
-          }}>
-            Apuntado desde el <b>{fechaEs(estado.mio.desde)}</b>.{" "}
-            {estado.mio.puedoRetirarme
-              ? "Ya has cumplido el compromiso de permanencia."
-              : <>Tu compromiso llega hasta el <b>{fechaEs(estado.mio.compromisoHasta)}</b>.</>}
-          </div>
-          <Btn onClick={() => accion(() => api.retirarVoluntariado3P(), "Te has retirado del tercer puesto")}
-            disabled={busy || !estado.mio.puedoRetirarme} color={COLOR.gray} textColor={COLOR.red}>
-            Retirarme del tercer puesto
-          </Btn>
-          {!estado.mio.puedoRetirarme && (
-            <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 6 }}>
-              Podrás retirarte a partir del {fechaEs(addDays(estado.mio.compromisoHasta, 1))}.
-            </div>
-          )}
-        </>
-      ) : solicitando ? (
-        <>
-          <div style={{
-            background: COLOR.gray, borderLeft: `4px solid ${COLOR.orange}`,
-            borderRadius: 8, padding: "8px 10px", fontSize: 13, color: COLOR.bodyText, marginBottom: 10, lineHeight: 1.5,
-          }}>
-            Al apuntarte asumes un <b>compromiso de permanencia de {meses} meses</b>. La rotación
-            solo funciona si se sostiene en el tiempo: entrar y salir a las pocas semanas deja el
-            ciclo a medias y descuadra el reparto con el resto de voluntarios.
-          </div>
-          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 10, cursor: "pointer" }}>
-            <input type="checkbox" checked={acepto} onChange={(e) => setAcepto(e.target.checked)} style={{ marginTop: 2 }} />
-            <span style={{ fontSize: 13, color: COLOR.bodyText, lineHeight: 1.4 }}>
-              Entiendo que me comprometo a mantenerme {meses} meses.
-            </span>
-          </label>
-          <div style={{ display: "flex", gap: 8 }}>
-            <Btn onClick={() => accion(() => api.ofrecerse3P(true), "Te has apuntado al tercer puesto ✓")} disabled={busy || !acepto}>
-              Confirmar
-            </Btn>
-            <Btn onClick={() => { setSolicitando(false); setAcepto(false); }} disabled={busy} color={COLOR.gray} textColor={COLOR.blueDark}>
-              Cancelar
-            </Btn>
-          </div>
-        </>
-      ) : (
-        <Btn onClick={() => setSolicitando(true)} color={COLOR.purpleLight} textColor={COLOR.purple}>
-          + Apuntarme al tercer puesto
-        </Btn>
-      )}
-
-      <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 10 }}>
-        {estado.voluntarios.length === 0
-          ? "Ahora mismo no hay nadie apuntado."
-          : `Apuntados ahora mismo: ${estado.voluntarios.length}.`}
-      </div>
-    </Card>
   );
 }
 
@@ -574,7 +461,22 @@ function PrefsScreen() {
         )}
       </Card>
 
-      <Voluntariado3P api={api} showToast={showToast} />
+      <Card title="🩺 Tercer puesto este mes" accent={COLOR.purple}>
+        <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
+          El tercer puesto es un <b>apoyo de tarde</b>: vas y te marchas a las 20 h, no haces la guardia
+          de 24 h, y <b>no cuenta como guardia</b>. Es siempre voluntario y se pregunta cada mes.
+          Se reparte entre quienes dicen que sí, lo más parejo posible, y no se repite el mismo día de
+          la semana hasta haber hecho los siete.
+        </div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: COLOR.blueDark, marginBottom: 8 }}>¿Deseas hacer tercer puesto este mes?</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn onClick={() => set("tercerPuesto")(true)} color={prefs.tercerPuesto ? COLOR.purple : COLOR.gray} textColor={prefs.tercerPuesto ? "#fff" : COLOR.grayDark}>Sí</Btn>
+          <Btn onClick={() => set("tercerPuesto")(false)} color={!prefs.tercerPuesto ? COLOR.blueDark : COLOR.gray} textColor={!prefs.tercerPuesto ? "#fff" : COLOR.grayDark}>No</Btn>
+        </div>
+        <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 8, lineHeight: 1.5 }}>
+          Recuerda guardar. Si luego te toca uno y no puedes, puedes quitártelo tú mismo del cuadrante.
+        </div>
+      </Card>
 
       <Card title="🚫 Fechas a evitar" accent={COLOR.amber}>
         <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10 }}>

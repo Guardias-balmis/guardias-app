@@ -268,6 +268,15 @@ export function handleRequest(rawBody, deps) {
             const publicado = meses.find((m) => !deps.domain.canEdit(m.estado));
             if (publicado) return { ok: false, error: `el cuadrante de ${publicado.mes}/${publicado.anio} está PUBLICADO y no admite ediciones` };
 
+            // Quitar un tercer puesto NO invalida un mes VALIDADO (P-16/V-55): es un apoyo voluntario
+            // —normalmente la quinta o sexta guardia de quien lo hace, casi nunca de las cuatro
+            // obligatorias—, quien lo tiene asignado puede quitárselo después, y borrarlo no puede
+            // crear ninguna violación que el mes validado no tuviera ya (INV-15 y compañía solo
+            // empeoran al AÑADIR). Se mira el estado ACTUAL de cada celda, dentro del lock: solo
+            // cuenta como «quitar un 3P» el cambio que deja vacía una celda que ahora es un 3P.
+            const actuales = new Map(deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }).map((x) => [ASIG_KEY(x), x.codigo]));
+            const soloQuitaTercerPuesto = req.cambios.every((c) => (c.codigo || "") === "" && actuales.get(ASIG_KEY(c)) === "3P");
+
             // Una sola escritura para todo el lote (appendRecords): un mes del generador son
             // ~60-90 cambios y fila a fila era un lock y una relectura íntegra de la tabla por cada
             // uno. Además así el lote es atómico y no puede quedar medio aplicado.
@@ -275,7 +284,7 @@ export function handleRequest(rawBody, deps) {
               { fecha: c.fecha, residenteId: c.residenteId, codigo: c.codigo || "", puesto: c.puesto, origen: c.origen }
             )));
             for (const m of meses) {
-              const siguiente = deps.domain.stateAfterEdit(m.estado);
+              const siguiente = soloQuitaTercerPuesto ? m.estado : deps.domain.stateAfterEdit(m.estado);
               if (siguiente !== m.estado) writeCuadranteEstado(deps, session, m.mes, m.anio, siguiente);
             }
             return { ok: true, guardados: req.cambios.length };
@@ -554,57 +563,28 @@ export function handleRequest(rawBody, deps) {
           });
         });
 
-      // TERCER PUESTO (INV-8, decisión V-18). Autoservicio puro, como el voluntariado del
-      // Responsable: el 3P «será siempre voluntario» (normativa p.2), así que nadie apunta a
-      // nadie — ni siquiera el Responsable. Abierta a cualquier sesión: el validador necesita la
-      // lista para INV-8a y la pantalla para saber si ya estás dentro.
+      // TERCER PUESTO (INV-8, P-16/V-55). Cada mes la app pregunta «¿Deseas hacer tercer puesto este
+      // mes?» y la respuesta es el campo `tercerPuesto` de las preferencias de ese mes
+      // (`guardarPreferencias`): ya no hay alta, baja ni compromiso de permanencia, y nadie apunta a
+      // nadie —«será siempre voluntario» (normativa p.2)—. Esta acción solo LEE: devuelve lo que
+      // INV-8 necesita para el mes pedido (por defecto, el actual), derivado en el dominio
+      // (`thirdPostVolunteersFromPrefs`) para que cliente y servidor juzguen exactamente lo mismo.
+      // Abierta a cualquier sesión: el validador necesita la lista y la pantalla saber quién se ofreció.
       case "estadoVoluntariado3P":
         return authed(req, deps, (session) => {
-          const voluntarios = activeThirdPostVolunteers(deps);
-          const mio = voluntarios.find((v) => v.residenteId === session.sub) || null;
-          return {
-            ok: true,
-            voluntarios,
-            // Periodos activos E HISTÓRICOS (decisión V-40): lo que `marcarValidado` ya usa desde
-            // V-28 vía `allThirdPostPeriods` para juzgar INV-8a "¿era voluntario ESE día?". Sin
-            // esto el cliente solo veía `voluntarios` (los de HOY) y `Calendar.jsx` podía mostrar
-            // un veredicto distinto al que el servidor da al validar el mismo mes.
-            periodos: allThirdPostPeriods(deps),
-            permanenciaMeses: deps.domain.THIRD_POST_PERMANENCIA_MESES,
-            mio: mio && {
-              desde: mio.desde,
-              compromisoHasta: deps.domain.thirdPostCommitmentEnd(mio.desde),
-              puedoRetirarme: deps.domain.canWithdrawThirdPost(mio.desde, deps.today),
-            },
-          };
+          const hoy = deps.domain.parseISO(deps.today);
+          const mes = req.mes === undefined ? hoy.month : req.mes;
+          const anio = req.anio === undefined ? hoy.year : req.anio;
+          if (!isYear(anio) || !isMonth(mes)) return { ok: false, error: "mes/anio inválido" };
+          const tp = thirdPostForMonth(deps, mes, anio, allResidentes(deps));
+          return { ok: true, mes, anio, ...tp, yo: tp.delMes.includes(session.sub) };
         });
 
+      // Las dos acciones del modelo anterior (apuntarse con compromiso de 4 meses y retirarse) se
+      // quedan solo para dar un motivo a un cliente viejo, como `altaResidente` en V-54.
       case "ofrecerse3P":
-        return authed(req, deps, (session) => {
-          // El compromiso de permanencia se acepta explícitamente y queda registrado: es la
-          // condición que después impide retirarse, y una regla que restringe sin que conste
-          // aceptada no se le puede oponer a nadie dentro de diez años.
-          if (req.compromisoAceptado !== true) return { ok: false, error: "hay que aceptar el compromiso de permanencia para apuntarse al tercer puesto" };
-          if (activeThirdPostVolunteers(deps).some((v) => v.residenteId === session.sub)) {
-            return { ok: false, error: "ya estás apuntado al tercer puesto" };
-          }
-          deps.store.appendRecord("voluntarios3P", { residenteId: session.sub, desde: deps.today, compromisoAceptado: true, activo: true });
-          return { ok: true, desde: deps.today, compromisoHasta: deps.domain.thirdPostCommitmentEnd(deps.today) };
-        });
-
       case "retirarVoluntariado3P":
-        return authed(req, deps, (session) => {
-          const mio = activeThirdPostVolunteers(deps).find((v) => v.residenteId === session.sub);
-          if (!mio) return { ok: false, error: "no estás apuntado al tercer puesto" };
-          if (!deps.domain.canWithdrawThirdPost(mio.desde, deps.today)) {
-            return { ok: false, error: `el compromiso de permanencia dura hasta el ${deps.domain.thirdPostCommitmentEnd(mio.desde)}: hasta entonces no puedes retirarte del tercer puesto` };
-          }
-          // Append-only: se reinserta con activo=false, la fila del alta se queda (y con ella el
-          // `desde`, que es lo que documenta que el compromiso se cumplió). `hasta` deja escrito
-          // CUÁNDO se retiró: sin él la fila de baja repite el `desde` y esa fecha se pierde.
-          deps.store.appendRecord("voluntarios3P", { residenteId: session.sub, desde: mio.desde, hasta: deps.today, compromisoAceptado: true, activo: false });
-          return { ok: true };
-        });
+        return { ok: false, error: "el tercer puesto ya se decide cada mes en Preferencias («¿Deseas hacer tercer puesto este mes?»): actualiza la página" };
 
       // EVENTOS DEL SERVICIO (INV-10, decisión V-20). Dato de entrada como los festivos: la
       // fecha la pone el servicio cada año. Abierto a cualquier sesión desde 2026-09-01 (mismo
@@ -1048,6 +1028,10 @@ function validPrefs(prefs, anio, mes, deps) {
   }
   out.fechasEvitar = [...new Set(fe)].sort();
 
+  // «¿Deseas hacer tercer puesto este mes?» (P-16/V-55): un booleano por mes; ausente = no.
+  if (prefs.tercerPuesto !== undefined && prefs.tercerPuesto !== null && typeof prefs.tercerPuesto !== "boolean") return { ok: false, error: "tercerPuesto debe ser verdadero o falso" };
+  out.tercerPuesto = prefs.tercerPuesto === true;
+
   const notas = prefs.notas === undefined || prefs.notas === null ? "" : prefs.notas;
   if (typeof notas !== "string") return { ok: false, error: "notas debe ser texto" };
   if (notas.length > NOTAS_MAX) return { ok: false, error: `notas demasiado largas (máximo ${NOTAS_MAX} caracteres)` };
@@ -1292,7 +1276,8 @@ function monthSnapshot(deps) {
 function buildThirdPostCtx(deps, mes, anio, snap, propuesta = null) {
   const prefix = monthPrefix(anio, mes);
   const monthStart = `${prefix}-01`;
-  const voluntarios = activeThirdPostVolunteers(deps);
+  const tp = thirdPostForMonth(deps, mes, anio, snap.residentes);
+  const voluntarios = tp.voluntarios;
   const desde = deps.domain.thirdPostHistoryStart(voluntarios, snap.residentes, mes, anio);
 
   // historial3P: solo los 3P ANTERIORES al mes, por residente y en orden. Los del propio mes
@@ -1309,12 +1294,12 @@ function buildThirdPostCtx(deps, mes, anio, snap, propuesta = null) {
   return {
     mes, anio, residentes: snap.residentes,
     asignaciones: propuesta || snap.asignaciones.filter((a) => a.fecha.startsWith(prefix)),
-    voluntarios3P: voluntarios, // con `desde`: el ciclo de 8b arranca en el alta de cada uno (V-18b)
+    voluntarios3P: voluntarios, // con `desde` = inicio de su año de residencia: el ciclo de 8b se cuenta dentro del año (V-55)
     historial3P,
     // INV-8a juzga "¿era voluntario ESE día?" con la historia completa (V-28), no con la lista de
     // HOY que usan 8b/8c (`voluntarios`, sin tocar a propósito: el ciclo y el cierre de equidad sí
     // son sobre el compromiso vigente).
-    periodosVoluntario3P: allThirdPostPeriods(deps),
+    periodosVoluntario3P: tp.periodos,
   };
 }
 
@@ -1502,7 +1487,8 @@ function promptData(deps, mes, anio, snap) {
     festivos: (snap.festivos || []).filter((f) => f.fecha.startsWith(prefix)),
     // Los puentes se DERIVAN de los festivos (§3.4), nunca se piden ni se escriben a mano.
     puentes: deps.domain.bridgesOfMonth(anio, mes, snap.festivos || []),
-    voluntarios3P: activeThirdPostVolunteers(deps),
+    // Solo quien dijo «sí» ESTE mes puede recibir un 3P (P-16/V-55).
+    voluntarios3P: thirdPostForMonth(deps, mes, anio, snap.residentes).delMes.map((id) => ({ residenteId: id })),
     // Del CURSO, no del mes: la Navidad de diciembre empareja con la despedida del mayo
     // siguiente, que es el mismo criterio que aplica `buildMonthContext` (INV-10).
     eventos: (snap.eventos || []).filter((e) => deps.domain.academicYearOf(e.fecha) === curso),
@@ -1930,34 +1916,13 @@ function periodoResponsable(deps, anio, session, residentes) {
 }
 
 /**
- * Voluntarios ACTIVOS del tercer puesto (última reinserción gana, como `activeVolunteers`).
- * Devuelve los registros, no solo los ids: `desde` es lo que necesitan el compromiso de
- * permanencia y `thirdPostHistoryStart` (el ciclo de INV-8b arranca ahí, no en el mes).
+ * Voluntarios del tercer puesto en un mes, derivados de las preferencias (P-16/V-55). Una sola
+ * lectura de `preferencias` y una sola definición, en el dominio, de quién cuenta para qué: el
+ * reparto del mes (`delMes`), INV-8b/8c (`voluntarios`, con `desde` = inicio del año de
+ * residencia) e INV-8a (`periodos`, un «sí» = el mes entero).
  */
-function activeThirdPostVolunteers(deps) {
-  return deps.store.readLatest("voluntarios3P", (r) => r.residenteId)
-    .filter((v) => v.activo === true)
-    .map((v) => ({ residenteId: v.residenteId, desde: v.desde }));
-}
-
-/**
- * TODOS los periodos de voluntariado del 3P, activos e históricos (decisión V-28, corrige
- * INV-8a). `readLatest` colapsa a una fila por residente y por eso sirve para "¿es voluntario
- * AHORA?" pero no para "¿lo era ESE día?": alguien que se apuntó, se retiró y volvió a apuntarse
- * tiene más de un periodo, y el de en medio desaparecería. Se lee con `readRecords` (crudo, sin
- * colapsar) y se agrupa por `residenteId+desde` —la baja siempre reinserta el MISMO `desde` que
- * su alta, añadiendo `hasta` (ver `retirarVoluntariado3P`)— así que cada par alta/baja se funde
- * en un solo periodo `{residenteId, desde, hasta}`, con `hasta` ausente si sigue activo.
- */
-function allThirdPostPeriods(deps) {
-  const porClave = new Map();
-  for (const f of deps.store.readRecords("voluntarios3P")) {
-    const clave = `${f.residenteId}|${f.desde}`;
-    const periodo = porClave.get(clave) || { residenteId: f.residenteId, desde: f.desde, hasta: undefined };
-    if (f.hasta) periodo.hasta = f.hasta;
-    porClave.set(clave, periodo);
-  }
-  return [...porClave.values()];
+function thirdPostForMonth(deps, mes, anio, residentes) {
+  return deps.domain.thirdPostVolunteersFromPrefs(deps.store.readLatest("preferencias", PREF_KEY), residentes, mes, anio);
 }
 
 /** Mandato enero→enero (INV-14) para el año dado: [YYYY-01-01, (YYYY+1)-01-01). */

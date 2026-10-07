@@ -16,7 +16,7 @@ import { absences } from "../../v2/domain/absences.js";
 import { parseISO, academicYearOf, toISO } from "../../v2/domain/calendar.js";
 import { groupOnDate, periodsOfResident, validateTrainingPeriods, levelOn } from "../../v2/domain/residents.js";
 import { validateMonth, buildMonthContext, rotationHistoryStart } from "../../v2/domain/validate.js";
-import { validateThirdPost, thirdPostHistoryStart } from "../../v2/domain/thirdpost.js";
+import { validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs } from "../../v2/domain/thirdpost.js";
 import { validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange, validateQuarterClose, quarterCloseWindow } from "../../v2/domain/equity.js";
 import { canValidate, canEdit, stateAfterEdit } from "../../v2/domain/cuadrante.js";
 
@@ -65,7 +65,7 @@ function makeDeps(extraSheets = {}) {
       absences, parseISO, academicYearOf, toISO,
       groupOnDate, periodsOfResident, validateTrainingPeriods, levelOn,
       validateMonth, buildMonthContext, rotationHistoryStart,
-      validateThirdPost, thirdPostHistoryStart,
+      validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs,
       validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart, yearCloseFestivosRange,
       validateQuarterClose, quarterCloseWindow,
       canValidate, canEdit, stateAfterEdit,

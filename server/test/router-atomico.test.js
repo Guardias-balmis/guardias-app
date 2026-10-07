@@ -8,7 +8,7 @@ import { absences } from "../../v2/domain/absences.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "../../v2/domain/validate.js";
-import { validateThirdPost, thirdPostHistoryStart } from "../../v2/domain/thirdpost.js";
+import { validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs } from "../../v2/domain/thirdpost.js";
 import { groupOnDate, levelOn, periodsOfResident } from "../../v2/domain/residents.js";
 import { parseISO, addDays, bridgesOfMonth, academicYearOf, toISO, daysInMonth, datesOfMonth } from "../../v2/domain/calendar.js";
 import { accumulatedTally } from "../../v2/domain/accumulate.js";
@@ -69,7 +69,7 @@ function makeDeps({ llm, violaciones = () => [], lockNoReentrante = false } = {}
     llm,
     domain: {
       absences, validateMonth: (ctx) => violaciones(ctx), validateThirdPost: () => [],
-      buildMonthContext, rotationHistoryStart, thirdPostHistoryStart, parseISO, addDays, bridgesOfMonth, academicYearOf, toISO, daysInMonth, datesOfMonth,
+      buildMonthContext, rotationHistoryStart, thirdPostHistoryStart, thirdPostVolunteersFromPrefs, parseISO, addDays, bridgesOfMonth, academicYearOf, toISO, daysInMonth, datesOfMonth,
       accumulatedTally, monthReplacementPlan, monthCompletionPlan, levelOn, periodsOfResident, groupOnDate,
       canEdit, canValidate, canPublish, stateAfterEdit,
       quarterCloseWindow, validateQuarterClose, yearCloseHistoryStart, yearCloseFestivosRange, buildYearCloseContext, validateResidencyYearClose,

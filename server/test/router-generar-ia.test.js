@@ -15,7 +15,7 @@ import { absences } from "../../v2/domain/absences.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
 import { validateMonth, rotationHistoryStart, buildMonthContext } from "../../v2/domain/validate.js";
-import { validateThirdPost, thirdPostHistoryStart } from "../../v2/domain/thirdpost.js";
+import { validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs } from "../../v2/domain/thirdpost.js";
 import { groupOnDate, levelOn, periodsOfResident } from "../../v2/domain/residents.js";
 import { parseISO, addDays, bridgesOfMonth, academicYearOf } from "../../v2/domain/calendar.js";
 import { accumulatedTally } from "../../v2/domain/accumulate.js";
@@ -94,7 +94,7 @@ function makeDeps({ llm, violaciones = () => [], extraSheets = {} } = {}) {
       // Lo que sí se prueba de verdad es que el router LO LLAME y respete su veredicto.
       validateMonth: (ctx) => violaciones(ctx),
       validateThirdPost: () => [],
-      buildMonthContext, rotationHistoryStart, thirdPostHistoryStart, parseISO, addDays,
+      buildMonthContext, rotationHistoryStart, thirdPostHistoryStart, thirdPostVolunteersFromPrefs, parseISO, addDays,
       bridgesOfMonth, academicYearOf, accumulatedTally, monthReplacementPlan, monthCompletionPlan,
       levelOn, periodsOfResident, groupOnDate,
       canEdit, stateAfterEdit,

@@ -1217,28 +1217,56 @@ var Thirdpost = (function () {
 // voluntario»). Entran en `EQUITY_INVARIANTS` de cuadrante.js, así que validar con avisos de
 // INV-8 sigue exigiendo la confirmación explícita de la UI.
 
-  const { weekday, compareISO, addDays, addMonths, addYears, datesOfMonth } = Calendar;
-  const { levelOn, periodsOfResident, closingPeriodOn } = Residents;
+  const { weekday, compareISO, addDays, addYears, datesOfMonth, toISO, daysInMonth } = Calendar;
+  const { levelOn, periodsOfResident, periodOn, closingPeriodOn } = Residents;
 
 const aviso = (detalle, extra = {}) => ({ invariante: "INV-8", severidad: "aviso", detalle, ...extra });
 
 /**
- * Meses de permanencia que asume quien se apunta al 3P (decisión V-18). El 3P es voluntario y
- * cada uno empieza el mes que quiere, pero la rotación L-D solo tiene sentido si se sostiene:
- * apuntarse y salirse a las tres semanas deja el ciclo a medias y la equidad de 8c sin con
- * quién compararse. Vive aquí, y no en el servidor ni en la pantalla, para que el texto que
- * acepta el residente y la regla que aplica el backend no puedan divergir.
+ * Quién quiere hacer tercer puesto, derivado de las PREFERENCIAS del mes (P-16, decisión V-55).
+ * Cada mes la app pregunta «¿Deseas hacer tercer puesto este mes?» y la respuesta vive en la fila
+ * de `preferencias` de ese residente y mes: no hay alta ni baja ni compromiso de permanencia, el
+ * 3P «será siempre voluntario» (normativa p.2) y se decide mes a mes.
+ *
+ * Devuelve las tres vistas que necesita INV-8, todas desde la MISMA lectura para que servidor y
+ * cliente no puedan discrepar (mismo motivo que `thirdPostHistoryStart`):
+ *  - `periodos`: un periodo por cada «sí», el mes entero. Es lo que consume INV-8a para juzgar
+ *    «¿lo era ESE día?» (V-28).
+ *  - `voluntarios`: quien dijo «sí» en algún mes de su año de residencia hasta el mes que se
+ *    valida, con `desde` = el inicio de ESE año. El ciclo L-D de INV-8b se cuenta dentro del año
+ *    de residencia (se reinicia al empezar otro) y INV-8c compara a esos mismos entre sí; sin el
+ *    «algún mes», quien dijo «no» justo el mes de su cierre saldría de la comparación de equidad.
+ *  - `delMes`: los ids que dijeron «sí» ESTE mes, los únicos a quienes se puede asignar un 3P.
+ *
+ * Solo se mira a quien tiene algún «sí»: así un residente con las fechas rotas en el Sheet no
+ * tumba la validación del mes por una regla que no le afecta.
+ *
+ * @param {{residenteId:string, anio:number, mes:number, tercerPuesto?:boolean}[]} preferencias
+ * @param {object[]} residentes  como los de `validateThirdPost`
+ * @returns {{periodos:{residenteId:string,desde:string,hasta:string}[], voluntarios:{residenteId:string,desde:string}[], delMes:string[]}}
  */
-const THIRD_POST_PERMANENCIA_MESES = 4;
+function thirdPostVolunteersFromPrefs(preferencias, residentes, mes, anio) {
+  const si = (preferencias || []).filter((p) => p.tercerPuesto === true);
+  const inicioMes = (p) => toISO(p.anio, p.mes, 1);
+  const finMes = (p) => toISO(p.anio, p.mes, daysInMonth(p.anio, p.mes));
+  const periodos = si.map((p) => ({ residenteId: p.residenteId, desde: inicioMes(p), hasta: finMes(p) }));
 
-/** Último día que cubre el compromiso de permanencia de quien se apuntó el `desde`. */
-function thirdPostCommitmentEnd(desde) {
-  return addDays(addMonths(desde, THIRD_POST_PERMANENCIA_MESES), -1);
-}
+  const delMes = [...new Set(si.filter((p) => p.anio === anio && p.mes === mes).map((p) => p.residenteId))];
 
-/** ¿Puede ya retirarse del 3P quien se apuntó el `desde`? (decisión V-18) */
-function canWithdrawThirdPost(desde, hoy) {
-  return compareISO(hoy, thirdPostCommitmentEnd(desde)) > 0;
+  const monthStart = toISO(anio, mes, 1);
+  const monthEnd = toISO(anio, mes, daysInMonth(anio, mes));
+  const byId = new Map(residentes.map((r) => [r.id, r]));
+  const voluntarios = [];
+  for (const id of new Set(si.map((p) => p.residenteId))) {
+    const r = byId.get(id);
+    if (!r) continue;
+    const anioResidencia = periodOn(periodsOfResident(r), monthStart);
+    if (!anioResidencia) continue; // todavía no ha empezado o ya terminó
+    const dijoSi = si.some((p) => p.residenteId === id
+      && compareISO(finMes(p), anioResidencia.start) >= 0 && compareISO(inicioMes(p), monthEnd) <= 0);
+    if (dijoSi) voluntarios.push({ residenteId: id, desde: anioResidencia.start });
+  }
+  return { periodos, voluntarios, delMes };
 }
 
 const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Number(fecha.slice(5, 7)) === mes;
@@ -1425,7 +1453,7 @@ function countThirdPostInWindow(id, historial3P, thisMonth3P, win) {
   return todas.filter((f) => inRange(f, win.start, win.end)).length;
 }
 
-  return { THIRD_POST_PERMANENCIA_MESES, thirdPostCommitmentEnd, canWithdrawThirdPost, validateThirdPost, thirdPostCycleRepeats, thirdPostHistoryStart };
+  return { thirdPostVolunteersFromPrefs, validateThirdPost, thirdPostCycleRepeats, thirdPostHistoryStart };
 })();
 
 // ── equity.js ──

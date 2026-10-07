@@ -1,10 +1,11 @@
-// Test end-to-end de INV-8a "por fecha, no por estado actual" (decisión V-28): fila retirada de
-// `voluntarios3P` → `allThirdPostPeriods` → `buildThirdPostCtx` → `marcarValidado`.
+// Test end-to-end de INV-8a "por fecha, no por estado actual" (decisión V-28, reescrito para el
+// modelo mensual de P-16/V-55): respuesta «sí» en `preferencias.tercerPuesto` → periodo de ESE mes →
+// `buildThirdPostCtx` → `marcarValidado`.
 //
-// Antes de V-28, `buildThirdPostCtx` solo pasaba a `validateThirdPost` los voluntarios ACTIVOS
-// de HOY (`activeThirdPostVolunteers`, vía `readLatest`), así que un 3P legítimo de alguien ya
-// retirado se marcaba en falso, y un 3P de antes de apuntarse dejaba de avisar. `readRecords`
-// (crudo, sin colapsar) es lo que permite reconstruir el periodo cerrado que `readLatest` pierde.
+// Antes de V-28, `buildThirdPostCtx` solo pasaba a `validateThirdPost` los voluntarios de HOY, así
+// que un 3P legítimo de alguien que ya no lo era se marcaba en falso, y un 3P de antes de apuntarse
+// dejaba de avisar. Con la pregunta mensual cada «sí» es un periodo de un mes, y el mes que se
+// valida se juzga contra SU respuesta, no contra la de hoy.
 import test from "node:test";
 import assert from "node:assert/strict";
 import nodeCrypto from "node:crypto";
@@ -21,7 +22,7 @@ import {
   validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart,
   yearCloseFestivosRange, validateQuarterClose, quarterCloseWindow,
 } from "../../v2/domain/equity.js";
-import { validateThirdPost, thirdPostHistoryStart } from "../../v2/domain/thirdpost.js";
+import { validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs } from "../../v2/domain/thirdpost.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -45,7 +46,7 @@ const ANA = { id: "ana", nombre: "Ana", email: "quiquemm14@gmail.com", fechaInic
 const BRUNO = { id: "bruno", nombre: "Bruno", email: "bruno@gmail.com", fechaInicio: "2025-05-25", fechaFin: "2029-05-24" };
 let idCounter = 0;
 
-function makeDeps({ today = "2026-12-01", voluntarios3P = [] } = {}) {
+function makeDeps({ today = "2026-12-01", preferencias = [] } = {}) {
   const ss = fakeSS({
     residentes: [headerOf(TABLES.residentes), ...[ANA, BRUNO].map((r) => recordToRow(TABLES.residentes, r))],
     responsables: [headerOf(TABLES.responsables)],
@@ -53,7 +54,7 @@ function makeDeps({ today = "2026-12-01", voluntarios3P = [] } = {}) {
     asignaciones: [headerOf(TABLES.asignaciones)],
     sorteos: [headerOf(TABLES.sorteos)],
     cuadrantes: [headerOf(TABLES.cuadrantes)],
-    voluntarios3P: [headerOf(TABLES.voluntarios3P), ...voluntarios3P.map((f) => recordToRow(TABLES.voluntarios3P, f))],
+    preferencias: [headerOf(TABLES.preferencias), ...preferencias.map((f) => recordToRow(TABLES.preferencias, f))],
   });
   const nonces = new Set();
   return {
@@ -67,7 +68,7 @@ function makeDeps({ today = "2026-12-01", voluntarios3P = [] } = {}) {
       canValidate, canEdit, stateAfterEdit,
       validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart,
       yearCloseFestivosRange, validateQuarterClose, quarterCloseWindow,
-      validateThirdPost, thirdPostHistoryStart,
+      validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs,
     },
     newSeed: () => "semilla-fija-para-el-test",
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
@@ -85,23 +86,19 @@ function loggedIn(deps) {
 }
 const inv8a = (r) => r.violaciones.filter((v) => v.invariante === "INV-8" && /no consta en la lista/.test(v.detalle));
 
-test("un 3P de julio de quien se retiró en diciembre NO avisa (era voluntario ESE día)", () => {
-  const deps = makeDeps({
-    voluntarios3P: [
-      { residenteId: "bruno", desde: "2026-05-01", compromisoAceptado: true, activo: true },
-      { residenteId: "bruno", desde: "2026-05-01", hasta: "2026-12-01", compromisoAceptado: true, activo: false },
-    ],
-  });
+const sí = (residenteId, anio, mes) => ({ residenteId, anio, mes, tercerPuesto: true });
+const no = (residenteId, anio, mes) => ({ residenteId, anio, mes, tercerPuesto: false });
+
+test("un 3P de julio de quien dijo «sí» en julio NO avisa aunque en diciembre ya dijera «no» (era voluntario ESE mes)", () => {
+  const deps = makeDeps({ preferencias: [sí("bruno", 2026, 7), no("bruno", 2026, 12)] });
   const session = loggedIn(deps);
   call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2026-07-03", residenteId: "bruno", codigo: "3P" }] }, deps);
   const r = call({ action: "marcarValidado", session, mes: 7, anio: 2026 }, deps);
   assert.deepEqual(inv8a(r), []);
 });
 
-test("un 3P de junio de quien recién se apuntó en septiembre SÍ avisa (no era voluntario todavía)", () => {
-  const deps = makeDeps({
-    voluntarios3P: [{ residenteId: "bruno", desde: "2026-09-01", compromisoAceptado: true, activo: true }],
-  });
+test("un 3P de junio de quien solo dijo «sí» en septiembre SÍ avisa (no era voluntario ese mes)", () => {
+  const deps = makeDeps({ preferencias: [sí("bruno", 2026, 9)] });
   const session = loggedIn(deps);
   call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2026-06-05", residenteId: "bruno", codigo: "3P" }] }, deps);
   const r = call({ action: "marcarValidado", session, mes: 6, anio: 2026 }, deps);
@@ -110,19 +107,13 @@ test("un 3P de junio de quien recién se apuntó en septiembre SÍ avisa (no era
   assert.equal(v[0].residenteId, "bruno");
 });
 
-test("dos periodos separados (se apuntó, se retiró, volvió a apuntarse): cada 3P se juzga contra SU tramo", () => {
-  const deps = makeDeps({
-    voluntarios3P: [
-      { residenteId: "bruno", desde: "2026-01-01", compromisoAceptado: true, activo: true },
-      { residenteId: "bruno", desde: "2026-01-01", hasta: "2026-03-31", compromisoAceptado: true, activo: false },
-      { residenteId: "bruno", desde: "2026-08-01", compromisoAceptado: true, activo: true },
-    ],
-  });
+test("meses alternos: cada 3P se juzga contra la respuesta de SU mes", () => {
+  const deps = makeDeps({ preferencias: [sí("bruno", 2026, 2), no("bruno", 2026, 5), sí("bruno", 2026, 8)] });
   const session = loggedIn(deps);
-  // Febrero: dentro del primer periodo → válido.
+  // Febrero: dijo «sí» → válido.
   call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2026-02-06", residenteId: "bruno", codigo: "3P" }] }, deps);
   assert.deepEqual(inv8a(call({ action: "marcarValidado", session, mes: 2, anio: 2026 }, deps)), []);
-  // Mayo: en el hueco entre los dos periodos → avisa, aunque hoy (deps.today=2026-12-01) vuelva a ser voluntario.
+  // Mayo: dijo «no» → avisa, aunque en agosto vuelva a decir «sí».
   call({ action: "guardarAsignaciones", session, cambios: [{ fecha: "2026-05-04", residenteId: "bruno", codigo: "3P" }] }, deps);
   const r = call({ action: "marcarValidado", session, mes: 5, anio: 2026 }, deps);
   assert.equal(inv8a(r).length, 1);

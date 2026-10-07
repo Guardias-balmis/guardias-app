@@ -22,7 +22,7 @@ import {
   validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart,
   yearCloseFestivosRange, validateQuarterClose, quarterCloseWindow,
 } from "../../v2/domain/equity.js";
-import { validateThirdPost, thirdPostHistoryStart } from "../../v2/domain/thirdpost.js";
+import { validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs } from "../../v2/domain/thirdpost.js";
 
 const CLIENT_ID = "cid.apps.googleusercontent.com";
 const crypto = {
@@ -73,7 +73,7 @@ function makeDeps({ today = "2026-12-01" } = {}) {
       // una sola de estas, la acción cae por TypeError. Es lo que este arnés sirve para detectar.
       validateResidencyYearClose, buildYearCloseContext, yearCloseHistoryStart,
       yearCloseFestivosRange, validateQuarterClose, quarterCloseWindow,
-      validateThirdPost, thirdPostHistoryStart,
+      validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs,
     },
     newSeed: () => "semilla-fija-para-el-test",
     issueNonce: () => { const n = "nonce-" + nonces.size; nonces.add(n); return n; },
