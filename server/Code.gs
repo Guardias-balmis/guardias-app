@@ -18,9 +18,12 @@
 var PROPS = PropertiesService.getScriptProperties();
 var SESSION_TTL = 12 * 3600; // 12 h
 
-// doGet: el cliente pide un nonce antes de invocar a GIS (anti-replay del login).
+// doGet: la app no lo usa (todo va por POST, también el nonce del login). Un GET aquí es un POST
+// que Google convirtió por el camino, y responder `ok:true` hacía pasar por buena una petición que
+// no se había ejecutado (2026-10-07, ver `router.js:handleGet`). Ejecutarlo desde el editor sigue
+// sirviendo para autorizar permisos nuevos (como el de correo de V-53).
 function doGet(e) {
-  return json_(Server.handleRequest(JSON.stringify({ action: "getNonce" }), deps_()));
+  return json_(Server.handleGet());
 }
 
 // doPost: el cliente manda el JSON como text/plain (D-1); leemos e.postData.contents.

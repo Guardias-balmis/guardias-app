@@ -19,7 +19,7 @@ mano, cada vez que algo llega de verdad a producción.
 
 `Code.gs` cambió el 2026-10-06 (añade `sendMail` con `MailApp`, V-53); antes seguía en la versión del 2026-09-05 (V-47).
 
-**Pendiente de desplegar (PR #57, 2026-10-07):** `server-lib.gs` **y `Code.gs`** (`domain.gs` no cambia; sin permisos nuevos). Entran V-57 (el aviso de una solicitud de acceso va a quien puede aprobarla y devuelve `avisados`), la memoria de lecturas que se vacía al coger el lock, `SpreadsheetApp.flush()` antes de soltarlo (en `Code.gs`), y que el invitado deje de recibir las marcas V/R/B y los huecos de los periodos editados. El orden da igual: el cliente nuevo contra el servidor de la versión 17 solo deja de afirmar nada sobre el correo. Para comprobarlo: pedir acceso como invitado y ver que la pantalla dice «Se ha enviado un aviso por correo»; y, con una sesión de invitado, que el cuadrante no enseña ninguna V/R/B.
+**Pendiente de desplegar (PR #57 y el arreglo de «Solicitudes de acceso», 2026-10-07):** `server-lib.gs` **y `Code.gs`** (`domain.gs` no cambia; sin permisos nuevos). Entra también que `doGet` deje de responder `{ok:true, nonce}` (`router.js:handleGet`): un POST que Google convertía en GET por el camino pasaba por respuesta buena sin haberse ejecutado —la lectura llegaba sin su lista y tumbaba la tarjeta; una escritura se daba por guardada—; se comprueba abriendo la URL `/exec` en el navegador (ver la verificación E2E). Entran V-57 (el aviso de una solicitud de acceso va a quien puede aprobarla y devuelve `avisados`), la memoria de lecturas que se vacía al coger el lock, `SpreadsheetApp.flush()` antes de soltarlo (en `Code.gs`), y que el invitado deje de recibir las marcas V/R/B y los huecos de los periodos editados. El orden da igual: el cliente nuevo contra el servidor de la versión 17 solo deja de afirmar nada sobre el correo. Para comprobarlo: pedir acceso como invitado y ver que la pantalla dice «Se ha enviado un aviso por correo»; y, con una sesión de invitado, que el cuadrante no enseña ninguna V/R/B.
 Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
 `/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el
 cliente está hablando con un backend que ya no es este (DR-4).
@@ -192,7 +192,7 @@ una implementación nueva con URL distinta (DR-4) — no hay forma de que salga 
 después de un `npm run deploy` que lo modifique, repetir a mano la verificación E2E de abajo.
 
 ## Verificación E2E (los puntos 🧪 del ADR-002)
-- `GET /exec` → responde `{ok:true, nonce:...}` (cadena CORS 302→GET, `res.json()` legible).
+- `GET /exec` (abrir la URL en el navegador) → responde `{ok:false, error:"la petición llegó sin datos (GET)…"}`: es JSON legible, así que la implementación está viva y con acceso «Cualquier usuario». Desde el 2026-10-07 un GET nunca es `ok:true` (`router.js:handleGet`): la app lo pide todo por POST, y un GET solo puede ser un POST que Google convirtió por el camino. Si en vez de JSON sale una página de inicio de sesión de Google, el acceso de la implementación no es «Cualquier usuario».
 - Login GIS → `POST` con el ID token → `{ok:true, session}`; reintento con el mismo nonce → falla.
 - `validar` con un cuadrante de prueba → devuelve las mismas violaciones que el cliente.
 - Matar el proceso a media `rebuildSheet` y confirmar que el siguiente intento se autorrepara.

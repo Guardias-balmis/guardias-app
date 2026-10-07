@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import nodeCrypto from "node:crypto";
-import { handleRequest } from "../src/router.js";
+import { handleRequest, handleGet } from "../src/router.js";
 import { absences } from "../../v2/domain/absences.js";
 import { headerOf, TABLES, recordToRow } from "../src/sheets-schema.js";
 import { makeStore } from "../src/sheets-store.js";
@@ -133,4 +133,17 @@ test("una excepción interna se captura y devuelve JSON (nunca HTML de Apps Scri
   const r = call({ action: "login", idToken: "jwt" }, deps);
   assert.equal(r.ok, false);
   assert.equal(typeof r.error, "string");
+});
+
+// doGet (2026-10-07). El cliente pide TODO por POST, también el nonce (`getNonce`), así que a doGet
+// solo llega una petición que no debería: un POST que Google ha convertido en GET por el camino
+// (un 301/302 cambia el método, según el estándar Fetch) o alguien abriendo la URL en el navegador.
+// Antes doGet respondía `{ok:true, nonce}`: una lectura recibía `ok:true` sin su lista —el
+// `.length` de undefined que tumbó «Solicitudes de acceso» en producción— y una ESCRITURA se daba
+// por buena sin haberse ejecutado. Ahora es un error explícito.
+test("handleGet: un GET nunca es ok:true, y dice que la app solo usa POST", () => {
+  const r = handleGet();
+  assert.equal(r.ok, false);
+  assert.match(r.error, /POST/);
+  assert.equal(r.nonce, undefined, "un GET no emite nonces: el login los pide por POST (getNonce)");
 });

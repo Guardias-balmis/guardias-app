@@ -6,6 +6,7 @@ import { todayISO } from "./client/lib/dates.js";
 import { S } from "./client/lib/design-tokens.js";
 import { puedeMoverCiclo, puedeGenerarCuadrante, esAccesoDesarrollador, puedeValidarCuadrante } from "./client/lib/permisos.js";
 import { violationText } from "./client/lib/violations.js";
+import { ESTADO_INICIAL, recibirSolicitudes, vistaSolicitudes } from "./client/lib/solicitudes.js";
 
 const { useState, useEffect } = React;
 const { Card, QuickCard, Btn, Aviso } = window.UI;
@@ -24,21 +25,33 @@ function nivelDe(residente) {
 /**
  * Solicitudes de acceso como invitado (V-53). Solo la ven quienes pueden decidirlas (los
  * administradores durante la ventana de V-52; el permiso del ciclo después) y solo cuando hay
- * alguna pendiente. Cada solicitud caduca a los 5 minutos: se consulta cada 20 s mientras Inicio
- * está abierto, y el correo que recibe quien puede aprobarla (V-57) es solo el aviso para venir aquí.
+ * alguna pendiente —o cuando no se han podido cargar—. Cada solicitud caduca a los 5 minutos: se
+ * consulta cada 20 s mientras Inicio está abierto, y el correo que recibe quien puede aprobarla
+ * (V-57) es solo el aviso para venir aquí.
+ *
+ * El estado lo decide `client/lib/solicitudes.js` (2026-10-07): antes era `setLista(r.solicitudes)`
+ * a secas, y un `ok:true` sin la lista dejaba `undefined` y tumbaba la tarjeta en el `.length`.
  */
 function SolicitudesAcceso({ api, showToast }) {
-  const [lista, setLista] = useState([]);
+  const [estado, setEstado] = useState(ESTADO_INICIAL);
   const [busy, setBusy] = useState(false);
+  const [recargando, setRecargando] = useState(false);
+  const montada = React.useRef(true);
   const cargar = async () => {
     const r = await api.listSolicitudesInvitado();
-    if (r.ok) setLista(r.solicitudes);
+    if (montada.current) setEstado((previo) => recibirSolicitudes(previo, r));
   };
   useEffect(() => {
+    montada.current = true;
     cargar();
     const t = setInterval(cargar, 20000);
-    return () => clearInterval(t);
+    return () => { montada.current = false; clearInterval(t); };
   }, []);
+  const reintentar = async () => {
+    setRecargando(true);
+    await cargar();
+    if (montada.current) setRecargando(false);
+  };
   const decidir = async (sol, aprobar) => {
     setBusy(true);
     const r = await api.resolverSolicitudInvitado(sol.id, aprobar);
@@ -47,12 +60,23 @@ function SolicitudesAcceso({ api, showToast }) {
     else showToast(r.error, "err");
     cargar();
   };
-  if (lista.length === 0) return null;
+  const { mostrar, lista, error } = vistaSolicitudes(estado);
+  if (!mostrar) return null;
   return (
     <Card title="🔔 Solicitudes de acceso">
-      <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 10, lineHeight: 1.5 }}>
-        Alguien pide entrar: como invitado (solo lectura) o con una cuenta de residente nueva. Cada solicitud caduca a los 5 minutos.
-      </div>
+      {error && (
+        <Aviso color={COLOR.red} bg={COLOR.redLight}>
+          No se pudieron cargar las solicitudes de acceso ({error}).
+          <div style={{ marginTop: 8 }}>
+            <Btn onClick={reintentar} disabled={recargando}>{recargando ? "Cargando…" : "🔄 Reintentar"}</Btn>
+          </div>
+        </Aviso>
+      )}
+      {lista.length > 0 && (
+        <div style={{ fontSize: 12, color: COLOR.grayDark, margin: error ? "10px 0" : "0 0 10px", lineHeight: 1.5 }}>
+          Alguien pide entrar: como invitado (solo lectura) o con una cuenta de residente nueva. Cada solicitud caduca a los 5 minutos.
+        </div>
+      )}
       {lista.map((sol) => (
         <div key={sol.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 13, wordBreak: "break-word", lineHeight: 1.4 }}>
