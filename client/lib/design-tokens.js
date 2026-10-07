@@ -60,8 +60,8 @@ export const ANO_TEXT = { R4: COLOR.blueDark, R3: COLOR.turquoise, R2: COLOR.pur
 export const ANOS = ["R4", "R3", "R2", "R1"];
 
 // Códigos de guardia (spec §1: GP faltaba en el v1 — bug conocido, corregido aquí).
-export const CODE_COLORS = { G: "#C6EFCE", GF: "#FCE4D6", GP: "#FCE4D6", "3P": "#DEEAF1", V: "#FFE699", R: "#E2EFDA", B: "#D9D9D9" };
-export const CODE_LABELS = { G: "Guardia", GF: "G. Festiva", GP: "G. Prefestivo", "3P": "3.º Puesto", V: "Vacaciones", R: "Rotación", B: "Baja" };
+export const CODE_COLORS = { G: "#C6EFCE", GF: "#FCE4D6", GP: "#FCE4D6", "3P": "#DEEAF1", V: "#FFE699", R: "#E2EFDA", B: "#D9D9D9", C: "#E4DFEC" };
+export const CODE_LABELS = { G: "Guardia", GF: "G. Festiva", GP: "G. Prefestivo", "3P": "3.º Puesto", V: "Vacaciones", R: "Rotación", B: "Baja", C: "Congreso" };
 export const CODES_CYCLE = ["G", "GF", "GP", "3P", "V", "R", "B", ""];
 
 // Ciclo de estados del cuadrante (Fase 6.2, spec.md §2 — mismos valores que v2/domain/cuadrante.js

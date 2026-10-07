@@ -62,7 +62,7 @@ export function isEligibleForImaginaria(residente, grupo, fecha) {
  *   TODA la lista elegible, en orden, con el motivo de quien queda apartado — la pantalla
  *   enseña a quién llamar y también a quién no, que es lo que evita la llamada inútil.
  */
-const AUSENCIA_LABEL = { BAJA: "está de baja", VACACIONES: "está de vacaciones", ROTACION: "está de rotación externa" };
+const AUSENCIA_LABEL = { BAJA: "está de baja", VACACIONES: "está de vacaciones", ROTACION: "está de rotación externa", CONGRESO: "está en un congreso" };
 
 export function imaginariaQueue({ residentes = [], coberturas = [], asignaciones = [], bloqueos = [], grupo, fechaIncidencia }) {
   const vispera = addDays(fechaIncidencia, -1);

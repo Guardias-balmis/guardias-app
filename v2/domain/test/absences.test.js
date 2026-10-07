@@ -61,9 +61,9 @@ test("los conjuntos de motivos son los que exige cada invariante, y NO son inter
   // INV-5 (V-8): solo la baja impide asignar.
   assert.deepEqual(BLOQUEA_ASIGNACION, ["BAJA"]);
   // INV-2: la rotación NO exime del mínimo (se sigue haciendo guardia en el hospital de origen).
-  assert.deepEqual(EXIME_DEL_MINIMO, ["VACACIONES", "BAJA"]);
+  assert.deepEqual(EXIME_DEL_MINIMO, ["VACACIONES", "CONGRESO", "BAJA"]); // V-62: el congreso cuenta como las vacaciones
   // INV-6: la baja NO computa como ausencia simultánea; nadie la ha concedido ni se reparte.
-  assert.deepEqual(AUSENCIA_SIMULTANEA, ["ROTACION", "VACACIONES"]);
+  assert.deepEqual(AUSENCIA_SIMULTANEA, ["ROTACION", "VACACIONES", "CONGRESO"]);
   // INV-3, nota [a]: solo la baja descuenta disponibilidad.
   assert.deepEqual(DESCUENTA_DISPONIBILIDAD, ["BAJA"]);
 });
@@ -87,4 +87,15 @@ test("tolera basura: una fila nula o una fecha mal escrita no tumban la validaci
 test("sin bloqueos, o con la lista ausente, devuelve []", () => {
   assert.deepEqual(absences(), []);
   assert.deepEqual(absences([], { motivos: BLOQUEA_ASIGNACION }), []);
+});
+
+// ── CONGRESO (V-62): misma categoría que las vacaciones ───────────────────────────────────────
+import { EXIME_DEL_MINIMO as EXIME_V62, AUSENCIA_SIMULTANEA as SIMULT_V62, AUSENTE_EN_PUENTE as PUENTE_V62, BLOQUEA_ASIGNACION as BLOQUEA_V62, DESCUENTA_DISPONIBILIDAD as DESCUENTA_V62 } from "../absences.js";
+
+test("V-62: un congreso exime del mínimo, cuenta como ausencia simultánea y como ausencia en un puente, pero no bloquea ni descuenta", () => {
+  assert.ok(EXIME_V62.includes("CONGRESO"));
+  assert.ok(SIMULT_V62.includes("CONGRESO"));
+  assert.ok(PUENTE_V62.includes("CONGRESO"));
+  assert.ok(!BLOQUEA_V62.includes("CONGRESO"), "informativo: solo la baja impide asignar (INV-5)");
+  assert.ok(!DESCUENTA_V62.includes("CONGRESO"), "solo la baja descuenta disponibilidad (nota [a])");
 });

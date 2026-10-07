@@ -285,7 +285,7 @@ const clave = (a) => `${a.fecha}|${a.residenteId}`; // la misma ASIG_KEY que usa
 // Los marcadores que la tarjeta del generador promete conservar («las vacaciones, rotaciones y
 // bajas marcadas en la rejilla se conservan»). No son ausencias (V-19: la ausencia es la fila de
 // `bloqueos`), pero son celdas que alguien apuntó a mano y una guardia propuesta encima las pisaría.
-const MARCADORES_REJILLA = new Set(["V", "R", "B"]);
+const MARCADORES_REJILLA = new Set(["V", "R", "B", "C"]);
 
 /**
  * Claves `fecha|residenteId` que la propuesta REPITE. La tabla es una rejilla por clave y
@@ -763,10 +763,11 @@ var Absences = (function () {
 const BLOQUEA_ASIGNACION = ["BAJA"];
 // INV-2: exime del mínimo de 4 guardias/mes (spec.md §5: «febrero/vacaciones/baja/R1-verano»).
 // La rotación NO exime: se sigue haciendo guardia en el hospital de origen.
-const EXIME_DEL_MINIMO = ["VACACIONES", "BAJA"];
+// CONGRESO (V-62) se trata como las vacaciones: es una ausencia concedida que no está en el hospital.
+const EXIME_DEL_MINIMO = ["VACACIONES", "CONGRESO", "BAJA"];
 // INV-6: cuentan como «ausente» para el máximo de 2 por promoción. La baja NO computa — no es
 // una ausencia que nadie haya concedido ni que se pueda repartir.
-const AUSENCIA_SIMULTANEA = ["ROTACION", "VACACIONES"];
+const AUSENCIA_SIMULTANEA = ["ROTACION", "VACACIONES", "CONGRESO"];
 // INV-3, nota [a] de p.2: «se descontará de forma proporcional». Solo la baja.
 const DESCUENTA_DISPONIBILIDAD = ["BAJA"];
 // Eje `puentesLibres` de INV-3 (decisión V-27): un puente que cae dentro de CUALQUIER ausencia
@@ -774,7 +775,7 @@ const DESCUENTA_DISPONIBILIDAD = ["BAJA"];
 // ese día. A diferencia de DESCUENTA_DISPONIBILIDAD (solo BAJA, nota [a] literal), aquí van los
 // TRES motivos: el sesgo de que una ausencia inflara este eje no distinguía tipo de ausencia, y
 // ROTACION/VACACIONES son más frecuentes que BAJA.
-const AUSENTE_EN_PUENTE = ["BAJA", "VACACIONES", "ROTACION"];
+const AUSENTE_EN_PUENTE = ["BAJA", "VACACIONES", "CONGRESO", "ROTACION"];
 
 // INV-7: la rotación «cercana» que obliga a cubrir viernes y sábado del periodo. La lista de
 // provincias vivía duplicada en `rotationHistoryStart` y en el propio INV-7.
@@ -1099,7 +1100,7 @@ function isEligibleForImaginaria(residente, grupo, fecha) {
  *   TODA la lista elegible, en orden, con el motivo de quien queda apartado — la pantalla
  *   enseña a quién llamar y también a quién no, que es lo que evita la llamada inútil.
  */
-const AUSENCIA_LABEL = { BAJA: "está de baja", VACACIONES: "está de vacaciones", ROTACION: "está de rotación externa" };
+const AUSENCIA_LABEL = { BAJA: "está de baja", VACACIONES: "está de vacaciones", ROTACION: "está de rotación externa", CONGRESO: "está en un congreso" };
 
 function imaginariaQueue({ residentes = [], coberturas = [], asignaciones = [], bloqueos = [], grupo, fechaIncidencia }) {
   const vispera = addDays(fechaIncidencia, -1);
@@ -2540,7 +2541,7 @@ function validateSimultaneousAbsences(days, residentes, bloqueos, cohortOf, viol
       const wasInExcess = emittedRun.get(c) || false;
       if (excess && !wasInExcess) {
         // primer día del run de exceso: atribuir
-        const vacs = ausentes.filter((x) => x.motivo === "VACACIONES");
+        const vacs = ausentes.filter((x) => x.motivo === "VACACIONES" || x.motivo === "CONGRESO"); // V-62: el congreso cede como las vacaciones
         let culpable;
         if (vacs.length) culpable = vacs[vacs.length - 1].id;            // rotación prioritaria: cede el de vacaciones
         else culpable = ausentes.slice().sort((a, b) => compareISO(a.desde, b.desde)).pop().id; // el último en incorporarse
