@@ -47,6 +47,15 @@ export function puedeGenerarCuadrante({ isResponsable, grupo, sinResponsable, ac
   return puedeMoverCiclo({ isResponsable, grupo, sinResponsable, accesoDesarrollador }) && estado === "BORRADOR";
 }
 
+/**
+ * ¿Se ofrece la fase 2 del generador (quintas/sextas y tercer puestos, P-17/V-59)? A diferencia de
+ * la fase 1, también sobre un mes VALIDADO: solo AÑADE guardias (no descarta nada de lo revisado) y
+ * no revierte el estado. Sigue sin ofrecerse sobre PUBLICADO. El servidor lo vuelve a comprobar.
+ */
+export function puedeAnadirExtras({ isResponsable, grupo, sinResponsable, accesoDesarrollador, estado }) {
+  return puedeMoverCiclo({ isResponsable, grupo, sinResponsable, accesoDesarrollador }) && (estado === "BORRADOR" || estado === "VALIDADO");
+}
+
 // Acceso de desarrollador para TODO el permiso del ciclo (decisión V-49, 2026-09-03, a pedido
 // explícito del autor de la app — amplía V-46, que cubría solo el botón de generar con IA): ahora
 // se pasa como `accesoDesarrollador` a `puedeMoverCiclo`, así que también se enseñan validar,

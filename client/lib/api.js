@@ -184,7 +184,9 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession, onSessionInval
      * `modo` (decisión V-47): "completar" respeta las guardias que ya hay en la rejilla y rellena
      * el resto; "reemplazar" es el comportamiento anterior, que sustituye el mes entero.
      */
-    generarCuadranteIA: (anio, mes, modo = "completar") => authed("generarCuadranteIA", { anio, mes, modo }),
+    generarCuadranteIA: (anio, mes, modo = "completar", fase = "obligatorias") =>
+      // `fase` solo viaja si no es la de siempre: un servidor anterior a V-59 la ignoraría.
+      authed("generarCuadranteIA", fase === "obligatorias" ? { anio, mes, modo } : { anio, mes, modo, fase }),
     marcarValidado: (anio, mes) => authed("marcarValidado", { anio, mes }),
     publicarCuadrante: (anio, mes) => authed("publicarCuadrante", { anio, mes }),
     despublicarCuadrante: (anio, mes) => authed("despublicarCuadrante", { anio, mes }),
