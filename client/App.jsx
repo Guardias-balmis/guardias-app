@@ -1,10 +1,12 @@
 // Raíz de la SPA (spec: docs/adr/001-arquitectura.md, Fase 3). Sin AdminScreen (rol
-// derivado, nunca un flag editable), sin token en localStorage (auth.js usa
-// sessionStorage), sin selector de mes/año en texto (mes/anio son números 1-12, no
-// "Junio"/"2026" — mata la clase de bug de desfase del v1).
+// derivado, nunca un flag editable), sin selector de mes/año en texto (mes/anio son números
+// 1-12, no "Junio"/"2026" — mata la clase de bug de desfase del v1). La sesión vive en
+// `localStorage` desde la decisión S-8 (ver client/lib/auth.js), y el botón «atrás» del móvil
+// navega entre pantallas (client/lib/navegacion.js) en vez de sacar de la app.
 import { COLOR, S } from "./client/lib/design-tokens.js";
 import { makeApi } from "./client/lib/api.js";
-import { getSession, clearSession } from "./client/lib/auth.js";
+import { getSession, clearSession, CLAVE_SESION } from "./client/lib/auth.js";
+import { crearNavegacion } from "./client/lib/navegacion.js";
 import { todayISO } from "./client/lib/dates.js";
 import { EXEC_URL } from "./client/config.js";
 import { levelOn, groupOf, periodsOfResident } from "./v2/domain/residents.js";
@@ -37,9 +39,27 @@ function App() {
   // único momento en que de verdad se pierden.
   const tabRef = React.useRef("home");
   useEffect(() => { tabRef.current = tab; }, [tab]);
+  // Historial del navegador (client/lib/navegacion.js): cada cambio de pantalla que hace el usuario
+  // deja una entrada, y el botón «atrás» del móvil vuelve a la anterior en vez de sacar de la app.
+  // Ir atrás desde el cuadrante con celdas sin guardar pregunta lo mismo que cambiar de pestaña; si
+  // el usuario se queda, se vuelve a poner delante la pantalla en la que está.
+  const navRef = React.useRef(null);
+  useEffect(() => {
+    const nav = crearNavegacion({
+      historial: window.history, ventana: window, inicial: "home",
+      alVolver: (t) => {
+        if (t === tabRef.current) return;
+        if (!confirmaPerderCambios()) { nav.ir(tabRef.current); return; }
+        setTabRaw(t);
+      },
+    });
+    navRef.current = nav;
+    return () => nav.desmontar();
+  }, []);
   const setTab = useCallback((t) => {
     if (t === tabRef.current) return;
     if (!confirmaPerderCambios()) return;
+    if (navRef.current) navRef.current.ir(t);
     setTabRaw(t);
   }, []);
   const [toast, setToast] = useState(null);
@@ -80,6 +100,7 @@ function App() {
     setResidentesError(null);
     cambiosSinGuardarRef.current = 0;
     setTabRaw("home"); // si no, el siguiente login hereda la pestaña de la sesión anterior
+    if (navRef.current) navRef.current.reemplazar("home");
   }, []);
   // El botón de cerrar sesión pregunta si hay celdas sin guardar; la caducidad (abajo) no puede
   // preguntar nada: la sesión ya no sirve y los cambios no se podrían guardar de todas formas.
@@ -95,6 +116,22 @@ function App() {
     // Directo, sin `showToast`: es el único aviso que tiene que verse después de cerrar la sesión.
     setToast({ msg: "Tu sesión ha caducado: vuelve a entrar con Google", type: "err" });
     setTimeout(() => setToast(null), 5000);
+  }, [cerrarSesion]);
+
+  // Con la sesión en `localStorage` (S-8) todas las pestañas abiertas comparten la misma: cerrar
+  // sesión en una tiene que cerrarla en las demás, que si no seguirían pintando la app sin token y
+  // fallando en cada petición; y entrar en una deja entrar a las que estaban en el login.
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key !== null && e.key !== CLAVE_SESION) return;
+      const s = getSession();
+      if (!s) cerrarSesion();
+      // Mismo token: nada que hacer. Otro token (entró otra persona en otra pestaña): esta pasa a
+      // ser suya, porque las peticiones ya salen con él y la pantalla no puede enseñar a la anterior.
+      else setAuth((actual) => (actual && actual.session === s.session ? actual : { session: s.session, residente: s.residente }));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, [cerrarSesion]);
 
   const api = React.useMemo(() => makeApi(EXEC_URL, {
