@@ -34,8 +34,24 @@ const REINTENTABLES = new Set([
   "listResidentes", "listAsignaciones", "listAsignacionesRango",
   "misPreferencias", "listPreferencias", "misBloqueos", "listBloqueos", "listBloqueosRango",
   "listFestivosRango", "listEventos", "listExcepciones", "colaImaginaria",
-  "estadoResponsable", "listResponsables", "estadoCuadrante", "estadoVoluntariado3P",
+  "estadoResponsable", "listResponsables", "estadoCuadrante", "estadoVoluntariado3P", "lote",
 ]);
+
+/**
+ * Lecturas que se agrupan en UNA petición (S-9) cuando se piden a la vez. Cada petición al `/exec`
+ * cuesta ~3 s de arranque y redirección de Google aunque la ejecución sea de milisegundos, y varias
+ * en paralelo se estorban entre sí (se vieron 21 s): Inicio lanzaba 4-5. Mismas acciones que
+ * `LOTE_ACCIONES` del servidor; solo lecturas.
+ */
+const LOTEABLES = new Set([
+  "listResidentes", "listAsignaciones", "listAsignacionesRango",
+  "misPreferencias", "listPreferencias", "misBloqueos", "listBloqueos", "listBloqueosRango",
+  "listFestivosRango", "listEventos", "listExcepciones", "colaImaginaria",
+  "estadoResponsable", "listResponsables", "estadoCuadrante", "estadoVoluntariado3P",
+  "listSolicitudesInvitado",
+]);
+const LOTE_VENTANA_MS = 10; // lo que se espera a que lleguen las demás lecturas de la misma pantalla
+const LOTE_MAX = 12;
 
 const REINTENTOS_MS = [400, 1200]; // dos reintentos: hay una persona esperando delante
 const espera = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -145,12 +161,49 @@ function exigirLista(action, r) {
  * ofrecía volver a entrar — el residente tenía que adivinar que la salida era el botón de cerrar
  * sesión. App.jsx lo usa para cerrarla y volver al login con un aviso.
  */
-export function makeApi(execUrl, { fetchImpl = fetch, getSession, onSessionInvalid } = {}) {
+export function makeApi(execUrl, { fetchImpl = fetch, getSession, onSessionInvalid, ventanaLoteMs = LOTE_VENTANA_MS } = {}) {
   const call = (payload) => callBackend(execUrl, payload, { fetchImpl });
+  const procesa = (action, r) => {
+    const out = exigirLista(action, r && typeof r === "object" && !Array.isArray(r) ? r : { ok: false, error: "respuesta vacía en el lote" });
+    if (out && out.ok === false && onSessionInvalid && isSessionError(out.error)) onSessionInvalid(out.error);
+    return out;
+  };
+
+  // Lecturas pendientes de la misma tanda. Una sola se manda como siempre (sin `lote`); dos o más,
+  // juntas. Si el servidor desplegado aún no conoce `lote` —se despliega a mano y puede ir por
+  // detrás del cliente— se apaga el agrupado y se manda cada una por separado, como antes.
+  let cola = [];
+  let temporizador = null;
+  let loteDisponible = true;
+  const sueltas = (tanda) => { for (const t of tanda) call({ action: t.action, session: getSession(), ...t.extra }).then((r) => t.resolver(procesa(t.action, r))); };
+  const volcar = async () => {
+    temporizador = null;
+    const pendientes = cola;
+    cola = [];
+    for (let i = 0; i < pendientes.length; i += LOTE_MAX) {
+      const tanda = pendientes.slice(i, i + LOTE_MAX);
+      if (tanda.length === 1 || !loteDisponible) { sueltas(tanda); continue; }
+      const r = await call({ action: "lote", session: getSession(), llamadas: tanda.map((t) => ({ action: t.action, ...t.extra })) });
+      if (r && r.ok === true && Array.isArray(r.resultados) && r.resultados.length === tanda.length) {
+        tanda.forEach((t, k) => t.resolver(procesa(t.action, r.resultados[k])));
+      } else if (r && r.ok === false && /acción desconocida/.test(String(r.error))) {
+        loteDisponible = false;
+        sueltas(tanda);
+      } else {
+        const fallo = r && r.ok === false ? r : { ok: false, error: "respuesta incompleta del lote" };
+        tanda.forEach((t) => t.resolver(procesa(t.action, fallo)));
+      }
+    }
+  };
+
   const authed = async (action, extra = {}) => {
-    const r = exigirLista(action, await call({ action, session: getSession(), ...extra }));
-    if (r && r.ok === false && onSessionInvalid && isSessionError(r.error)) onSessionInvalid(r.error);
-    return r;
+    if (LOTEABLES.has(action) && loteDisponible) {
+      return new Promise((resolver) => {
+        cola.push({ action, extra, resolver });
+        if (temporizador === null) temporizador = setTimeout(volcar, ventanaLoteMs);
+      });
+    }
+    return procesa(action, await call({ action, session: getSession(), ...extra }));
   };
 
   return {

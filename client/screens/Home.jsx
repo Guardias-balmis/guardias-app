@@ -26,7 +26,7 @@ function nivelDe(residente) {
  * Solicitudes de acceso como invitado (V-53). Solo la ven quienes pueden decidirlas (los
  * administradores durante la ventana de V-52; el permiso del ciclo después) y solo cuando hay
  * alguna pendiente —o cuando no se han podido cargar—. Cada solicitud caduca a los 5 minutos: se
- * consulta cada 20 s mientras Inicio está abierto, y el correo que recibe quien puede aprobarla
+ * consulta cada minuto mientras Inicio está abierto y a la vista, y el correo que recibe quien puede aprobarla
  * (V-57) es solo el aviso para venir aquí.
  *
  * El estado lo decide `client/lib/solicitudes.js` (2026-10-07): antes era `setLista(r.solicitudes)`
@@ -37,15 +37,28 @@ function SolicitudesAcceso({ api, showToast }) {
   const [busy, setBusy] = useState(false);
   const [recargando, setRecargando] = useState(false);
   const montada = React.useRef(true);
+  const enCurso = React.useRef(false);
   const cargar = async () => {
-    const r = await api.listSolicitudesInvitado();
-    if (montada.current) setEstado((previo) => recibirSolicitudes(previo, r));
+    // Una consulta a la vez: con ~3 s por petición y un sondeo corto, las rezagadas se apilaban.
+    if (enCurso.current) return;
+    enCurso.current = true;
+    try {
+      const r = await api.listSolicitudesInvitado();
+      if (montada.current) setEstado((previo) => recibirSolicitudes(previo, r));
+    } finally { enCurso.current = false; }
   };
   useEffect(() => {
     montada.current = true;
     cargar();
-    const t = setInterval(cargar, 20000);
-    return () => { montada.current = false; clearInterval(t); };
+    // Cada ejecución en Apps Script cuesta ~3 s de arranque aunque no haya ninguna solicitud, y
+    // esta tarjeta la ven los administradores con la pestaña abierta todo el día: cada 20 s eran
+    // 3 peticiones por minuto, también con la pestaña en segundo plano, y competían con las que
+    // se hacen a mano (se vieron 21 s). Las solicitudes caducan a los 5 min y llega un correo, así
+    // que basta con 1 minuto y solo con la pestaña a la vista; al volver a ella se consulta ya.
+    const sondeo = setInterval(() => { if (document.visibilityState === "visible") cargar(); }, 60000);
+    const alVolver = () => { if (document.visibilityState === "visible") cargar(); };
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { montada.current = false; clearInterval(sondeo); document.removeEventListener("visibilitychange", alVolver); };
   }, []);
   const reintentar = async () => {
     setRecargando(true);
