@@ -57,6 +57,30 @@
 //     se pide aquí, en la primera línea del arranque, y para cuando la pantalla existe suele
 //     estar ya de vuelta. Solo si no hay sesión guardada: con sesión no hay login que pintar.
 //
+// TRES MÁS DEL 2026-10-07, por otro aviso del autor: «cuando sale de la aplicación una vez entrado,
+// tarda muchísimo en volver a entrar». Volver a la app es arrancarla de nuevo (el móvil descarta la
+// pestaña, o «atrás» desde Inicio la cierra), y medido con la CPU de un móvil se iba en tres cosas:
+//
+//  6. **Sin `preset-env`.** Babel transpilaba además a ES5, sin `targets`: unas cuatro veces más
+//     lento (6,6 s frente a 1,4 s los diez ficheros, con la CPU de un móvil) para nada, porque los
+//     módulos de `client/lib` y `v2/domain` se cargan SIN transpilar y ya usan `?.` y `??`, así
+//     que ningún navegador que no entienda ES2020 llegaba a arrancar la app de todos modos. Solo
+//     queda el JSX. La caché de lo ya transpilado se conserva —el código ES5 sigue siendo válido—
+//     y se renueva sola, fichero a fichero, en el siguiente cambio de cada fuente.
+//
+//  7. **Los módulos se piden todos a la vez, desde `index.html`** (`<link rel="modulepreload">`
+//     y `<link rel="preload" as="fetch">` para los `.jsx`). Cada `.jsx` se importa en orden, y el
+//     navegador solo descubría los imports de uno al importarlo: ocho idas y vueltas encadenadas
+//     (~1 s) antes de pintar nada, en CADA vuelta a la app. `test/precarga.test.js` comprueba que
+//     esas listas son exactamente el grafo de imports de `JSX_FILES`: un módulo nuevo que falte en
+//     ellas solo hace la carga más lenta, pero el test lo dice.
+//
+//  8. **Hay algo en pantalla desde el primer instante.** `index.html` trae dentro de `#root` una
+//     pantalla de arranque (cabecera y anillo de «Cargando…») que `ReactDOM.render` sustituye. Antes
+//     `#root` estaba vacío: tras cada despliegue eran segundos de pantalla en blanco que parecían un
+//     cuelgue. Si hace falta transpilar, la pantalla lo dice (`avisarPreparando`), porque esa espera
+//     solo ocurre la primera vez tras cada versión nueva y quien la sufre no tiene forma de saberlo.
+//
 // Los .jsx siguen sin poder importarse entre sí (ver decisión C-1, plan.md): la composición
 // sigue siendo por namespaces globales (window.UI, window.Screens). Este cargador solo
 // sustituye el mecanismo de CARGA, no la arquitectura de composición.
@@ -204,10 +228,22 @@ function cargarBabel() {
   return babelPendiente;
 }
 
+/**
+ * Punto 8: la espera de transpilar solo ocurre la primera vez tras cada versión nueva, y es la más
+ * larga del arranque —en un móvil, varios segundos—: se dice en la pantalla de arranque para que no
+ * parezca colgada. Si esa pantalla ya no está (React ya pintó), no hay nada que cambiar.
+ */
+function avisarPreparando() {
+  const el = document.getElementById("gapp-arranque-texto");
+  if (el) el.textContent = "Preparando la app… Tarda un poco más solo la primera vez tras cada actualización.";
+}
+
 async function transpilar(path, src) {
+  avisarPreparando();
   await cargarBabel();
+  // Solo JSX (punto 6): sin `preset-env`, que pasaba todo a ES5 y multiplicaba el tiempo por cuatro.
   const { code } = Babel.transform(src, {
-    presets: [["react"], ["env", { modules: false }]],
+    presets: [["react"]],
     sourceType: "module",
     filename: path,
   });

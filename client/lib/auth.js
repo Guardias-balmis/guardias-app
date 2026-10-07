@@ -1,9 +1,13 @@
 // Orquestación de "Sign in with Google" (GIS) y ciclo de vida de la sesión (ADR-002 D-2).
 //
-// La sesión (token HMAC + perfil mínimo) vive en `sessionStorage`, NO `localStorage`: se
-// borra al cerrar la pestaña. No es un secreto de terceros (es un token propio, de TTL
-// corto, que solo autoriza llamadas a este backend) pero persistirlo indefinidamente no
-// aporta nada y sessionStorage es un límite más prudente por defecto.
+// La sesión (token HMAC + perfil mínimo) vive en `localStorage` desde el 2026-10-07 (decisión S-8,
+// de Quique): antes iba en `sessionStorage` y se borraba al cerrar la pestaña, pero en un móvil el
+// botón «atrás» cierra la pestaña que abrió un enlace (WhatsApp, por ejemplo), y cada salida sin
+// querer obligaba a repetir el login entero con Google y con Apps Script en frío. No es un secreto
+// de terceros (es un token propio que solo autoriza llamadas a este backend) y caduca solo a las
+// 12 h (SESSION_TTL de Code.gs): `getSession` tira la sesión caducada en vez de devolverla, para no
+// pintar la app un instante y echar al usuario en la primera petición. Contrapartida asumida: en un
+// móvil compartido, quien lo coja entra con esa cuenta hasta que caduque o alguien cierre sesión.
 //
 // Flujo de login (antirreplay, ADR-002 D-2 punto 5): se pide un nonce AL SERVIDOR antes de
 // inicializar GIS, y se lo pasamos a `initialize({nonce})` — así el ID token que Google
@@ -28,9 +32,33 @@
 
 const SESSION_KEY = "guardias_session";
 
-export function getSession(storage = sessionStorage) {
+// `sessionStorage` solo para recoger la sesión de quien ya estaba dentro antes del cambio a
+// `localStorage` (S-8): sin esto, el despliegue echaba a todos al recargar la pestaña.
+const almacenLegado = () => { try { return sessionStorage; } catch { return null; } };
+
+/** Segundos de caducidad (`exp`) del token propio (`payload.firma`, session.js), o null si no se lee. */
+function caducidadDelToken(token) {
   try {
-    return JSON.parse(storage.getItem(SESSION_KEY) || "null");
+    const b64 = String(token).split(".")[0].replace(/-/g, "+").replace(/_/g, "/");
+    const exp = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "="))).exp;
+    return typeof exp === "number" ? exp : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getSession(storage = localStorage, { legado = almacenLegado(), ahoraMs = Date.now() } = {}) {
+  try {
+    let crudo = storage.getItem(SESSION_KEY);
+    if (!crudo && legado) {
+      crudo = legado.getItem(SESSION_KEY);
+      if (crudo) { storage.setItem(SESSION_KEY, crudo); legado.removeItem(SESSION_KEY); }
+    }
+    const s = JSON.parse(crudo || "null");
+    // La caducidad la impone el servidor; aquí solo se evita arrancar con una sesión que ya no sirve.
+    const exp = s && caducidadDelToken(s.session);
+    if (exp !== null && exp !== undefined && exp * 1000 <= ahoraMs) { storage.removeItem(SESSION_KEY); return null; }
+    return s;
   } catch {
     return null;
   }
@@ -40,12 +68,16 @@ export function getSession(storage = sessionStorage) {
  * devuelven además la lista de residentes para ahorrarle al arranque una ida y vuelta; esa
  * lista es estado de la app, no de la sesión, y no se persiste aquí.
  */
-export function storeSession(data, storage = sessionStorage) {
+export function storeSession(data, storage = localStorage) {
   storage.setItem(SESSION_KEY, JSON.stringify({ session: data.session, residente: data.residente }));
 }
-export function clearSession(storage = sessionStorage) {
+export function clearSession(storage = localStorage, { legado = almacenLegado() } = {}) {
   storage.removeItem(SESSION_KEY);
+  if (legado) legado.removeItem(SESSION_KEY);
 }
+
+/** La clave bajo la que se guarda la sesión, para escuchar el evento `storage` de otras pestañas. */
+export const CLAVE_SESION = SESSION_KEY;
 
 // ── nonce ──────────────────────────────────────────────────────────────────────────────────
 let noncePendiente = null;
@@ -141,7 +173,7 @@ export function perfilDelToken(credential) {
  * @returns {Promise<{refrescar: () => Promise<boolean>}|null>} null si no se pudo ni empezar
  *   (sin nonce); si no, un asa con `refrescar()`, que pide otro nonce y reinicializa GIS.
  */
-export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage = sessionStorage, onSuccess, onNeedsAlta, onError, onStart }) {
+export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage = localStorage, onSuccess, onNeedsAlta, onError, onStart }) {
   let nonce = null;
   const opcionesBoton = { theme: "outline", size: "large", width: 320, text: "continue_with" };
 
@@ -204,7 +236,7 @@ export async function setupGoogleSignIn({ api, clientId, gis, buttonEl, storage 
  * Devuelve el estado final: "APROBADA" | "RECHAZADA" | "CADUCADA" | "CANCELADA" | "ERROR".
  */
 export async function pedirAcceso({
-  api, iniciar, storage = sessionStorage, onSuccess, onError, onEstado = () => {},
+  api, iniciar, storage = localStorage, onSuccess, onError, onEstado = () => {},
   intervaloMs = 4000, esperar = (ms) => new Promise((r) => setTimeout(r, ms)), cancelado = () => false,
 }) {
   const sol = await iniciar();

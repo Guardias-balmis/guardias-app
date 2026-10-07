@@ -346,3 +346,34 @@ test("sin onStart el login funciona igual (pantallas que no lo usan)", async () 
   await gis._fireCredential("dev:ana@gmail.com:server-nonce");
   assert.equal(ok, true);
 });
+
+// ── sesión en localStorage (S-8): caducidad, migración desde sessionStorage ──
+const tokenQueCaduca = (expSeg) => Buffer.from(JSON.stringify({ sub: "r1", rol: "residente", exp: expSeg }), "utf8").toString("base64url") + ".firma";
+
+test("getSession tira una sesión ya caducada en vez de devolverla (y la borra)", () => {
+  const storage = fakeStorage();
+  const ahoraMs = 2_000_000_000_000;
+  storeSession({ session: tokenQueCaduca(ahoraMs / 1000 - 1), residente: { id: "r1" } }, storage);
+  assert.equal(getSession(storage, { legado: null, ahoraMs }), null);
+  assert.equal(storage.getItem("guardias_session"), null, "no se queda guardada");
+  storeSession({ session: tokenQueCaduca(ahoraMs / 1000 + 3600), residente: { id: "r1" } }, storage);
+  assert.equal(getSession(storage, { legado: null, ahoraMs }).residente.id, "r1", "una vigente sí se devuelve");
+});
+
+test("getSession recoge la sesión de sessionStorage de antes del cambio y la pasa a localStorage", () => {
+  const local = fakeStorage();
+  const legado = fakeStorage();
+  storeSession({ session: "tok", residente: { id: "r1" } }, legado);
+  assert.equal(getSession(local, { legado }).session, "tok");
+  assert.equal(legado.getItem("guardias_session"), null, "se mueve, no se copia");
+  assert.equal(getSession(local, { legado }).session, "tok", "y la siguiente lectura ya sale de localStorage");
+});
+
+test("clearSession borra la sesión de los dos sitios", () => {
+  const local = fakeStorage();
+  const legado = fakeStorage();
+  storeSession({ session: "a", residente: {} }, local);
+  storeSession({ session: "b", residente: {} }, legado);
+  clearSession(local, { legado });
+  assert.equal(getSession(local, { legado }), null);
+});

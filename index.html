@@ -16,6 +16,46 @@
      no está en su caché de transpilado (primera visita o despliegue nuevo). Antes era un <script>
      bloqueante de 2,3 MB que había que descargar Y compilar antes de pintar un solo píxel, en
      cada visita. La versión exacta vive en loader.js (BABEL_URL), junto a la clave de la caché. -->
+<!-- Todo lo que la app va a pedir, pedido A LA VEZ y desde el primer byte (2026-10-07, punto 7 de
+     client/loader.js). Sin esto el navegador solo descubría los imports de cada .jsx al importarlo,
+     y los .jsx se importan en orden: ocho idas y vueltas encadenadas antes de pintar Inicio, en cada
+     vuelta a la app. Las dos listas son EXACTAMENTE el grafo de imports de `JSX_FILES` (loader.js);
+     test/precarga.test.js lo comprueba y dice qué añadir o quitar. `crossorigin` en los .jsx hace
+     que la precarga sea la misma petición que el `fetch` del cargador, en vez de bajarlos dos veces. -->
+<link rel="preload" as="fetch" crossorigin href="client/ui/components.jsx">
+<link rel="preload" as="fetch" crossorigin href="client/screens/Login.jsx">
+<link rel="preload" as="fetch" crossorigin href="client/screens/Home.jsx">
+<link rel="preload" as="fetch" crossorigin href="client/screens/Calendar.jsx">
+<link rel="preload" as="fetch" crossorigin href="client/screens/Prefs.jsx">
+<link rel="preload" as="fetch" crossorigin href="client/screens/Settings.jsx">
+<link rel="preload" as="fetch" crossorigin href="client/screens/Responsable.jsx">
+<link rel="preload" as="fetch" crossorigin href="client/screens/DatosServicio.jsx">
+<link rel="preload" as="fetch" crossorigin href="client/screens/Residentes.jsx">
+<link rel="preload" as="fetch" crossorigin href="client/App.jsx">
+<link rel="modulepreload" href="client/config.js">
+<link rel="modulepreload" href="client/lib/api.js">
+<link rel="modulepreload" href="client/lib/auth.js">
+<link rel="modulepreload" href="client/lib/bloqueos.js">
+<link rel="modulepreload" href="client/lib/closes.js">
+<link rel="modulepreload" href="client/lib/dates.js">
+<link rel="modulepreload" href="client/lib/design-tokens.js">
+<link rel="modulepreload" href="client/lib/fechas.js">
+<link rel="modulepreload" href="client/lib/festivos-parse.js">
+<link rel="modulepreload" href="client/lib/navegacion.js">
+<link rel="modulepreload" href="client/lib/permisos.js">
+<link rel="modulepreload" href="client/lib/residentes.js">
+<link rel="modulepreload" href="client/lib/rest.js">
+<link rel="modulepreload" href="client/lib/thirdpost.js">
+<link rel="modulepreload" href="client/lib/violations.js">
+<link rel="modulepreload" href="v2/domain/absences.js">
+<link rel="modulepreload" href="v2/domain/accumulate.js">
+<link rel="modulepreload" href="v2/domain/calendar.js">
+<link rel="modulepreload" href="v2/domain/cuadrante.js">
+<link rel="modulepreload" href="v2/domain/equity.js">
+<link rel="modulepreload" href="v2/domain/residents.js">
+<link rel="modulepreload" href="v2/domain/tally.js">
+<link rel="modulepreload" href="v2/domain/thirdpost.js">
+<link rel="modulepreload" href="v2/domain/validate.js">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -76,6 +116,12 @@
   .gapp-anillo{animation:gapp-girar 1.1s linear infinite;transform-origin:50% 50%}
   .gapp-barra{position:absolute;top:0;bottom:0;width:40%;animation:gapp-barra 1.4s cubic-bezier(.4,0,.2,1) infinite}
 
+  /* Pantalla de arranque (2026-10-07, punto 8 de client/loader.js): HTML estático dentro de #root,
+     visible desde el primer pintado y sustituido por ReactDOM.render. La cabecera copia la de
+     App.jsx para que el paso a la app no salte. No puede usar design-tokens.js (aún no hay JS):
+     los colores son los mismos, escritos a mano. */
+  .gapp-arranque-cab{background:#1F4E79;color:#fff;padding:14px 16px 10px;font-size:17px;font-weight:700;letter-spacing:.3px;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+  .gapp-arranque-cuerpo{display:flex;flex-direction:column;align-items:center;gap:14px;padding:72px 24px 0;text-align:center;color:#1F4E79;font-size:15px;font-weight:700;line-height:1.5}
   @media (prefers-reduced-motion:reduce){
     .gapp-rise,.gapp-pop{animation:none}
     .gapp-tap,.gapp-card,.gapp-navind{transition:none}
@@ -84,7 +130,20 @@
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <!-- Pantalla de arranque: ver .gapp-arranque-* arriba. loader.js cambia el texto si tiene que
+       transpilar (primera vez tras una versión nueva) y `fallo()` la sustituye por el error. -->
+  <div role="status" aria-live="polite">
+    <div class="gapp-arranque-cab">🏥 Guardias · Dr. Balmis</div>
+    <div class="gapp-arranque-cuerpo">
+      <svg class="gapp-anillo" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true">
+        <circle cx="28" cy="28" r="24" fill="none" stroke="#E0E7EF" stroke-width="4"/>
+        <circle cx="28" cy="28" r="24" fill="none" stroke="#2E75B6" stroke-width="4" stroke-linecap="round" stroke-dasharray="44 107"/>
+      </svg>
+      <div id="gapp-arranque-texto">Cargando…</div>
+    </div>
+  </div>
+</div>
 
 <!--
   Sin build (ADR-001 R11 / plan.md decisión C-1). Los .jsx se transpilan EN EL NAVEGADOR
@@ -100,6 +159,6 @@
      normal solo revalida el documento, así que un index.html nuevo podía ejecutar el loader.js
      VIEJO de la caché del navegador («No se pudo cargar el compilador (Babel)» hasta que caducara).
      Súbela en cada cambio del loader. -->
-<script type="module" src="client/loader.js?v=20260905"></script>
+<script type="module" src="client/loader.js?v=20261007"></script>
 </body>
 </html>
