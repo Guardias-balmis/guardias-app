@@ -22,6 +22,8 @@ mano, cada vez que algo llega de verdad a producción.
 
 **Pendiente de desplegar (PR #64, arreglo de «Solicitudes de acceso», 2026-10-07):** `server-lib.gs` **y `Code.gs`** (`domain.gs` no cambia; sin permisos nuevos). `doGet` deja de responder `{ok:true, nonce}` (`router.js:handleGet`, que solo existe en el `server-lib.gs` nuevo: por eso van juntos). Un POST que Google convertía en GET por el camino pasaba por respuesta buena sin haberse ejecutado: una lectura llegaba sin su lista —el `TypeError` que tumbaba la tarjeta de Inicio— y una escritura se daba por guardada. El orden da igual: el cliente nuevo ya trata ese `ok:true` sin lista como error. Para comprobarlo: abrir la URL `/exec` en el navegador y ver `{"ok":false,"error":"la petición llegó sin datos (GET)…"}` (ver la verificación E2E).
 
+**Pendiente de desplegar (S-9, lecturas en lote):** `server-lib.gs` (`domain.gs` y `Code.gs` no cambian). Hasta que se despliegue el cliente sigue funcionando: si el servidor no conoce `lote`, manda las lecturas por separado. Para comprobarlo: en DevTools → Network, Inicio debe hacer una petición `exec` para las lecturas en vez de 3 o 4, y el cuadrante una en vez de 3.
+
 Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
 `/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el
 cliente está hablando con un backend que ya no es este (DR-4).
