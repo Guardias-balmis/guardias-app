@@ -52,9 +52,28 @@ test("sin festivos cargados el prompt lo DICE en vez de callar (S-4: no se aluci
   assert.match(p, /NO inventes festivos/);
 });
 
-test("sin voluntarios de 3P el prompt prohíbe explícitamente el código 3P", () => {
+test("la fase de obligatorias prohíbe el 3P y fija las 4 guardias por cabeza (P-17)", () => {
   const p = buildGenerationPrompt(DATOS);
-  assert.match(p, /NO asignes ningún código 3P/);
+  assert.match(p, /NO asignes ningún 3P/);
+  assert.match(p, /hace 4 guardias computables/);
+  assert.doesNotMatch(p, /VOLUNTARIOS DEL 3\.º PUESTO/);
+});
+
+test("la fase de extras sin voluntarios ni peticiones prohíbe añadir nada, y con ellos los lista", () => {
+  const vacio = buildGenerationPrompt({ ...DATOS, fase: "extras" });
+  assert.match(vacio, /FASE 2/);
+  assert.match(vacio, /NO asignes ningún código 3P/);
+  assert.match(vacio, /nadie ha pedido más de 4/);
+  const p = buildGenerationPrompt({
+    ...DATOS, fase: "extras",
+    voluntarios3P: [{ residenteId: "r2a" }],
+    preferencias: [{ residenteId: "r3a", maxGuardias: 6 }, { residenteId: "r4a", maxGuardias: 4 }],
+    fijadas: [{ fecha: "2026-08-01", residenteId: "r3a", codigo: "G" }],
+  });
+  assert.match(p, /id="r3a" — quiere hacer hasta 6 guardias; ya tiene 1/);
+  assert.doesNotMatch(p, /id="r4a" — quiere hacer/);
+  assert.match(p, /VOLUNTARIOS DEL 3\.º PUESTO/);
+  assert.match(p, /UNA sola persona/);
 });
 
 test("las secciones de datos reales aparecen cuando hay datos", () => {
@@ -66,7 +85,6 @@ test("las secciones de datos reales aparecen cuando hay datos", () => {
     ],
     festivos: [{ fecha: "2026-08-15", nombre: "Asunción", ambito: "NACIONAL" }],
     puentes: ["2026-08-14"],
-    voluntarios3P: [{ residenteId: "r4a", desde: "2026-05-01" }],
     eventos: [{ tipo: "NAVIDAD", fecha: "2026-12-19", voluntarios: ["r2a"] }],
     preferencias: [{ residenteId: "r3a", fechasEvitar: ["2026-08-20"], maxGuardias: 5, notas: "boda" }],
   });
@@ -76,7 +94,6 @@ test("las secciones de datos reales aparecen cuando hay datos", () => {
   assert.match(p, /2026-08-15 — Asunción/);
   assert.match(p, /PUENTES/);
   assert.match(p, /2026-08-14/);
-  assert.match(p, /VOLUNTARIOS DEL 3\.º PUESTO/);
   assert.match(p, /NAVIDAD el 2026-12-19/);
   assert.match(p, /preferiría evitar 2026-08-20/);
   assert.match(p, /BLANDAS/); // el modelo no puede tratarlas como bloqueos

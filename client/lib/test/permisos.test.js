@@ -124,3 +124,11 @@ test("esAccesoDesarrollador compara el email normalizado, como el servidor y el 
   assert.equal(esAccesoDesarrollador("  Quiquemm14@gmail.com ", "2026-10-07"), true);
   assert.equal(esAccesoDesarrollador(undefined, "2026-10-07"), false);
 });
+
+test("P-17: la fase de quintas y 3P se ofrece en Borrador y en Validado, nunca en Publicado", async () => {
+  const { puedeAnadirExtras } = await import("../permisos.js");
+  assert.equal(puedeAnadirExtras({ ...RESPONSABLE, estado: "BORRADOR" }), true);
+  assert.equal(puedeAnadirExtras({ ...RESPONSABLE, estado: "VALIDADO" }), true);
+  assert.equal(puedeAnadirExtras({ ...RESPONSABLE, estado: "PUBLICADO" }), false);
+  assert.equal(puedeAnadirExtras({ ...PEQUENO, estado: "VALIDADO" }), false);
+});
