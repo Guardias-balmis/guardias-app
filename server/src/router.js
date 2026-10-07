@@ -210,11 +210,11 @@ export function handleRequest(rawBody, deps) {
         });
 
       case "listAsignaciones":
-        return authed(req, deps, () => {
+        return authed(req, deps, (session) => {
           if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
           const prefix = monthPrefix(req.anio, req.mes);
           const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
-          return { ok: true, asignaciones: all.filter((a) => a.fecha.startsWith(prefix)) };
+          return { ok: true, asignaciones: asignacionesParaSesion(all.filter((a) => a.fecha.startsWith(prefix)), session) };
         });
 
       // A diferencia de listAsignaciones (filtra por mes/año), esta filtra por rango de
@@ -222,11 +222,11 @@ export function handleRequest(rawBody, deps) {
       // contrato C-2 (INV-7 necesita las asignaciones de TODO el periodo de rotación,
       // aunque empiece en un mes anterior) y para el contaje acumulado del generador (§4).
       case "listAsignacionesRango":
-        return authed(req, deps, () => {
+        return authed(req, deps, (session) => {
           const rango = validRango(req, deps);
           if (rango.ok === false) return rango;
           const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
-          return { ok: true, asignaciones: all.filter((a) => a.fecha >= req.desde && a.fecha <= req.hasta) };
+          return { ok: true, asignaciones: asignacionesParaSesion(all.filter((a) => a.fecha >= req.desde && a.fecha <= req.hasta), session) };
         });
 
       // Consciente del ciclo de estados (Fase 6.2): PUBLICADO bloquea cualquier edición del mes
@@ -2021,6 +2021,18 @@ const INVITADO_ACCIONES = new Set([
 function paraSesion(residentes, session) {
   if (!session || session.rol !== ROL_INVITADO) return residentes;
   return residentes.map(({ email, ...resto }) => resto);
+}
+
+/**
+ * A un invitado no le llegan las marcas de ausencia de la rejilla (V/R/B, `MARCADORES_REJILLA`). Desde
+ * V-50, registrar una ausencia escribe su marca en `asignaciones`, así que con solo la lista blanca
+ * de V-53 el invitado veía en el cuadrante quién está de baja médica, de vacaciones o rotando —
+ * justo lo que V-53 promete que no ve—. Basta con quitarlas: `readLatest` ya devuelve solo la última
+ * fila de cada celda, así que ninguna guardia anterior vuelve a asomar en su lugar.
+ */
+function asignacionesParaSesion(asignaciones, session) {
+  if (!session || session.rol !== ROL_INVITADO) return asignaciones;
+  return asignaciones.filter((a) => !MARCADORES_REJILLA.has(a.codigo));
 }
 
 const SOLICITUD_TTL = 300; // 5 min: lo que dura la solicitud para ser aprobada y canjeada

@@ -211,6 +211,23 @@ var SheetsStore = (function () {
 const TMP_PREFIX = "_tmp_";
 
 function makeStore({ ss, withLock: withLockCrudo, newId }) {
+  // Memoización de `ss.read` por hoja, válida mientras viva ESTE store (2026-10-06). En Apps Script
+  // el store se construye por petición (`sheetsStore_()` desde `deps_()`), así que la memoria no se
+  // comparte entre ejecuciones; evita que una misma petición relea la hoja entera varias veces
+  // (`marcarValidado` leía `periodos`, `residentes` y `voluntarios3P` dos veces cada una — 12
+  // lecturas de hoja completa por validar, y cada `getValues` es un viaje a Sheets). Cada escritura
+  // de este store invalida la hoja que toca; se cachean las FILAS crudas, no los registros, porque
+  // los llamadores ordenan y mutan los registros que reciben.
+  //
+  // Y se VACÍA entera al coger el lock real (2026-10-07). Lo leído antes del lock puede ser de antes
+  // de que OTRA ejecución escribiera —la que tenía el lock mientras esta esperaba, o la que escribió
+  // mientras el generador esperaba al modelo—, y todo comprobar-y-escribir (`transaction`) existe
+  // precisamente para decidir con lo que hay AHORA. Sin esto, `generarCuadranteIA` releía bajo el
+  // lock su propia copia de antes, la huella siempre coincidía y escribía encima de una edición ajena
+  // (o en un mes que otro acababa de publicar), y dos sorteos del Responsable volvían a poder dejar
+  // dos mandatos. Dentro del lock la memoria sigue valiendo: nadie más escribe hasta soltarlo.
+  const lecturas = new Map();
+
   // El lock, REENTRANTE por ejecución (2026-09-04): `transaction(fn)` lo coge para que una
   // comprobación y su escritura sean atómicas, y las escrituras de dentro de `fn` vuelven a pedirlo.
   // Con el `LockService` de Apps Script un `waitLock` anidado sobre el mismo lock esperaría a sí
@@ -224,18 +241,11 @@ function makeStore({ ss, withLock: withLockCrudo, newId }) {
     if (dentro) return fn();
     return withLockCrudo(() => {
       dentro = true;
+      lecturas.clear();
       try { return fn(); } finally { dentro = false; }
     });
   };
 
-  // Memoización de `ss.read` por hoja, válida mientras viva ESTE store (2026-10-06). En Apps Script
-  // el store se construye por petición (`sheetsStore_()` desde `deps_()`), así que nunca sirve un
-  // dato de otra ejecución: solo evita que una misma petición relea la hoja entera varias veces
-  // (`marcarValidado` leía `periodos`, `residentes` y `voluntarios3P` dos veces cada una — 12
-  // lecturas de hoja completa por validar, y cada `getValues` es un viaje a Sheets). Cada escritura
-  // de este store invalida la hoja que toca; se cachean las FILAS crudas, no los registros, porque
-  // los llamadores ordenan y mutan los registros que reciben.
-  const lecturas = new Map();
   function leer(nombre) {
     if (!lecturas.has(nombre)) lecturas.set(nombre, ss.read(nombre));
     return lecturas.get(nombre);
@@ -1214,11 +1224,11 @@ function handleRequest(rawBody, deps) {
         });
 
       case "listAsignaciones":
-        return authed(req, deps, () => {
+        return authed(req, deps, (session) => {
           if (!isYear(req.anio) || !isMonth(req.mes)) return { ok: false, error: "mes/anio inválido" };
           const prefix = monthPrefix(req.anio, req.mes);
           const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
-          return { ok: true, asignaciones: all.filter((a) => a.fecha.startsWith(prefix)) };
+          return { ok: true, asignaciones: asignacionesParaSesion(all.filter((a) => a.fecha.startsWith(prefix)), session) };
         });
 
       // A diferencia de listAsignaciones (filtra por mes/año), esta filtra por rango de
@@ -1226,11 +1236,11 @@ function handleRequest(rawBody, deps) {
       // contrato C-2 (INV-7 necesita las asignaciones de TODO el periodo de rotación,
       // aunque empiece en un mes anterior) y para el contaje acumulado del generador (§4).
       case "listAsignacionesRango":
-        return authed(req, deps, () => {
+        return authed(req, deps, (session) => {
           const rango = validRango(req, deps);
           if (rango.ok === false) return rango;
           const all = deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" });
-          return { ok: true, asignaciones: all.filter((a) => a.fecha >= req.desde && a.fecha <= req.hasta) };
+          return { ok: true, asignaciones: asignacionesParaSesion(all.filter((a) => a.fecha >= req.desde && a.fecha <= req.hasta), session) };
         });
 
       // Consciente del ciclo de estados (Fase 6.2): PUBLICADO bloquea cualquier edición del mes
@@ -3025,6 +3035,18 @@ const INVITADO_ACCIONES = new Set([
 function paraSesion(residentes, session) {
   if (!session || session.rol !== ROL_INVITADO) return residentes;
   return residentes.map(({ email, ...resto }) => resto);
+}
+
+/**
+ * A un invitado no le llegan las marcas de ausencia de la rejilla (V/R/B, `MARCADORES_REJILLA`). Desde
+ * V-50, registrar una ausencia escribe su marca en `asignaciones`, así que con solo la lista blanca
+ * de V-53 el invitado veía en el cuadrante quién está de baja médica, de vacaciones o rotando —
+ * justo lo que V-53 promete que no ve—. Basta con quitarlas: `readLatest` ya devuelve solo la última
+ * fila de cada celda, así que ninguna guardia anterior vuelve a asomar en su lugar.
+ */
+function asignacionesParaSesion(asignaciones, session) {
+  if (!session || session.rol !== ROL_INVITADO) return asignaciones;
+  return asignaciones.filter((a) => !MARCADORES_REJILLA.has(a.codigo));
 }
 
 const SOLICITUD_TTL = 300; // 5 min: lo que dura la solicitud para ser aprobada y canjeada

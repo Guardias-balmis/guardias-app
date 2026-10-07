@@ -367,3 +367,25 @@ test("V-55: una solicitud reutilizada no afirma nada del correo (se mandó, o no
   assert.equal("avisados" in solicita(deps), false);
   assert.equal(deps.correos.length, 1);
 });
+
+// ── El invitado no ve las ausencias de la rejilla (V-53 d, roto por las marcas de V-50) ──
+test("el invitado no recibe las marcas V/R/B de la rejilla (bajas médicas incluidas); un residente sí", () => {
+  const deps = makeDeps();
+  deps.store.appendRecords("asignaciones", [
+    { fecha: "2026-10-05", residenteId: "ana", codigo: "G" },
+    { fecha: "2026-10-06", residenteId: "ana", codigo: "B" }, // marca de una BAJA (V-50)
+    { fecha: "2026-10-07", residenteId: "adm", codigo: "V" },
+    { fecha: "2026-10-08", residenteId: "adm", codigo: "R" },
+    { fecha: "2026-10-09", residenteId: "ana", codigo: "G" }, // guardia que luego tapó una baja:
+    { fecha: "2026-10-09", residenteId: "ana", codigo: "B" }, // al quitar la B no debe reaparecer la G
+  ]);
+  const inv = sesionInvitado(deps);
+  const mes = call({ action: "listAsignaciones", session: inv, mes: 10, anio: 2026 }, deps);
+  assert.equal(mes.ok, true);
+  assert.deepEqual(mes.asignaciones.map((a) => `${a.fecha}:${a.codigo}`), ["2026-10-05:G"]);
+  const rango = call({ action: "listAsignacionesRango", session: inv, desde: "2026-10-01", hasta: "2026-10-31" }, deps);
+  assert.deepEqual(rango.asignaciones.map((a) => `${a.fecha}:${a.codigo}`), ["2026-10-05:G"]);
+  const adm = loggedInAs(deps, "quiquemm14@gmail.com");
+  const todas = call({ action: "listAsignaciones", session: adm, mes: 10, anio: 2026 }, deps).asignaciones;
+  assert.equal(todas.length, 5, "a un residente no se le quita nada");
+});
