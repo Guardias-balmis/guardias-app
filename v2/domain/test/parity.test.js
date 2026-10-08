@@ -200,7 +200,7 @@ function loadBundle(code) {
 
 test("el bundle expone la API pública esperada", () => {
   const Domain = loadBundle(buildBundle());
-  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "buildYearCloseContext", "yearCloseHistoryStart", "validateQuarterClose", "quarterCloseWindow", "trimesterWindow", "validateThirdPost", "thirdPostHistoryStart", "levelOn", "groupOf", "groupOnDate", "periodsOfResident", "weekday", "bridgesBetween", "absences", "isNearbyRotation", "imaginariaQueue", "nextForImaginaria", "eligibleCandidates", "resolveMethod", "drawResponsible", "validateResponsible", "canValidate", "equityWarnings", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows", "buildContajeTrimestralRows", "cursoLabel"]) {
+  for (const fn of ["validateMonth", "buildMonthContext", "tally", "validateResidencyYearClose", "buildYearCloseContext", "yearCloseHistoryStart", "validateQuarterClose", "quarterCloseWindow", "trimesterWindow", "validateThirdPost", "thirdPostHistoryStart", "levelOn", "groupOf", "groupOnDate", "periodsOfResident", "weekday", "bridgesBetween", "absences", "isNearbyRotation", "imaginariaQueue", "nextForImaginaria", "eligibleCandidates", "resolveMethod", "drawResponsible", "validateResponsible", "canValidate", "equityWarnings", "canPublish", "canUnpublish", "canEdit", "stateAfterEdit", "buildMonthSheetRows", "buildResumenRows", "buildContajeTrimestralRows", "cursoLabel", "buildContajePlan", "contajeCourses", "contajeSheets", "contajePreparation", "contajeFingerprintMismatch", "thirdPostVolunteersInCourse"]) {
     assert.equal(typeof Domain[fn], "function", `Domain.${fn} debe ser función`);
   }
 });

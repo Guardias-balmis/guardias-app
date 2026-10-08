@@ -19,6 +19,7 @@ import { execFileSync } from "node:child_process";
 import { handleRequest } from "./src/router.js";
 import { makeStore } from "./src/sheets-store.js";
 import { headerOf, TABLES, recordToRow } from "./src/sheets-schema.js";
+import { makeContajeMemoria, excelOriginalDePrueba } from "./contaje-memoria.mjs";
 // El dominio ENTERO, igual que `deps.domain = Domain` en Code.gs: con listas de funciones a
 // mano, el dev-server se quedaba corto respecto a producción y fallaba solo en local (le
 // faltaban buildMonthSheetRows/buildResumenRows desde la Fase 7.1 y nadie lo notó).
@@ -36,13 +37,14 @@ import * as Validate from "../v2/domain/validate.js";
 import * as Responsible from "../v2/domain/responsible.js";
 import * as CuadranteEstados from "../v2/domain/cuadrante.js";
 import * as Projection from "../v2/domain/projection.js";
+import * as ContajeExcel from "../v2/domain/contajeExcel.js";
 import * as Schedule from "../v2/domain/schedule.js";
 import * as Holidays from "../v2/domain/holidays.js";
 // OJO: esta lista se mantiene A MANO y `Code.gs` no —allí `deps.domain` es el `Domain` entero
 // del bundle—, así que un módulo nuevo del dominio funciona en producción y revienta AQUÍ. Ya
 // pasó con buildMonthSheetRows/buildResumenRows (Fase 7.2) y con `absences`. Si añades un
 // módulo a build/build-gas.mjs:DOMAIN_MODULES, añádelo también aquí.
-const DOMAIN = Object.assign({}, Calendar, Apply, Residents, Tally, Absences, BlockPreview, Imaginaria, Accumulate, Thirdpost, Equity, Validate, Responsible, CuadranteEstados, Projection, Schedule, Holidays);
+const DOMAIN = Object.assign({}, Calendar, Apply, Residents, Tally, Absences, BlockPreview, Imaginaria, Accumulate, Thirdpost, Equity, Validate, Responsible, CuadranteEstados, Projection, ContajeExcel, Schedule, Holidays);
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = Number(process.argv[2] || 8787);
@@ -72,7 +74,7 @@ const SEED_RESIDENTES = [
   // con un residente por año (como estaba la semilla) ningún cierre era observable en local.
   { id: "res-bea", nombre: "Bea Server", email: "bea@gmail.com", fechaInicio: "2023-05-22", fechaFin: "2027-05-21" },
   { id: "res-carlos", nombre: "Carlos Ruiz", email: "carlos@gmail.com", fechaInicio: "2024-05-27", fechaFin: "2028-05-26" },
-  { id: "res-elena", nombre: "Elena Sansano", email: "elena@gmail.com", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" },
+  { id: "res-elena", nombre: "Elena Quintanilla", email: "elena@gmail.com", fechaInicio: "2025-05-26", fechaFin: "2029-05-25" },
   { id: "res-ivan", nombre: "Iván Cortés", email: "ivan@gmail.com", fechaInicio: "2026-05-25", fechaFin: "2030-05-24" },
   // Administrador (V-52/V-53/V-54): su email está en la lista de acceso de desarrollador, así que es
   // quien valida el cuadrante y aprueba las solicitudes de invitado y de alta.
@@ -92,6 +94,12 @@ const ss = memorySS({
   preferencias: [headerOf(TABLES.preferencias)],
   cuadrantes: [headerOf(TABLES.cuadrantes)],
 });
+// El Excel del contaje del servicio (V-65), en memoria y con nombres inventados: el mismo puerto
+// que `contaje_()` de Code.gs. Con `CONTAJE=off` se arranca sin él, que es como se comporta
+// producción sin la propiedad CONTAJE_SPREADSHEET_ID. Lo escrito se puede ver en GET /__contaje.
+// `CONTAJE=sinpermiso` simula un fichero configurado que la cuenta del script no puede editar.
+const CONTAJE = process.env.CONTAJE === "off" ? null
+  : makeContajeMemoria(excelOriginalDePrueba(), { motivoAbrir: process.env.CONTAJE === "sinpermiso" ? "la cuenta que ejecuta la app no puede editar la hoja de contaje (simulado en el dev-server)" : null });
 const nonces = new Set();
 const crypto = {
   hmac: (m, s) => nodeCrypto.createHmac("sha256", s).update(m, "utf8").digest("base64url"),
@@ -122,6 +130,7 @@ function deps() {
     llm: process.env.GEMINI_API_KEY ? llmDev() : undefined,
     // Los avisos por correo a los administradores (V-53) se imprimen aquí en vez de enviarse.
     sendMail: (para, asunto, cuerpo) => console.log(`[dev-server] correo a ${para.join(", ")} — ${asunto}\n${cuerpo}`),
+    contaje: CONTAJE,
   };
 }
 
@@ -210,6 +219,13 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
       res.end(JSON.stringify(result));
     });
+    return;
+  }
+
+  // Solo desarrollo: lo que la app ha escrito en el Excel del contaje en memoria (V-65).
+  if (req.method === "GET" && req.url === "/__contaje") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify(CONTAJE ? CONTAJE.instantanea() : null));
     return;
   }
 

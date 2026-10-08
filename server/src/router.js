@@ -867,6 +867,9 @@ export function handleRequest(rawBody, deps) {
             responsableId: mandato ? mandato.residenteId : null, modosGeneracion: [...MODOS_GENERACION],
             // Como `modosGeneracion`: un servidor sin esto ignoraría `fase: "extras"` y generaría de otra forma.
             fasesGeneracion: [...FASES_GENERACION],
+            // Si hay Excel del contaje (V-65), para enseñar «Volcar al contaje» solo cuando sirve.
+            // No abre el fichero: es solo si la propiedad existe.
+            contajeConfigurado: Boolean(deps.contaje),
           };
         });
 
@@ -920,7 +923,7 @@ export function handleRequest(rawBody, deps) {
         return authed(req, deps, (session) => {
           const denegado = requireCicloPermiso(deps, session, "publicar el cuadrante");
           if (denegado) return denegado;
-          return atomico(deps, () => {
+          const publicado = atomico(deps, () => {
           const estadoActual = validCuadranteMesAnio(req, deps);
           if (estadoActual === null) return { ok: false, error: "mes/anio inválido" };
           if (!deps.domain.canPublish(estadoActual)) return { ok: false, error: "el cuadrante debe estar VALIDADO antes de publicarse" };
@@ -928,6 +931,26 @@ export function handleRequest(rawBody, deps) {
           writeCuadranteEstado(deps, session, req.mes, req.anio, "PUBLICADO");
           return { ok: true, estado: "PUBLICADO", proyeccion };
           });
+          if (!publicado.ok) return publicado;
+          // El contaje oficial en el Excel del servicio (decisión V-65), en un SEGUNDO atómico que
+          // empieza cuando el de arriba ya ha soltado el lock: anidado, el volcado alargaría el lock
+          // de la publicación con las llamadas a otro fichero. Y nunca la bloquea ni la revierte:
+          // `volcarContajeExcel` no lanza, y un fallo viaja en `contajeExcel` para que la pantalla
+          // lo diga y se pueda reintentar con «Volcar al contaje».
+          return { ...publicado, contajeExcel: volcarContajeExcel(deps, req.mes, req.anio) };
+        });
+
+      // Volcar el contaje al Excel del servicio sin publicar (V-65): repara un volcado que falló y
+      // recoge lo que cambia sin pasar por publicar (fechas o periodos de un residente, respuestas
+      // de tercer puesto). Mismo permiso que publicar (V-16). Escritura: no va en ningún lote.
+      case "volcarContaje":
+        return authed(req, deps, (session) => {
+          const denegado = requireCicloPermiso(deps, session, "volcar el contaje al Excel del servicio");
+          if (denegado) return denegado;
+          if (validCuadranteMesAnio(req, deps) === null) return { ok: false, error: "mes/anio inválido" };
+          const r = volcarContajeExcel(deps, req.mes, req.anio);
+          if (r.omitido) return { ok: false, omitido: true, error: r.omitido, ...(r.configurado === false ? { configurado: false } : {}) };
+          return r;
         });
 
       case "despublicarCuadrante":
@@ -2080,6 +2103,124 @@ function projectCuadranteToSheets(deps, mes, anio) {
   deps.store.rebuildSheet(contaje.sheetName, contaje.rows);
 
   return { mensual: mensual.sheetName, resumen: resumen.sheetName, contaje: contaje.sheetName };
+}
+
+/**
+ * Vuelca el contaje oficial al Excel del servicio (decisión V-65) para los cursos que toca el mes
+ * `mes/anio` (`contajeCourses`: el suyo y el del mes anterior). NUNCA lanza: devuelve
+ * `{ok:true, cursos}`, `{ok:false, error}` o `{omitido: motivo}`, porque lo llama
+ * `publicarCuadrante` después de publicar y un fallo aquí no puede deshacer ni tapar la
+ * publicación.
+ *
+ * El Excel es el puerto `deps.contaje` (Code.gs: `contaje_()`; dev-server y tests: el doble de
+ * `server/contaje-memoria.mjs`), y es `null` cuando no hay propiedad CONTAJE_SPREADSHEET_ID: la
+ * app funciona entonces exactamente como antes. QUÉ se escribe lo decide el dominio
+ * (`contajeExcel.js`); aquí solo se lee el store, se comprueba y se manda aplicar.
+ *
+ * Va bajo el lock aunque no escriba en el store: dos publicaciones casi a la vez escribirían el
+ * mismo fichero intercaladas, y con el lock la segunda espera y vuelca con lo que dejó la primera.
+ * Las lecturas del store, además, son las de DENTRO del lock (el store vacía su memoria al cogerlo).
+ */
+function volcarContajeExcel(deps, mes, anio) {
+  // `configurado: false` distingue «no hay fichero» —lo normal hasta que alguien ponga la propiedad,
+  // y la pantalla no tiene nada que avisar— de «hay fichero y no se ha podido abrir», que sí avisa.
+  if (!deps.contaje) return { omitido: "no está configurada la propiedad CONTAJE_SPREADSHEET_ID", configurado: false };
+  // `ms`: cuánto ha durado (la mayor parte, con el script lock cogido, que las demás escrituras
+  // esperan 30 s). Viaja en la respuesta para que el paso de comprobación del README tenga un
+  // número y no una impresión. Sin `relojMs` (un Code.gs anterior) no se mide.
+  const reloj = typeof deps.relojMs === "function" ? deps.relojMs : null;
+  const inicio = reloj ? reloj() : 0;
+  const conTiempo = (r) => (reloj ? { ...r, ms: reloj() - inicio } : r);
+  try {
+    const motivo = deps.contaje.abrir();
+    if (motivo) return { omitido: motivo };
+    return conTiempo(atomico(deps, () => escribirContaje(deps, mes, anio)));
+  } catch (e) {
+    // Solo la causa: la pantalla ya dice «no se pudo escribir el contaje en el Excel del servicio».
+    return conTiempo({ ok: false, error: String(e && e.message ? e.message : e) });
+  }
+}
+
+function escribirContaje(deps, mes, anio) {
+  const D = deps.domain;
+  const c = deps.contaje;
+  const leerHuella = (hoja, huella) => huella.map((l) => c.leer(hoja, l));
+
+  const fallo = prepararContaje(deps);
+  if (fallo) return { ok: false, error: fallo };
+
+  const base = {
+    residentes: allResidentes(deps),
+    asignaciones: deps.store.readLatest("asignaciones", ASIG_KEY, { emptyField: "codigo" }),
+    publicados: deps.store.readLatest("cuadrantes", CUAD_KEY).filter((r) => r.estado === "PUBLICADO").map((r) => ({ mes: r.mes, anio: r.anio })),
+    preferencias: deps.store.readLatest("preferencias", PREF_KEY),
+    actualizado: deps.today,
+  };
+
+  // Primero se comprueba TODO (que existan las pestañas y que sus cabeceras sean las esperadas, en
+  // todos los cursos) y solo después se escribe: una huella que no cuadra es una hoja que alguien
+  // ha reorganizado a mano, y escribir por posición encima la estropearía en silencio.
+  const planes = [];
+  for (const curso of D.contajeCourses(mes, anio)) {
+    if (D.buildContajePlan({ ...base, curso }) === null) continue; // ningún mes publicado en ese curso
+    const hojas = D.contajeSheets(curso);
+    const existentes = new Set(c.hojas());
+    for (const h of hojas) if (!existentes.has(h.nombre)) c.duplicar(h.plantilla, h.nombre);
+    for (const h of hojas) {
+      const mal = D.contajeFingerprintMismatch(h.huella, leerHuella(h.nombre, h.huella));
+      if (mal) return { ok: false, error: `la hoja «${h.nombre}» no tiene la forma esperada (${mal}): no se ha escrito nada en el contaje` };
+    }
+    const tercer = hojas.find((h) => h.clave === "tercerPuesto");
+    planes.push(D.buildContajePlan({ ...base, curso, observaciones: c.leer(tercer.nombre, D.CONTAJE_LECTURA_OBS) }));
+  }
+  for (const plan of planes) for (const h of plan.hojas) c.aplicar(h.nombre, h.ops);
+  return { ok: true, cursos: planes.map((p) => ({ curso: p.etiqueta, mesMostrado: p.mesMostrado, mesesPublicados: p.mesesPublicados.length })) };
+}
+
+/**
+ * Preparación ÚNICA del fichero convertido (V-65), para que el autor no tenga que hacer nada a mano
+ * salvo convertirlo y poner la propiedad: las hojas originales pasan a «Plantilla · …» (con GP y
+ * sin los botones de una macro que nunca existió) y se ocultan, se borra `__DATA__` y se reescriben
+ * Instrucciones e Imaginaria. Idempotente y reanudable: si una ejecución muere a medias, la
+ * siguiente reconoce por su huella una hoja ya reconvertida y le vuelve a aplicar TODAS sus
+ * operaciones antes de renombrarla. Solo renombrarla dejaría para siempre lo que no llegó a
+ * aplicarse (las filas de ejemplo con nombres reales, las combinadas, la fijación) en una plantilla
+ * de la que se copia cada curso. Repetirlas no cuesta nada: escribir, limpiar, desunir y unir el
+ * mismo rango, anchos y fijación dan lo mismo dos veces.
+ *
+ * Devuelve null si el fichero queda listo, o el motivo por el que no se ha tocado. Se comprueba
+ * TODO antes de cambiar nada: un fichero que no es el que conocemos no se modifica.
+ */
+function prepararContaje(deps) {
+  const D = deps.domain;
+  const c = deps.contaje;
+  const prep = D.contajePreparation();
+  const hojas = new Set(c.hojas());
+  if (prep.originales.every((o) => hojas.has(o.plantilla)) && prep.borrar.every((n) => !hojas.has(n))) return null;
+
+  const leer = (hoja, huella) => huella.map((l) => c.leer(hoja, l));
+  const pendientes = [];
+  for (const o of prep.originales) {
+    if (hojas.has(o.plantilla)) continue;
+    if (!hojas.has(o.original)) return `el fichero de contaje no tiene ni «${o.plantilla}» ni «${o.original}»: ¿es el Excel del servicio?`;
+    if (D.contajeFingerprintMismatch(o.huellaOriginal, leer(o.original, o.huellaOriginal)) !== null) {
+      const mal = D.contajeFingerprintMismatch(o.huellaPlantilla, leer(o.original, o.huellaPlantilla));
+      if (mal) return `la hoja «${o.original}» no tiene la forma del Excel del servicio (${mal}): no se ha preparado el fichero`;
+    }
+    pendientes.push(o);
+  }
+
+  for (const f of prep.fijas) {
+    // Una hoja fija que no reconocemos (renombrada, reutilizada) se deja como está.
+    if (hojas.has(f.hoja) && D.contajeFingerprintMismatch(f.huella, leer(f.hoja, f.huella)) === null) c.aplicar(f.hoja, f.ops);
+  }
+  for (const n of prep.borrar) if (hojas.has(n)) c.borrar(n);
+  for (const o of pendientes) {
+    c.aplicar(o.original, o.ops);
+    c.renombrar(o.original, o.plantilla);
+    c.ocultar(o.plantilla);
+  }
+  return null;
 }
 
 /**

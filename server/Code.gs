@@ -11,7 +11,9 @@
  * y, para el generador con IA (decisión V-45), GEMINI_API_KEY — y opcionalmente GEMINI_MODEL, que
  * por defecto es "gemma-4-31b-it". Sin GEMINI_API_KEY todo lo demás sigue funcionando igual: la
  * única acción que deja de estar disponible es `generarCuadranteIA`, y lo dice nombrando la
- * propiedad que falta en vez de fallar con un error de Google.
+ * propiedad que falta en vez de fallar con un error de Google. Opcional también
+ * CONTAJE_SPREADSHEET_ID (decisión V-65): el id de la Hoja de Google del contaje del servicio, en la
+ * que la app escribe al publicar; sin ella publicar responde «omitido» y no toca ningún fichero.
  * Despliegue: "Ejecutar como: yo" + "Acceso: cualquiera" (ANYONE_ANONYMOUS). Ver README-deploy.md.
  */
 
@@ -67,6 +69,10 @@ function deps_() {
     // Puerto de generación (V-45). El núcleo del generador (prompt, parseo y ciclo de reintentos)
     // es puro y vive en el bundle; esto es solo el cable a Google.
     llm: llm_(),
+    // Puerto del Excel del servicio (decisión V-65): null sin CONTAJE_SPREADSHEET_ID, y entonces
+    // publicar funciona exactamente como antes. El fichero NO se abre aquí, sino en la primera
+    // llamada: `deps_()` se construye en cada petición y abrir otro fichero cuesta un viaje a Sheets.
+    contaje: contaje_(),
   };
 }
 
@@ -206,6 +212,135 @@ function llm_() {
       return { ok: true, texto: texto };
     },
   };
+}
+
+/**
+ * Adaptador del puerto `deps.contaje` (decisión V-65): el Excel del servicio convertido a Hoja de
+ * Google. TONTO a propósito, porque es lo único de esta función que no tiene tests: abre el
+ * fichero, lee rangos y ejecuta las operaciones genéricas (escribir, limpiar, unir…) que le manda
+ * el dominio (`contajeExcel.js`), que es quien decide QUÉ se escribe y dónde. Mismo contrato que el
+ * doble en memoria de `server/contaje-memoria.mjs`, que es el que usan los tests y el dev-server.
+ *
+ * `abrir()` devuelve un motivo en vez de lanzar si el fichero no se puede abrir (id equivocado, o
+ * la cuenta que ejecuta la app no tiene acceso): el router responde entonces «omitido» y la
+ * publicación sigue como siempre.
+ */
+function contaje_() {
+  var id = PROPS.getProperty("CONTAJE_SPREADSHEET_ID");
+  if (!id) return null;
+  var libro = null;
+  function abrirLibro() { if (!libro) libro = SpreadsheetApp.openById(id); return libro; }
+  // Una entrada por hoja y ejecución: el objeto hoja y el tamaño de su rejilla. Cada lectura a
+  // SpreadsheetApp en medio de escrituras obliga a aplicar lo pendiente (un viaje de ida y vuelta),
+  // y el volcado va con el script lock cogido: sin esta memoria, `getSheetByName`/`getMaxRows`/
+  // `getMaxColumns` en cada operación eran casi la mitad de las ~400 llamadas de un volcado.
+  var cache = {};
+  function entrada(n) {
+    if (cache[n]) return cache[n];
+    var sh = abrirLibro().getSheetByName(n);
+    if (!sh) throw new Error("no existe la hoja «" + n + "» en el fichero de contaje");
+    cache[n] = { sh: sh, filas: null, columnas: null };
+    return cache[n];
+  }
+  // Amplía la rejilla si no llega (el fichero convertido trae hasta AL y la plantilla llega a AN).
+  function rejilla(e, filas, columnas) {
+    if (e.filas === null) { e.filas = e.sh.getMaxRows(); e.columnas = e.sh.getMaxColumns(); }
+    if (filas > e.filas) { e.sh.insertRowsAfter(e.filas, filas - e.filas); e.filas = filas; }
+    if (columnas > e.columnas) { e.sh.insertColumnsAfter(e.columnas, columnas - e.columnas); e.columnas = columnas; }
+    return e;
+  }
+  return {
+    // Además de abrirlo, comprueba que se puede EDITAR: con acceso de lector `openById` funciona y el
+    // fallo llegaría a mitad del volcado. Fijar la zona horaria que ya tiene es una escritura que no
+    // cambia nada; sin permiso de edición lanza, y entonces el volcado se omite con el motivo.
+    abrir: function () {
+      try { abrirLibro(); } catch (e) { return "no se puede abrir la hoja de contaje (CONTAJE_SPREADSHEET_ID): " + e.message; }
+      try { libro.setSpreadsheetTimeZone(libro.getSpreadsheetTimeZone()); } catch (e) {
+        return "la cuenta que ejecuta la app no puede editar la hoja de contaje (compártela con ella como editora): " + e.message;
+      }
+      return null;
+    },
+    hojas: function () { return abrirLibro().getSheets().map(function (s) { return s.getName(); }); },
+    // Sin `filas`, hasta la última fila con contenido (como `getLastRow`); [] si no hay ninguna.
+    // `getDisplayValues` y no `getValues`: lo que se ve, como texto. «Obs.» la teclean personas, y un
+    // «15/7» que Sheets guarda como fecha llegaría como Date y el volcado lo reescribiría como
+    // «Wed Jul 15 2026 00:00:00 GMT+0200…». Para las huellas da igual: comparan texto.
+    leer: function (n, l) {
+      var e = entrada(n);
+      var filas = l.filas || (e.sh.getLastRow() - l.fila + 1);
+      if (filas <= 0) return [];
+      return rejilla(e, l.fila + filas - 1, l.columna + l.columnas - 1).sh.getRange(l.fila, l.columna, filas, l.columnas).getDisplayValues();
+    },
+    // La rejilla se amplía UNA vez por hoja, con lo que pide el plan entero, y no en cada operación.
+    aplicar: function (n, ops) {
+      var e = entrada(n), filas = 1, columnas = 1;
+      for (var i = 0; i < ops.length; i++) {
+        var op = ops[i];
+        if (op.fila) filas = Math.max(filas, op.fila + (op.valores ? op.valores.length : (op.filas || 1)) - 1);
+        if (op.columna) columnas = Math.max(columnas, op.columna + (op.valores ? op.valores[0].length : (op.columnas || 1)) - 1);
+      }
+      rejilla(e, filas, columnas);
+      for (var j = 0; j < ops.length; j++) aplicarContajeOp_(e, ops[j]);
+    },
+    // `copyTo` deja la copia al final, con el nombre «Copia de …» y oculta si el original lo estaba.
+    duplicar: function (origen, destino) {
+      var sh = entrada(origen).sh.copyTo(abrirLibro());
+      sh.setName(destino);
+      sh.showSheet();
+      cache[destino] = { sh: sh, filas: null, columnas: null };
+    },
+    renombrar: function (a, b) { var e = entrada(a); e.sh.setName(b); cache[b] = e; delete cache[a]; },
+    ocultar: function (n) { entrada(n).sh.hideSheet(); },
+    borrar: function (n) { var sh = abrirLibro().getSheetByName(n); if (sh) abrirLibro().deleteSheet(sh); delete cache[n]; },
+  };
+}
+
+// Una operación del plan de `contajeExcel.js` sobre una hoja (`e`: {sh, filas, columnas}, con la
+// rejilla ya ampliada por `aplicar`). Coordenadas numéricas (fila, columna 1-based); `a1` viaja
+// solo para los mensajes y los tests.
+function aplicarContajeOp_(e, op) {
+  var sh = e.sh, r;
+  switch (op.op) {
+    case "escribir":
+      r = sh.getRange(op.fila, op.columna, op.valores.length, op.valores[0].length);
+      r.setValues(op.valores);
+      if (op.fondos) r.setBackgrounds(op.fondos);
+      if (op.colores) r.setFontColors(op.colores);
+      if (op.negritas) r.setFontWeights(op.negritas);
+      return;
+    case "limpiar":
+      r = sh.getRange(op.fila, op.columna, op.filas || (e.filas - op.fila + 1), op.columnas);
+      r.clearContent();
+      r.setBackground(null);
+      r.setFontColor(null);
+      r.setFontWeight(null);
+      return;
+    case "unir":
+      sh.getRange(op.fila, op.columna, op.filas, op.columnas).merge();
+      return;
+    case "desunir":
+      sh.getRange(op.fila, op.columna, op.filas, op.columnas).breakApart();
+      return;
+    case "anchos":
+      sh.setColumnWidths(op.columna, op.columnas, op.px);
+      return;
+    case "ocultarColumnas":
+      sh.hideColumns(op.columna, op.columnas);
+      return;
+    case "congelar":
+      sh.setFrozenRows(op.filas);
+      sh.setFrozenColumns(op.columnas);
+      return;
+    case "proteger":
+      // Una sola protección de hoja: si ya hay una (la de un volcado anterior, o una que puso alguien
+      // a mano) se respeta tal cual. «Con advertencia» no impide editar a nadie, solo pregunta.
+      if (sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).length) return;
+      var p = sh.protect().setDescription(op.descripcion).setWarningOnly(true);
+      if (op.libres.length) p.setUnprotectedRanges(op.libres.map(function (a) { return sh.getRange(a); }));
+      return;
+    default:
+      throw new Error("operación desconocida en el plan del contaje: " + op.op);
+  }
 }
 
 // Adaptador de SpreadsheetApp que cumple el contrato `ss` de Server.makeStore.

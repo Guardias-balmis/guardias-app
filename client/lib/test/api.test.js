@@ -182,6 +182,19 @@ test("makeApi: acciones del ciclo de estados del cuadrante mandan anio/mes corre
   for (const a of acciones) { assert.equal(a.anio, 2027); assert.equal(a.mes, 7); }
 });
 
+test("makeApi: volcarContaje manda anio/mes y va SOLO, sin lote (es una escritura, V-65)", async () => {
+  const fetchImpl = fakeFetch(200, { ok: true, cursos: [] });
+  const api = makeApi("https://exec.example/x", { fetchImpl, getSession: () => "s" });
+  // Junto a una lectura loteable: si volcarContaje entrara en el lote, saldría UNA petición.
+  await Promise.all([api.volcarContaje(2027, 7), api.listResidentes()]);
+  const acciones = fetchImpl.calls.map((c) => JSON.parse(c.init.body));
+  const volcado = acciones.find((a) => a.action === "volcarContaje");
+  assert.ok(volcado, JSON.stringify(acciones.map((a) => a.action)));
+  assert.equal(volcado.anio, 2027);
+  assert.equal(volcado.mes, 7);
+  assert.equal(volcado.session, "s");
+});
+
 // ── Reintento de fallos de TRANSPORTE (2026-08-05) ──
 // El `/exec` de Apps Script responde 302 a un enlace de un solo uso; cuando el segundo salto falla
 // llega HTML de Google con 404. Reproducido en producción: dos `login` idénticos y seguidos dieron
@@ -212,7 +225,7 @@ test("callBackend hace como máximo 3 intentos y devuelve un error que no es un 
 test("callBackend NO reintenta una ESCRITURA: duplicaría una fila en una tabla append-only", async () => {
   for (const action of ["guardarAsignaciones", "crearBloqueo", "guardarPeriodos", "editarResidente",
                         "restaurarPeriodos", "publicarCuadrante", "marcarValidado", "solicitarAlta", "solicitarInvitado", "resolverSolicitudInvitado",
-                        "crearFestivos", "sortearEvento", "ejecutarSorteoResponsable", "registrarImaginaria"]) {
+                        "crearFestivos", "sortearEvento", "ejecutarSorteoResponsable", "registrarImaginaria", "volcarContaje"]) {
     const fetchImpl = fetchSecuencia({ status: 404 }, { status: 200, body: { ok: true } });
     const r = await callBackend("https://exec.example/x", { action }, { fetchImpl, esperar: sinEsperar });
     assert.equal(r.ok, false, `${action} no debe reintentarse`);
