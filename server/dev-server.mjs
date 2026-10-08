@@ -103,6 +103,7 @@ function deps() {
   const now = Math.floor(Date.now() / 1000);
   return {
     now, today: new Date().toISOString().slice(0, 10),
+    relojMs: () => Date.now(), // como Code.gs: el generador con IA no empieza un intento que no cabe en 6 min
     clientId: DEV_CLIENT_ID, sessionSecret: "dev-secret-no-usar-en-produccion", sessionTtl: 3600, crypto,
     store: makeStore({ ss, withLock: (fn) => fn(), newId: () => nodeCrypto.randomUUID() }),
     domain: DOMAIN,

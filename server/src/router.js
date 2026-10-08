@@ -1666,6 +1666,9 @@ function requireValidarPermiso(deps, session, accion = "validar el cuadrante") {
   return { ok: false, error: `por ahora solo los administradores pueden ${accion}` };
 }
 
+// 6 minutos de Apps Script menos 1 de reserva para el lock, la relectura y la escritura.
+const LIMITE_GENERACION_MS = (6 - 1) * 60 * 1000;
+
 /**
  * `generarCuadranteIA` (decisión V-45). El orden importa y es el del encargo: permiso → estado →
  * contexto → propuesta del modelo → VALIDACIÓN → escritura. La escritura es el último paso y solo
@@ -1890,7 +1893,13 @@ function handleGenerarIA(req, deps, session) {
     }
   }
 
-  const r = generateSchedule({ prompt, llm: deps.llm.generar, validar });
+  // El ciclo para antes de que Google mate la ejecución (6 min): muerta, no contesta JSON sino una
+  // página sin CORS, y ni el responsable sabe qué pasó ni queda fila en la bitácora (2026-10-08).
+  // Se cuenta desde que empezó la petición (`deps.now` se toma al construir `deps`), y se deja
+  // sitio para lo que viene después: hasta 30 s esperando el lock, releer el mes y escribir.
+  // Sin `relojMs` (un Code.gs anterior) no hay límite, como antes.
+  const reloj = typeof deps.relojMs === "function" ? deps.relojMs : undefined;
+  const r = generateSchedule({ prompt, llm: deps.llm.generar, validar, reloj, limiteMs: deps.now * 1000 + LIMITE_GENERACION_MS });
 
   if (!r.ok) {
     escribirBitacora(deps, session, req, modelo, r.intentos, r.resultado, r.violaciones, extras ? "extras" : modo);

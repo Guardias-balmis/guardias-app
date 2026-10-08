@@ -1029,18 +1029,34 @@ function pedir(llm, prompt) {
  *   - validar: `(asignaciones) => violaciones[]`. El juez real (validateMonth + validateThirdPost
  *     en el router). Solo `severidad === "error"` bloquea, igual que en `canValidate` (V-14).
  *   - maxIntentos: por defecto MAX_INTENTOS
+ *   - reloj, limiteMs (opcionales, juntos): `() => ms` y el instante en que el ciclo tiene que
+ *     haber acabado. Sin reloj no hay límite (lo de siempre).
  * @returns {{ok:true, asignaciones, violaciones, intentos:number, historial:object[]}
- *          |{ok:false, resultado:"REVISION_MANUAL"|"ERROR_MODELO", error:string,
+ *          |{ok:false, resultado:"REVISION_MANUAL"|"ERROR_MODELO"|"TIEMPO_AGOTADO", error:string,
  *             violaciones:object[], intentos:number, historial:object[]}}
  */
-function generateSchedule({ prompt, llm, validar, maxIntentos = MAX_INTENTOS }) {
+function generateSchedule({ prompt, llm, validar, maxIntentos = MAX_INTENTOS, reloj, limiteMs }) {
   const historial = [];
   let siguiente = prompt;
   let ultimasViolaciones = [];
   let ultimoErrorModelo = null;
   let huboPropuesta = false;
+  const medir = typeof reloj === "function" && Number.isFinite(limiteMs);
+  const inicio = medir ? reloj() : 0;
+  let masLargo = 0;
 
   for (let intento = 1; intento <= maxIntentos; intento++) {
+    // El límite de tiempo (2026-10-08, fallo en producción). Apps Script mata la ejecución a los 6
+    // minutos, y lo que llega entonces al navegador no es JSON sino una página de Google sin
+    // cabeceras CORS: el responsable ve «ha fallado» sin motivo y la bitácora no se escribe. Una
+    // llamada al modelo no se puede interrumpir, así que lo único que se puede hacer es no EMPEZAR
+    // la que no cabe. Se estima con el intento más largo hasta ahora, no con el último: los
+    // reintentos llevan la propuesta y sus violaciones y suelen tardar más, no menos.
+    if (medir && intento > 1) {
+      const ahora = reloj();
+      if (ahora + masLargo > limiteMs) return tiempoAgotado(intento - 1, Math.round((ahora - inicio) / 1000));
+    }
+    const empieza = medir ? reloj() : 0;
     const respuesta = pedir(llm, siguiente);
 
     if (!respuesta.ok) {
@@ -1049,6 +1065,7 @@ function generateSchedule({ prompt, llm, validar, maxIntentos = MAX_INTENTOS }) 
       // los intentos, es lo único que le dice a la persona qué ha pasado de verdad.
       ultimoErrorModelo = respuesta.error || "el modelo no respondió";
       historial.push({ intento, motivo: ultimoErrorModelo });
+      if (medir) masLargo = Math.max(masLargo, reloj() - empieza);
       continue;
     }
 
@@ -1057,6 +1074,7 @@ function generateSchedule({ prompt, llm, validar, maxIntentos = MAX_INTENTOS }) 
       ultimoErrorModelo = parsed.error;
       historial.push({ intento, motivo: parsed.error });
       siguiente = buildRetryPrompt({ prompt, problema: parsed.error });
+      if (medir) masLargo = Math.max(masLargo, reloj() - empieza);
       continue;
     }
 
@@ -1073,6 +1091,23 @@ function generateSchedule({ prompt, llm, validar, maxIntentos = MAX_INTENTOS }) 
     }
 
     siguiente = buildRetryPrompt({ prompt, propuesta: parsed.asignaciones, violaciones });
+    if (medir) masLargo = Math.max(masLargo, reloj() - empieza);
+  }
+
+  // Sin tiempo para otro intento. No es REVISION_MANUAL («el modelo no supo cuadrar el mes»): no
+  // ha podido intentarlo las veces acordadas, y volver a pedirlo es razonable.
+  function tiempoAgotado(intentos, segundos) {
+    const porQue = huboPropuesta
+      ? "sin un cuadrante que cumpla las reglas obligatorias"
+      : `sin una respuesta utilizable del modelo (${ultimoErrorModelo})`;
+    return {
+      ok: false,
+      resultado: "TIEMPO_AGOTADO",
+      error: `se acabó el tiempo: el servidor corta cada operación a los 6 minutos y ${intentos === 1 ? "el intento" : `los ${intentos} intentos`} del modelo ya han tardado ${segundos} s ${porQue}, así que no se ha pedido otro. No se ha guardado nada: vuelve a intentarlo (cada intento es distinto) o monta el mes a mano`,
+      violaciones: ultimasViolaciones,
+      intentos,
+      historial,
+    };
   }
 
   // Agotados los intentos. Se distingue «el modelo no supo cuadrar el mes» de «el modelo nunca
@@ -2771,6 +2806,9 @@ function requireValidarPermiso(deps, session, accion = "validar el cuadrante") {
   return { ok: false, error: `por ahora solo los administradores pueden ${accion}` };
 }
 
+// 6 minutos de Apps Script menos 1 de reserva para el lock, la relectura y la escritura.
+const LIMITE_GENERACION_MS = (6 - 1) * 60 * 1000;
+
 /**
  * `generarCuadranteIA` (decisión V-45). El orden importa y es el del encargo: permiso → estado →
  * contexto → propuesta del modelo → VALIDACIÓN → escritura. La escritura es el último paso y solo
@@ -2995,7 +3033,13 @@ function handleGenerarIA(req, deps, session) {
     }
   }
 
-  const r = generateSchedule({ prompt, llm: deps.llm.generar, validar });
+  // El ciclo para antes de que Google mate la ejecución (6 min): muerta, no contesta JSON sino una
+  // página sin CORS, y ni el responsable sabe qué pasó ni queda fila en la bitácora (2026-10-08).
+  // Se cuenta desde que empezó la petición (`deps.now` se toma al construir `deps`), y se deja
+  // sitio para lo que viene después: hasta 30 s esperando el lock, releer el mes y escribir.
+  // Sin `relojMs` (un Code.gs anterior) no hay límite, como antes.
+  const reloj = typeof deps.relojMs === "function" ? deps.relojMs : undefined;
+  const r = generateSchedule({ prompt, llm: deps.llm.generar, validar, reloj, limiteMs: deps.now * 1000 + LIMITE_GENERACION_MS });
 
   if (!r.ok) {
     escribirBitacora(deps, session, req, modelo, r.intentos, r.resultado, r.violaciones, extras ? "extras" : modo);

@@ -461,7 +461,7 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
               publicado no es saber que no lo está. */}
           {(!confirmando || inerte) && (
             <Btn onClick={() => setConfirmando(true)} disabled={generando || inerte} color={COLOR.blue} textColor="#fff">
-              {generando ? "Generando… (puede tardar un minuto)"
+              {generando ? "Generando… (puede tardar unos minutos)"
                 : vista.comprobando ? "Comprobando el estado del mes…"
                 : (fase === "extras" ? "Añadir quintas y tercer puestos" : "Generar las guardias obligatorias")}
             </Btn>
@@ -516,7 +516,8 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
         <div style={{ marginTop: 10, background: "#fff", borderLeft: `4px solid ${COLOR.red}`, borderRadius: 8, padding: "8px 10px" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: COLOR.red }}>
             {resultado.resultado === "FIJADAS_INVALIDAS" ? "⚠️ Las guardias que ya están en la rejilla incumplen reglas obligatorias"
-              : resultado.revisionManual ? "⚠️ Hay que montar este mes a mano" : "No se pudo generar"}
+              : resultado.revisionManual ? "⚠️ Hay que montar este mes a mano"
+              : resultado.transporte ? "⚠️ No llegó la respuesta del servidor" : "No se pudo generar"}
           </div>
           <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 4, lineHeight: 1.5 }}>{resultado.error}</div>
           {resultado.resultado === "FIJADAS_INVALIDAS" && (
@@ -529,6 +530,21 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
               No se ha guardado nada: el cuadrante que había sigue como estaba. Puedes montarlo en
               la pantalla de Cuadrante, o volver a intentarlo.
             </div>
+          )}
+          {/* Sin respuesta (2026-10-08): Google mata la ejecución a los 6 minutos y contesta con una
+              página sin CORS. Generar es una escritura, así que no se puede decir «no se guardó»:
+              si lo que se perdió fue solo la respuesta, el mes sí está guardado. */}
+          {resultado.transporte && (
+            <>
+              <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 4, lineHeight: 1.5 }}>
+                No se sabe si se ha guardado: si Google cortó la generación (lo hace a los 6 minutos),
+                no se guardó nada; si solo se perdió la respuesta, el cuadrante sí está guardado.
+                Míralo antes de volver a generar.
+              </div>
+              <button onClick={verCuadrante} style={{ ...S.smallBtn, background: "#fff", color: COLOR.blue, marginTop: 8 }}>
+                Ver el cuadrante →
+              </button>
+            </>
           )}
         </div>
       )}

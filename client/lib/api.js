@@ -58,9 +58,10 @@ const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Llama al backend. Nunca lanza: cualquier fallo (red, HTTP, JSON) se devuelve como
- * `{ok:false, error}` para que la UI lo trate igual que un rechazo de negocio del servidor. Lo que
- * devuelve es SIEMPRE un objeto: nunca `undefined`, `null`, un array ni el
- * cuerpo crudo de una página de error.
+ * `{ok:false, error, transporte:true}` para que la UI lo trate igual que un rechazo de negocio del
+ * servidor. Lo que devuelve es SIEMPRE un objeto: nunca `undefined`, `null`, un array ni el
+ * cuerpo crudo de una página de error. `transporte` distingue «no llegó respuesta» de «el servidor
+ * dijo que no», que en una ESCRITURA no es lo mismo: sin respuesta no se sabe si se guardó.
  *
  * Reintenta los fallos de TRANSPORTE de las acciones idempotentes, y esto no es defensa
  * especulativa: el `/exec` de Apps Script no contesta directo, responde **302 a un enlace temporal
@@ -87,19 +88,22 @@ export async function callBackend(execUrl, payload, { fetchImpl = fetch, esperar
         // Solo un objeto es una respuesta del router (`{ok, …}`). Un `null` o un array llegaba tal
         // cual a la pantalla, que leía `r.ok` de él y reventaba fuera de toda red.
         if (datos && typeof datos === "object" && !Array.isArray(datos)) return datos;
-        ultimo = { ok: false, error: "el servidor de Google devolvió una respuesta que no es de esta app" };
+        ultimo = { ok: false, transporte: true, error: "el servidor de Google devolvió una respuesta que no es de esta app" };
         continue;
       }
       // Se dice que es de Google y no un número pelado: el residente no puede hacer nada con un
       // «HTTP 404», y este no es culpa suya ni de sus datos.
-      ultimo = { ok: false, error: `el servidor de Google no respondió bien (HTTP ${res.status})` };
+      ultimo = { ok: false, transporte: true, error: `el servidor de Google no respondió bien (HTTP ${res.status})` };
     } catch (e) {
       // Una página HTML en vez de JSON: es lo que devuelve Apps Script cuando falla él (cuota,
       // ejecución abortada) aunque el estado sea 200. Es un fallo de transporte como el 404 —se
       // reintenta igual—, y el texto del parser («Unexpected token '<'…») no le dice nada a nadie.
+      // Y una excepción de red («Failed to fetch») es también lo que se ve cuando Google mata la
+      // ejecución (6 min) y contesta con una página sin cabeceras CORS: se dice en español y se
+      // conserva el texto original, que es el que sirve para diagnosticar.
       ultimo = e instanceof SyntaxError
-        ? { ok: false, error: "el servidor de Google devolvió una página de error en vez de datos" }
-        : { ok: false, error: String((e && e.message) || e) };
+        ? { ok: false, transporte: true, error: "el servidor de Google devolvió una página de error en vez de datos" }
+        : { ok: false, transporte: true, error: `no llegó respuesta del servidor de Google: sin conexión, o la petición se cortó por el camino (${String((e && e.message) || e)})` };
     }
   }
   return ultimo;

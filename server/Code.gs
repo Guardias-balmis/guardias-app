@@ -40,6 +40,10 @@ function json_(obj) {
 function deps_() {
   return {
     now: Math.floor(Date.now() / 1000),
+    // Reloj en milisegundos para que el generador con IA no empiece un intento que no le cabe
+    // antes de que Google mate la ejecución a los 6 minutos (2026-10-08). `now` se toma aquí, al
+    // empezar la petición, y es desde donde se cuenta.
+    relojMs: function () { return Date.now(); },
     today: Utilities.formatDate(new Date(), "Europe/Madrid", "yyyy-MM-dd"),
     clientId: PROPS.getProperty("OAUTH_CLIENT_ID"),
     sessionSecret: sessionSecret_(),

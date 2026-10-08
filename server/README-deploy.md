@@ -22,6 +22,8 @@ mano, cada vez que algo llega de verdad a producción.
 
 `Code.gs` cambió el 2026-10-06 (añade `sendMail` con `MailApp`, V-53), el 2026-10-07 (versión 18: `flush()` antes de soltar el lock, PR #57) y el 2026-10-08 (versión 21: `doGet` con `handleGet`, PR #64); antes seguía en la versión del 2026-09-05 (V-47).
 
+**Pendiente de desplegar (V-64, límite de tiempo del generador con IA, 2026-10-08):** `server-lib.gs` **y `Code.gs`** (`deps_()` gana `relojMs`); `domain.gs` no cambia (el de la versión 21 vale). Sin el `Code.gs` nuevo el servidor funciona igual que antes, sin límite. Con los dos, una generación que no cabe en los 6 minutos de Apps Script contesta «se acabó el tiempo…» con `TIEMPO_AGOTADO` en la hoja `generaciones`, en vez de un error de CORS en el navegador. Para comprobarlo: generar un mes; si tarda, el resultado tiene que ser un mensaje en la tarjeta, nunca «No llegó la respuesta del servidor»; y en *Ejecuciones* del editor ninguna ejecución de `doPost` debe acabar en «Se ha superado el tiempo máximo de ejecución».
+
 Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
 `/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el
 cliente está hablando con un backend que ya no es este (DR-4).
