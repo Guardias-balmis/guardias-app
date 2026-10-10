@@ -86,7 +86,7 @@ function contenidoDeRoot() {
 }
 
 test("la pantalla de arranque está dentro de #root y tiene el texto que el cargador cambia", () => {
-  // Dentro, porque es lo que ReactDOM.render sustituye; fuera se quedaría debajo de la app.
+  // Dentro, porque es lo que sustituye el primer render de React; fuera se quedaría debajo de la app.
   assert.match(contenidoDeRoot(), /id="gapp-arranque-texto"/);
   assert.match(loader, /getElementById\("gapp-arranque-texto"\)/);
 });

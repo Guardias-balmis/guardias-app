@@ -97,13 +97,17 @@ function FilaRejilla({
       <td style={{ ...S.td, whiteSpace: "nowrap", fontWeight: propia ? 800 : 600, color: COLOR.blueDark, background: propia ? COLOR.bluePale : "transparent" }}
         title={propia ? `${nombre} (tú)` : titulo}>{propia ? "★ " : ""}{nombre.split(" ")[0]}</td>
       <td style={{ ...S.td, textAlign: "center", fontWeight: 700, color: COLOR.blue }}>{total}</td>
-      {dias.map((fecha) => {
+      {/* `key={i}` y no `key={fecha}` (2026-10-10): al cambiar de mes las fechas son otras, y con la
+          fecha por clave React desmontaba y montaba TODAS las celdas de la rejilla (15 filas × 30
+          días) en vez de actualizarlas. La celda no guarda estado propio —lo que cambia es la fecha
+          que se le pasa—, así que la posición es una clave igual de estable y mucho más barata. */}
+      {dias.map((fecha, i) => {
         const codigo = porFecha[fecha] || "";
         const origen = (origenPorFecha && origenPorFecha[fecha]) || "";
         const editando = origenEditFecha === fecha;
         const prensable = onPressStart && pulsable(codigo);
         return (
-          <td key={fecha} onClick={() => onCelda(fecha, codigo)}
+          <td key={i} onClick={() => onCelda(fecha, codigo)}
             title={onPressStart && pulsable(codigo) ? "Clic: poner o quitar la guardia · mantén pulsado: cedida/comprada, 3.º puesto, vacaciones, rotación, congreso, baja" : undefined}
             onMouseDown={prensable ? () => onPressStart(fecha, codigo) : undefined}
             onMouseUp={prensable ? onPressEnd : undefined}
@@ -521,6 +525,31 @@ function CalendarScreen() {
     // idas y vueltas a Apps Script encadenadas, dos o tres segundos cada una, antes de ver nada.
     // `listEventos` entra en la misma tanda por eso mismo: es independiente de las otras tres y
     // encadenarla sumaría un viaje más a un botón que ya hace unos cuantos.
+    //
+    // Los cierres de equidad y el tercer puesto (INV-3, INV-8) arrancan EN ESTA MISMA TANDA
+    // (2026-10-10): no dependen de los bloqueos —solo de `residentes`, del mes y de lo que hay en
+    // pantalla—, pero esperaban a que acabara todo lo anterior para ni siquiera empezar, así que
+    // «Validar» eran cinco viajes en serie (~15 s con 3 s por viaje) en vez de tres. Sus rangos
+    // siguen saliendo de las funciones del dominio que llaman por dentro (`yearCloseHistoryStart`,
+    // `quarterCloseWindow`, `thirdPostHistoryStart`…); aquí solo cambia CUÁNDO se piden. Lo de
+    // pantalla se toma ahora, del mismo render que antes: no cambia nada que se espere por el camino.
+    // Las 8 lecturas que salen a la vez caben en un lote (LOTE_MAX de api.js = 12).
+    //
+    // Sin las celdas vaciadas en esta sesión (`codigo: ""`): son un borrado pendiente, no una
+    // asignación, y como asignación vacía hacían saltar en falso el INV-2 de quien no tenía
+    // ninguna otra celda ese mes.
+    const asignacionesDelMes = residentes.flatMap((r) => asignacionesDe(r.id)
+      .filter((a) => a.codigo)
+      .map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo })));
+    const pCierres = Promise.all([
+      closeViolations({ api: app.api, mes, anio, residentes, asignacionesDelMes }),
+      thirdPostViolations({ api: app.api, mes, anio, residentes, asignacionesDelMes }),
+    ]);
+    // `closeViolations` puede LANZAR (una fecha ilegible en `residentes` con la que hace aritmética).
+    // Si una salida temprana de abajo (bloqueos o histórico que no cargan) deja esta promesa sin
+    // esperar, su rechazo sería un «unhandled rejection» suelto. Este `catch` solo la da por
+    // atendida: el `await pCierres` de más abajo sigue lanzando, y `validar` lo recoge como siempre.
+    pCierres.catch(() => {});
     const [rBloqueos, rFestivos, rExcepciones, rEventos] = await Promise.all([
       app.api.listBloqueos(anio, mes),
       app.api.listFestivosRango(addDays(monthWindow.start, -1), addDays(monthWindow.end, 1)),
@@ -573,13 +602,6 @@ function CalendarScreen() {
     if (!rEventos.ok) showToast("No se pudieron cargar los eventos: " + rEventos.error + " — INV-10 no se ha comprobado", "err");
     const eventos = rEventos.ok ? rEventos.eventos : [];
 
-    // Sin las celdas vaciadas en esta sesión (`codigo: ""`): son un borrado pendiente, no una
-    // asignación, y como asignación vacía hacían saltar en falso el INV-2 de quien no tenía
-    // ninguna otra celda ese mes.
-    const asignacionesDelMes = residentes.flatMap((r) => asignacionesDe(r.id)
-      .filter((a) => a.codigo)
-      .map((a) => ({ residenteId: r.id, fecha: a.fecha, codigo: a.codigo })));
-
     // Los dos días de fuera del mes (ya cargados al abrir el mes) entran en el histórico: INV-15
     // juzga el PAR, y su comentario da por hecho que el invocador aporta ese contexto — pero
     // `historicas` solo se llenaba cuando había una rotación cercana, así que en el caso normal el
@@ -598,10 +620,8 @@ function CalendarScreen() {
     // El tercer puesto (INV-8) va en paralelo: es otra comprobación con su propio rango, y
     // desde V-18 ninguna de sus cuatro reglas bloquea — pero las cuatro son avisos de equidad,
     // así que cuentan para la confirmación explícita igual que los cierres.
-    const [rCierres, r3P] = await Promise.all([
-      closeViolations({ api: app.api, mes, anio, residentes, asignacionesDelMes }),
-      thirdPostViolations({ api: app.api, mes, anio, residentes, asignacionesDelMes }),
-    ]);
+    // Ya están en marcha desde la primera tanda (arriba): aquí solo se recogen.
+    const [rCierres, r3P] = await pCierres;
     if (!rCierres.ok) {
       setCierresError(rCierres.error);
       showToast("No se pudieron comprobar los cierres de equidad: " + rCierres.error, "err");
@@ -837,8 +857,8 @@ function CalendarScreen() {
                 <th style={{ ...S.th, background: COLOR.gray, color: COLOR.blueDark }}>Nivel</th>
                 <th style={{ ...S.th, background: COLOR.gray, color: COLOR.blueDark }}>Nombre</th>
                 <th style={{ ...S.th, background: COLOR.gray, color: COLOR.blueDark }}>G</th>
-                {dias.map((fecha) => {
-                  const wknd = isWeekend(fecha);
+                {dias.map((fecha, i) => {
+                  const wknd = isWeekend(fecha); // `key={i}`: ver la nota de FilaRejilla
                   // Festivo destaca sobre fin de semana (decisión del autor, 2026-08-18): un
                   // sábado festivo es más raro de ver a simple vista que uno normal, y las dos
                   // marcas juntas confundirían más que ayudarían.
@@ -846,7 +866,7 @@ function CalendarScreen() {
                   const bg = festivo ? COLOR.amberLight : wknd ? COLOR.greenLight : COLOR.gray;
                   const fg = festivo ? COLOR.amber : wknd ? COLOR.green : COLOR.cellText;
                   return (
-                    <th key={fecha} style={{ ...S.th, background: bg, color: fg }}>
+                    <th key={i} style={{ ...S.th, background: bg, color: fg }}>
                       <div style={{ fontSize: 15 }}>{Number(fecha.slice(8, 10))}</div>
                       <div style={{ fontSize: 11, fontWeight: 400 }}>{weekday(fecha)}</div>
                     </th>
