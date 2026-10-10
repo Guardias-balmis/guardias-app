@@ -8,6 +8,10 @@ import { puedeMoverCiclo, vistaGenerador, esAccesoDesarrollador, puedeValidarCua
 import { violationText } from "./client/lib/violations.js";
 import { ESTADO_INICIAL, recibirSolicitudes, vistaSolicitudes } from "./client/lib/solicitudes.js";
 import { anioARevisar, recordarRevision } from "./client/lib/revision-festivos.js";
+import {
+  BLOQUEO_MS, cronometro, horaDe, fotoDelMes, registrarLanzamiento, lanzamientoDe,
+  olvidarLanzamiento, comprobarTrasFallo,
+} from "./client/lib/generacion.js";
 
 const { useState, useEffect, useRef } = React;
 const { Card, QuickCard, Btn, Aviso } = window.UI;
@@ -29,12 +33,19 @@ function nivelDe(residente) {
  * diciembre para el año siguiente, y todo el año si nadie lo hace. Una consulta al abrir Inicio,
  * sin sondeo: no cambia hasta que alguien actúa en Datos del servicio.
  */
-function RevisionFestivos({ api, setTab }) {
+function RevisionFestivos({ api, setTab, adelantar }) {
   const anio = anioARevisar(todayISO());
   const [estado, setEstado] = useState(null);
   useEffect(() => {
     let vivo = true;
-    (async () => { const r = await api.estadoRevisionFestivos(anio); if (vivo) setEstado(r); })();
+    // La consulta ya salió con el resto de Inicio (`adelantar`): aquí solo se recoge su respuesta.
+    (async () => {
+      let r = await adelantar(`festivos:${anio}`, () => api.estadoRevisionFestivos(anio));
+      // Si la adelantada falló (el primer lote entero, por ejemplo) se repite UNA vez: sin esto el
+      // recordatorio anual no volvía ni con el «Reintentar» del equipo, que antes sí lo recuperaba.
+      if (r && r.ok === false) r = await api.estadoRevisionFestivos(anio);
+      if (vivo) setEstado(r);
+    })();
     return () => { vivo = false; };
   }, [anio]);
   if (!recordarRevision(estado)) return null;
@@ -62,18 +73,25 @@ function RevisionFestivos({ api, setTab }) {
  * El estado lo decide `client/lib/solicitudes.js` (2026-10-07): antes era `setLista(r.solicitudes)`
  * a secas, y un `ok:true` sin la lista dejaba `undefined` y tumbaba la tarjeta en el `.length`.
  */
-function SolicitudesAcceso({ api, showToast }) {
+function SolicitudesAcceso({ api, showToast, adelantar }) {
   const [estado, setEstado] = useState(ESTADO_INICIAL);
   const [busy, setBusy] = useState(false);
   const [recargando, setRecargando] = useState(false);
   const montada = React.useRef(true);
   const enCurso = React.useRef(false);
+  const primera = React.useRef(true);
   const cargar = async () => {
     // Una consulta a la vez: con ~3 s por petición y un sondeo corto, las rezagadas se apilaban.
     if (enCurso.current) return;
     enCurso.current = true;
     try {
-      const r = await api.listSolicitudesInvitado();
+      // La primera ya salió con el resto de Inicio (`adelantar`); las del sondeo y de «Reintentar»
+      // son consultas nuevas, porque lo que se quiere de ellas es lo que hay AHORA.
+      const usarAdelantada = primera.current;
+      primera.current = false;
+      let r = await (usarAdelantada ? adelantar("solicitudes", () => api.listSolicitudesInvitado()) : api.listSolicitudesInvitado());
+      // Una adelantada fallida no se enseña: se repite una vez, como en la tarjeta de festivos.
+      if (usarAdelantada && r && r.ok === false) r = await api.listSolicitudesInvitado();
       if (montada.current) setEstado((previo) => recibirSolicitudes(previo, r));
     } finally { enCurso.current = false; }
   };
@@ -293,8 +311,12 @@ function Imaginaria({ api, residentes, showToast, puedoRegistrar }) {
 // avisos (y con un segundo clic en «reemplazar» se reescribía). Se recuerda por mes.
 // La clave lleva también a la PERSONA: la memoria es del módulo y sobrevive a cerrar sesión, y sin
 // ella quien entrara después en la misma pestaña veía de entrada el resultado del anterior.
-const generacionEnCurso = new Map(); // "usuario|anio-mes" → promesa del resultado
+const generacionEnCurso = new Map(); // "usuario|anio-mes" → { promesa del resultado, inicio (ms) }
 const ultimoResultado = new Map();   // "usuario|anio-mes" → último resultado enseñado
+
+// El `localStorage`, o null si el navegador lo niega: el recuerdo de la generación lanzada
+// (client/lib/generacion.js) es una ayuda y nunca puede impedir generar.
+const almacenLocal = () => { try { return window.localStorage; } catch { return null; } };
 
 // `vista` es lo que decide `permisos.js:vistaGenerador` (qué fases se ofrecen, por qué no, si se
 // está comprobando): aquí solo se pinta. La tarjeta solo se monta cuando `vista` no es null.
@@ -303,6 +325,26 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
   const [confirmando, setConfirmando] = useState(false);
   const [generando, setGenerando] = useState(generacionEnCurso.has(claveMes));
   const [resultado, setResultado] = useState(ultimoResultado.get(claveMes) || null);
+  const etiquetaMes = nombreDeMes(anio, mes);
+  // Generar tarda de uno a cinco minutos (V-64) y el servidor sigue aunque se cierre la app. Para
+  // que eso se vea: un cronómetro en el botón, el apunte en `localStorage` de «generación lanzada a
+  // las HH:MM» —sobrevive a recargar la pestaña— y, mientras pueda seguir ejecutándose (`BLOQUEO_MS`,
+  // 6 min y medio), el botón de ESE mes no se vuelve a ofrecer: relanzarla escribía el mes otra vez, con otra
+  // propuesta, encima de la primera. Todo lo que no es pintar está en client/lib/generacion.js.
+  const [ahora, setAhora] = useState(() => Date.now());
+  // `lanzada` es el apunte del mes SEA CUAL SEA su edad: el bloqueo del botón dura `BLOQUEO_MS`, pero
+  // un apunte sin resolver (se recargó con la generación en marcha y nunca llegó a saberse) sigue
+  // pudiéndose comprobar después, hasta que se purgue solo a las 24 h.
+  const [lanzada, setLanzada] = useState(() => lanzamientoDe(almacenLocal(), anio, mes));
+  const claveActual = useRef(claveMes); // el mes en pantalla ahora, para descartar respuestas de otro
+  claveActual.current = claveMes;
+  const [comprobando, setComprobando] = useState(false);
+  const [verdictoManual, setVerdictoManual] = useState(null); // lo que dijo «Comprobar ahora»
+  const bloqueada = Boolean(lanzada) && ahora >= lanzada.t && ahora - lanzada.t < BLOQUEO_MS;
+  // Desde cuándo cuenta el cronómetro: el clic de esta sesión, o lo apuntado si la tarjeta se montó
+  // de nuevo (cambio de pestaña) con la generación ya en marcha.
+  const enCursoAhora = generacionEnCurso.get(claveMes);
+  const desde = enCursoAhora ? enCursoAhora.inicio : (lanzada ? lanzada.t : ahora);
   // Decisión V-47: «completar» respeta las guardias que ya están en la rejilla (las que cada
   // residente apuntó de antemano) y rellena el resto; «reemplazar» es lo de antes, el mes entero
   // de nuevo. Completar es el defecto porque es el gesto que no destruye nada — pero SOLO si el
@@ -332,12 +374,31 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
   useEffect(() => {
     let vivo = true;
     setConfirmando(false);
+    setLanzada(lanzamientoDe(almacenLocal(), anio, mes));
+    setComprobando(false);
+    setVerdictoManual(null);
     const enCurso = generacionEnCurso.get(claveMes);
     setGenerando(Boolean(enCurso));
     setResultado(ultimoResultado.get(claveMes) || null);
-    if (enCurso) enCurso.then((r) => { if (vivo) { setGenerando(false); setResultado(r); } });
+    if (enCurso) enCurso.promesa.then((r) => {
+      if (!vivo) return;
+      setGenerando(false);
+      setResultado(r);
+      // El apunte lo olvidó la instancia que lanzó (puede estar desmontada): se relee, o esta se
+      // quedaría con «lanzada» y el botón bloqueado después de que el servidor ya contestó.
+      setLanzada(lanzamientoDe(almacenLocal(), anio, mes));
+    });
     return () => { vivo = false; };
   }, [claveMes]);
+
+  // El reloj de la tarjeta solo corre mientras hay algo que contar: generando, o con una generación
+  // lanzada cuya ventana aún no ha pasado (al acabar, `bloqueada` pasa a false y el botón vuelve).
+  useEffect(() => {
+    if (!generando && !bloqueada) return undefined;
+    setAhora(Date.now());
+    const id = setInterval(() => setAhora(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [generando, bloqueada]);
 
   const mover = (delta) => {
     const m = mes + delta;
@@ -350,10 +411,37 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
     setConfirmando(false);
     setGenerando(true);
     setResultado(null);
+    setVerdictoManual(null);
     ultimoResultado.delete(claveMes);
+    const inicio = Date.now();
+    setAhora(inicio);
+    const almacen = almacenLocal();
+    const modoEnviado = fase === "extras" ? "completar" : modo;
     // `api.*` nunca lanza (callBackend normaliza a {ok:false}): la entrada del mapa siempre se quita.
-    const promesa = api.generarCuadranteIA(anio, mes, fase === "extras" ? "completar" : modo, fase);
-    generacionEnCurso.set(claveMes, promesa);
+    const promesa = (async () => {
+      // La foto de las guardias del mes ANTES de lanzar (una lectura, ~3 s): es lo único con lo que,
+      // si la respuesta no llega, se puede saber después si el cuadrante cambió. Si no se puede leer,
+      // se genera igual y simplemente no habrá «sí se guardó».
+      const antes = await fotoDelMes(api, anio, mes);
+      const lanzamiento = { t: Date.now(), antes, fase, modo: modoEnviado };
+      registrarLanzamiento(almacen, { anio, mes, ahora: lanzamiento.t, antes, fase, modo: modoEnviado });
+      setLanzada(lanzamiento);
+      const r = await api.generarCuadranteIA(anio, mes, modoEnviado, fase);
+      if (!r.transporte) {
+        // El servidor contestó: la ejecución terminó, haya ido bien o mal, y no queda nada que esperar.
+        olvidarLanzamiento(almacen, anio, mes);
+        setLanzada(null);
+        return r;
+      }
+      // Sin respuesta no se sabe si se guardó (V-64): se relee el mes y se dice solo lo concluyente.
+      const reconciliacion = await comprobarTrasFallo({ api, anio, mes, lanzamiento, etiquetaMes });
+      if (reconciliacion.conclusion === "guardado" || reconciliacion.conclusion === "sin-cambios") {
+        olvidarLanzamiento(almacen, anio, mes);
+        setLanzada(null);
+      }
+      return { ...r, lanzamiento, reconciliacion };
+    })();
+    generacionEnCurso.set(claveMes, { promesa, inicio });
     const r = await promesa;
     generacionEnCurso.delete(claveMes);
     ultimoResultado.set(claveMes, r);
@@ -361,7 +449,32 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
     setResultado(r);
   };
 
+  // «Comprobar ahora»: vuelve a mirar el mes y repite el veredicto (client/lib/generacion.js). Sirve
+  // tanto tras un fallo de transporte como tras recargar con una generación apuntada.
+  const comprobarAhora = async () => {
+    const lanzamiento = (resultado && resultado.lanzamiento) || lanzamientoDe(almacenLocal(), anio, mes);
+    if (!lanzamiento || comprobando) return;
+    setComprobando(true);
+    const miClave = claveMes;
+    const v = await comprobarTrasFallo({ api, anio, mes, lanzamiento, etiquetaMes });
+    // Si ya se está viendo otro mes (las flechas siguen activas mientras se comprueba), ese veredicto
+    // no se enseña ni desbloquea el botón del otro. Tampoco se olvida el apunte: quien vuelva a este
+    // mes no ha visto el veredicto, y sin apunte ya no podría volver a pedirlo.
+    if (claveActual.current !== miClave) return;
+    setComprobando(false);
+    if (v.conclusion === "guardado" || v.conclusion === "sin-cambios") {
+      olvidarLanzamiento(almacenLocal(), anio, mes);
+      setLanzada(null);
+    }
+    setVerdictoManual({ ...v, a: Date.now() });
+  };
+
   const avisos = (resultado && resultado.violaciones) || [];
+  // Lo que se puede afirmar de una generación cuya respuesta no llegó: lo último que dijo «Comprobar
+  // ahora» o, si no, lo que se comprobó solo al fallar (client/lib/generacion.js).
+  const veredicto = verdictoManual || (resultado && resultado.reconciliacion) || null;
+  const guardadoSinRespuesta = Boolean(resultado && resultado.transporte && veredicto && veredicto.conclusion === "guardado");
+  const puedeComprobar = Boolean(comprobando || (resultado && resultado.lanzamiento) || lanzada) && (!veredicto || veredicto.conclusion === "en-curso" || veredicto.conclusion === "indeterminado");
 
   // Por qué no se ofrece nada en este mes, dicho en la propia tarjeta: antes la tarjeta
   // desaparecía, y con ella las flechas para salir del mes.
@@ -460,11 +573,20 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
           {/* Mientras se comprueba, el botón sigue en su sitio pero inerte: no saber si el mes está
               publicado no es saber que no lo está. */}
           {(!confirmando || inerte) && (
-            <Btn onClick={() => setConfirmando(true)} disabled={generando || inerte} color={COLOR.blue} textColor="#fff">
-              {generando ? "Generando… (puede tardar unos minutos)"
+            <Btn onClick={() => setConfirmando(true)} disabled={generando || inerte || bloqueada} color={COLOR.blue} textColor="#fff">
+              {generando ? `Generando… ${cronometro(ahora - desde)} (hasta 5 min)`
+                : bloqueada ? `Generación lanzada a las ${horaDe(lanzada.t)}: espera`
                 : vista.comprobando ? "Comprobando el estado del mes…"
                 : (fase === "extras" ? "Añadir quintas y tercer puestos" : "Generar las guardias obligatorias")}
             </Btn>
+          )}
+          {generando && (
+            <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 8, lineHeight: 1.5 }}>
+              La IA hace hasta 3 intentos (cada uno tarda uno o dos minutos, a veces más) y se detiene
+              a los 5 minutos como máximo. <b>Cerrar la app no detiene la generación</b>: sigue en el
+              servidor y guarda el resultado al terminar. Si la cierras, vuelve a mirar el cuadrante
+              pasados unos minutos.
+            </div>
           )}
 
           {confirmando && !inerte && (
@@ -483,6 +605,9 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
                   rejilla se conservan.</>
                 )}
               </div>
+              <div style={{ fontSize: 12, color: COLOR.grayDark, marginBottom: 8, lineHeight: 1.5 }}>
+                Puede tardar hasta 5 minutos (hasta 3 intentos). Cerrar la app no detiene la generación.
+              </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={generar} style={{ ...S.smallBtn, background: COLOR.blue, color: "#fff" }}>Sí, generar</button>
                 <button onClick={() => setConfirmando(false)} style={{ ...S.smallBtn, background: "#fff", color: COLOR.blueDark }}>Cancelar</button>
@@ -490,6 +615,51 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
             </div>
           )}
         </>
+      )}
+
+      {/* Generación apuntada (sobrevive a recargar) y sin respuesta que enseñar en esta sesión: la
+          ventana (`BLOQUEO_MS`) en que el servidor aún puede estar escribiendo, y después, mientras
+          no se sepa si se guardó, para poder comprobarlo. También enseña lo que dijo «Comprobar
+          ahora» cuando ya no hay apunte: un «sí se guardó» que desaparece al soltar el apunte no le
+          serviría a nadie. */}
+      {(lanzada || verdictoManual) && !generando && !(resultado && resultado.transporte) && (
+        <div style={{ marginTop: 10 }}>
+          <Aviso {...(verdictoManual && verdictoManual.conclusion === "guardado" ? { color: COLOR.green, bg: COLOR.greenLight } : {})}>
+            <b>{bloqueada ? `⏳ Generación de ${etiquetaMes} lanzada a las ${horaDe(lanzada.t)}`
+              : lanzada ? `Generación de ${etiquetaMes} lanzada a las ${horaDe(lanzada.t)}` : `Generación de ${etiquetaMes}`}</b>
+            {bloqueada && (
+              <div style={{ marginTop: 4, lineHeight: 1.5 }}>
+                Puede seguir en curso en el servidor (Google la corta a los 6 minutos). Hasta las {horaDe(lanzada.t + BLOQUEO_MS)} no
+                se vuelve a ofrecer, para no lanzar dos a la vez. Vuelve a mirar el cuadrante pasado un rato.
+              </div>
+            )}
+            {lanzada && !bloqueada && !verdictoManual && (
+              <div style={{ marginTop: 4, lineHeight: 1.5 }}>
+                La ejecución ya terminó (Google la corta a los 6 minutos), pero no se llegó a saber si se guardó.
+                Pulsa «Comprobar ahora» o míralo en el cuadrante antes de volver a generar.
+              </div>
+            )}
+            {verdictoManual && <div style={{ marginTop: 6, lineHeight: 1.5 }}>{verdictoManual.texto} (comprobado a las {horaDe(verdictoManual.a)})</div>}
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              {lanzada && (
+                <button onClick={comprobarAhora} disabled={comprobando} style={{ ...S.smallBtn, background: COLOR.blue, color: "#fff" }}>
+                  {comprobando ? "Comprobando…" : "🔄 Comprobar ahora"}
+                </button>
+              )}
+              <button onClick={verCuadrante} style={{ ...S.smallBtn, background: "#fff", color: COLOR.blue }}>Ver el cuadrante →</button>
+            </div>
+          </Aviso>
+        </div>
+      )}
+
+      {guardadoSinRespuesta && (
+        <div style={{ marginTop: 10, background: COLOR.greenLight, borderLeft: `4px solid ${COLOR.greenMid}`, borderRadius: 8, padding: "8px 10px" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: COLOR.blueDark }}>✅ El cuadrante de {etiquetaMes} sí se guardó</div>
+          <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 4, lineHeight: 1.5 }}>{veredicto.texto}</div>
+          <button onClick={verCuadrante} style={{ ...S.smallBtn, background: "#fff", color: COLOR.blue, marginTop: 8 }}>
+            Ver el cuadrante →
+          </button>
+        </div>
       )}
 
       {resultado && resultado.ok && (
@@ -512,7 +682,7 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
         </div>
       )}
 
-      {resultado && !resultado.ok && (
+      {resultado && !resultado.ok && !guardadoSinRespuesta && (
         <div style={{ marginTop: 10, background: "#fff", borderLeft: `4px solid ${COLOR.red}`, borderRadius: 8, padding: "8px 10px" }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: COLOR.red }}>
             {resultado.resultado === "FIJADAS_INVALIDAS" ? "⚠️ Las guardias que ya están en la rejilla incumplen reglas obligatorias"
@@ -532,18 +702,29 @@ function GeneradorIA({ api, usuario, residentes, mes, anio, setMes, setAnio, vis
             </div>
           )}
           {/* Sin respuesta (2026-10-08): Google mata la ejecución a los 6 minutos y contesta con una
-              página sin CORS. Generar es una escritura, así que no se puede decir «no se guardó»:
-              si lo que se perdió fue solo la respuesta, el mes sí está guardado. */}
+              página sin CORS. Generar es una escritura, así que no se puede decir «no se guardó»
+              mientras la ejecución pueda seguir viva: si lo que se perdió fue solo la respuesta, el
+              mes sí está guardado. Qué se afirma, y cuándo, lo decide client/lib/generacion.js
+              (2026-10-10): relee el mes y compara con la foto de antes de lanzar. */}
           {resultado.transporte && (
             <>
               <div style={{ fontSize: 12, color: COLOR.grayDark, marginTop: 4, lineHeight: 1.5 }}>
-                No se sabe si se ha guardado: si Google cortó la generación (lo hace a los 6 minutos),
-                no se guardó nada; si solo se perdió la respuesta, el cuadrante sí está guardado.
-                Míralo antes de volver a generar.
+                {veredicto ? <>{veredicto.texto}{verdictoManual ? ` (comprobado a las ${horaDe(verdictoManual.a)})` : ""}</> : (
+                  <>No se sabe si se ha guardado: si Google cortó la generación (lo hace a los 6 minutos),
+                  no se guardó nada; si solo se perdió la respuesta, el cuadrante sí está guardado.
+                  Míralo antes de volver a generar.</>
+                )}
               </div>
-              <button onClick={verCuadrante} style={{ ...S.smallBtn, background: "#fff", color: COLOR.blue, marginTop: 8 }}>
-                Ver el cuadrante →
-              </button>
+              <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                {puedeComprobar && (
+                  <button onClick={comprobarAhora} disabled={comprobando} style={{ ...S.smallBtn, background: COLOR.blue, color: "#fff" }}>
+                    {comprobando ? "Comprobando…" : "🔄 Comprobar ahora"}
+                  </button>
+                )}
+                <button onClick={verCuadrante} style={{ ...S.smallBtn, background: "#fff", color: COLOR.blue }}>
+                  Ver el cuadrante →
+                </button>
+              </div>
             </>
           )}
         </div>
@@ -595,6 +776,32 @@ function HomeScreen() {
   // Desplegable de "Equipo" (a pedido del autor, 2026-08-19): un nivel a la vez, no los cuatro a
   // la vez — clic de nuevo sobre el mismo nivel lo cierra.
   const [nivelAbierto, setNivelAbierto] = useState(null);
+  // Lecturas que Inicio pide al abrirse aunque quien las muestra aún no exista (2026-10-10). Las
+  // tarjetas de festivos y de solicitudes solo se montan cuando se sabe que hay permiso, y eso
+  // depende de `myResidente` y de `estadoCuadrante` (`sinResponsable`): su consulta salía DESPUÉS, en
+  // una segunda ronda de ~3 s tras la del resto de Inicio —y desde V-63 también para cualquier R3/R4
+  // sin Responsable—. Se piden en la misma tanda que `estadoResponsable`, `estadoCuadrante` y
+  // `listResidentes` (S-9: una sola petición al /exec), y a quien no tiene permiso el servidor se lo
+  // deniega dentro del lote (`requireValidarPermiso`), sin un viaje de más. La tarjeta, cuando existe,
+  // recoge la respuesta con `adelantar`. Es «pide si nadie lo ha pedido ya» y no un `useEffect` de
+  // cada tarjeta, porque una tarjeta puede montarse en el primer render (equipo ya cargado) y su
+  // efecto corre antes que el de esta pantalla: así da igual quién llegue primero, sale una sola.
+  // Un invitado no ve ninguna de las dos (y el servidor le cerraría la puerta de todos modos).
+  const adelantadas = useRef({});
+  // Una respuesta fallida no se queda guardada: la siguiente que la pida sale de nuevo.
+  const adelantar = (clave, pedir) => {
+    if (!adelantadas.current[clave]) {
+      const p = pedir();
+      adelantadas.current[clave] = p;
+      p.then((r) => { if (r && r.ok === false && adelantadas.current[clave] === p) delete adelantadas.current[clave]; });
+    }
+    return adelantadas.current[clave];
+  };
+  useEffect(() => {
+    if (app.esInvitado) return;
+    adelantar(`festivos:${anioARevisar(todayISO())}`, () => app.api.estadoRevisionFestivos(anioARevisar(todayISO())));
+    adelantar("solicitudes", () => app.api.listSolicitudesInvitado());
+  }, []);
   // Del año de HOY, no del mes seleccionado (`mes`/`anio` navegan la rejilla, no el mandato): no
   // depende de esos dos, para no repetir esta consulta a cada click de ◀/▶.
   //
@@ -781,9 +988,9 @@ function HomeScreen() {
           reintentar={() => setReintento((n) => n + 1)} />
       )}
 
-      {puedoRegistrarImaginaria && !app.esInvitado && <RevisionFestivos api={app.api} setTab={setTab} />}
+      {puedoRegistrarImaginaria && !app.esInvitado && <RevisionFestivos api={app.api} setTab={setTab} adelantar={adelantar} />}
 
-      {puedoAprobarInvitados && !app.esInvitado && <SolicitudesAcceso api={app.api} showToast={app.showToast} />}
+      {puedoAprobarInvitados && !app.esInvitado && <SolicitudesAcceso api={app.api} showToast={app.showToast} adelantar={adelantar} />}
 
       {!app.esInvitado && <Imaginaria api={app.api} residentes={residentes} showToast={app.showToast} puedoRegistrar={puedoRegistrarImaginaria} />}
 

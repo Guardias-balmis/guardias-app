@@ -217,6 +217,15 @@ function PrefsScreen() {
   // con dos flechas seguidas, los bloqueos de agosto podían pintarse sobre septiembre.
   const mesEnPantallaRef = useRef(`${anio}-${mes}`);
   mesEnPantallaRef.current = `${anio}-${mes}`;
+  // Las ausencias ajenas se piden EN LA PRIMERA TANDA a quien podría llegar a verlas (2026-10-10).
+  // Si es o no Mayor sin Responsable lo dice `estadoCuadrante`, que viaja en esa misma tanda; esperar
+  // a saberlo para pedir `listBloqueos` era una segunda ida y vuelta en serie (~3 s) y la lista salía
+  // tarde. Lo que se pide de más (quien al final no tiene permiso) se descarta sin pintarse: el
+  // servidor ya abre `listBloqueos` a cualquier sesión que no sea de invitado, y qué se ENSEÑA lo
+  // sigue decidiendo `puedoRegistrarAjenas`. `permisoConocido` evita pedirlas en cada cambio de mes a
+  // quien ya se sabe que no las ve.
+  const ajenasAdelantadas = useRef(null); // { pedido, t, promesa }
+  const permisoConocido = useRef(false);
   const cargarBloqueos = async () => {
     const pedido = `${anio}-${mes}`;
     const r = await api.misBloqueos(anio, mes);
@@ -225,10 +234,16 @@ function PrefsScreen() {
   // Las ajenas solo las ve quien puede registrarlas: si no, esta pantalla pasaría de ser "mis
   // preferencias" a un tablón de las ausencias de todo el equipo. Y sin esta lista, quien
   // registra la baja de otro no vería nunca el resultado ni podría corregir una equivocación.
-  const cargarAjenas = async () => {
+  const cargarAjenas = async (alAbrir = false) => {
     if (!puedoRegistrarAjenas) { setAjenas([]); return; }
     const pedido = `${anio}-${mes}`;
-    const r = await api.listBloqueos(anio, mes);
+    // La adelantada solo la gasta la carga al abrir el mes (`alAbrir`), una vez, y si es de este mes
+    // y reciente. Tras registrar o cancelar una ausencia lo que se quiere es la lista de ahora, no
+    // la que salió antes de escribir: esas llamadas la descartan.
+    const adelantada = ajenasAdelantadas.current;
+    ajenasAdelantadas.current = null;
+    const vale = alAbrir && adelantada && adelantada.pedido === pedido && Date.now() - adelantada.t < 30000;
+    const r = await (vale ? adelantada.promesa : api.listBloqueos(anio, mes));
     if (r.ok && mesEnPantallaRef.current === pedido) setAjenas(r.bloqueos.filter((b) => b.residenteId !== myResidente?.id));
   };
 
@@ -244,9 +259,17 @@ function PrefsScreen() {
       setCarga(cargaEmpezada(anio, mes));
       setPrefs(prefsPorDefecto());
       setBloqueos([]);
+      // Mientras no se sepa si hay Responsable se supone que no (`sinResponsable: true`): es la
+      // hipótesis que más gente deja pedir, y es la que cubre a cualquier Mayor.
+      const podriaVerAjenas = puedeMoverCiclo({
+        isResponsable: app.isResponsable, grupo: app.grupo, sinResponsable: permisoConocido.current ? sinResponsable : true,
+        accesoDesarrollador: esAccesoDesarrollador(myResidente?.email),
+      });
+      ajenasAdelantadas.current = podriaVerAjenas ? { pedido: `${anio}-${mes}`, t: Date.now(), promesa: api.listBloqueos(anio, mes) } : null;
       const [rPrefs, , rEstado] = await Promise.all([api.misPreferencias(anio, mes), cargarBloqueos(), api.estadoCuadrante(anio, mes)]);
       if (cancelled) return;
       // Un fallo aquí solo esconde el selector de ausencia ajena: no se asume el permiso.
+      permisoConocido.current = rEstado.ok;
       setSinResponsable(rEstado.ok ? rEstado.sinResponsable === true : false);
       const terminada = cargaTerminada(anio, mes, rPrefs);
       setCarga(terminada);
@@ -261,7 +284,7 @@ function PrefsScreen() {
   // del mes anterior se vacían AQUÍ y no en el efecto de carga: si las vaciara aquel sin que este se
   // repitiera (quien entra antes de que llegue su residente), la lista se quedaba vacía. Y depende
   // de `myResidente?.id` porque sin él el filtro de «ajenas» no sabe cuáles son las propias.
-  useEffect(() => { setAjenas([]); cargarAjenas(); }, [anio, mes, puedoRegistrarAjenas, myResidente?.id]);
+  useEffect(() => { setAjenas([]); cargarAjenas(true); }, [anio, mes, puedoRegistrarAjenas, myResidente?.id]);
 
   if (!myResidente) {
     return (
