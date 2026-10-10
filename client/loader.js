@@ -76,7 +76,7 @@
 //     ellas solo hace la carga más lenta, pero el test lo dice.
 //
 //  8. **Hay algo en pantalla desde el primer instante.** `index.html` trae dentro de `#root` una
-//     pantalla de arranque (cabecera y anillo de «Cargando…») que `ReactDOM.render` sustituye. Antes
+//     pantalla de arranque (cabecera y anillo de «Cargando…») que el primer render de React sustituye. Antes
 //     `#root` estaba vacío: tras cada despliegue eran segundos de pantalla en blanco que parecían un
 //     cuelgue. Si hace falta transpilar, la pantalla lo dice (`avisarPreparando`), porque esa espera
 //     solo ocurre la primera vez tras cada versión nueva y quien la sufre no tiene forma de saberlo.
@@ -348,7 +348,17 @@ async function main() {
   if (!window.Screens || !window.Screens.App) {
     return fallo("Error: App no se registró tras cargar todos los ficheros.");
   }
-  ReactDOM.render(React.createElement(window.Screens.App), document.getElementById("root"));
+  // Raíz concurrente de React 18 (2026-10-10): con `ReactDOM.render` —la raíz «heredada»— un cambio
+  // de mes del Cuadrante hacía 13 commits seguidos (cada `setState` posterior a un `await` se
+  // aplicaba por separado); con `createRoot` se agrupan en 3 (batching automático). Medido con la
+  // CPU a 4x: del dato que llega al último commit, de ~145 ms a ~33 ms (spec.md §7). Quien escriba
+  // una pantalla no puede contar con que un `setState` tras un `await` se aplique al instante. La
+  // caída a `render` es para un React sin `createRoot` (el `<script>` de index.html fija 18.2.0, que
+  // sí lo trae): sin ella, cambiar la versión de React por error dejaría la app sin arrancar.
+  const raiz = document.getElementById("root");
+  const app = React.createElement(window.Screens.App);
+  if (typeof ReactDOM.createRoot === "function") ReactDOM.createRoot(raiz).render(app);
+  else ReactDOM.render(app, raiz);
 }
 
 main();
