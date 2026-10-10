@@ -19,6 +19,7 @@ import { violationText } from "./client/lib/violations.js";
 import { chainedNeighbour } from "./client/lib/rest.js";
 import { partirBloqueosLegibles, violacionesBloqueoIlegible } from "./client/lib/bloqueos.js";
 import { avisarAlSalir } from "./client/lib/aviso-salida.js";
+import { avisoContaje, avisoDespublicado } from "./client/lib/contaje.js";
 
 const { useState, useEffect, useRef } = React;
 const { Card, Btn, Aviso } = window.UI;
@@ -205,6 +206,14 @@ function CalendarScreen() {
   const [tercerPuestoError, setTercerPuestoError] = useState(null);
   const [estado, setEstado] = useState("BORRADOR");
   const [cambiandoEstado, setCambiandoEstado] = useState(false);
+  // Resultado del último volcado al Excel del servicio (V-65): {tipo, texto} o null. Se queda en
+  // pantalla (no es un toast) porque un fallo pide una acción —«Volcar al contaje»— y un «omitido»
+  // por falta de permiso es justo lo que nadie vería si desapareciera a los tres segundos.
+  const [contajeAviso, setContajeAviso] = useState(null);
+  const [volcando, setVolcando] = useState(false);
+  // Lo dice `estadoCuadrante`: sin la propiedad CONTAJE_SPREADSHEET_ID (o con un servidor anterior
+  // a V-65, que no manda el campo) el botón no se enseña, porque no tendría dónde escribir.
+  const [contajeConfigurado, setContajeConfigurado] = useState(false);
   // Si estadoCuadrante falla (red, sesión) NO se asume BORRADOR: un mes realmente PUBLICADO
   // parecería editable por error. Mientras estadoError esté activo se bloquea la edición igual
   // que si estuviera PUBLICADO, y se muestra un aviso con reintento (mismo patrón que el resto).
@@ -222,7 +231,7 @@ function CalendarScreen() {
   // celda antes de saber qué había. Ahora se dice que está cargando y no se puede editar hasta
   // que llegan los datos.
   const [cargando, setCargando] = useState(true);
-  const busy = guardando || validando || cambiandoEstado;
+  const busy = guardando || validando || cambiandoEstado || volcando;
   // Mismo criterio que el servidor: el Responsable, o —si el mandato está sin decidir— cualquier
   // Mayor. Aquí solo decide qué botones se ven; quien manda es requireCicloPermiso en el router.
   const soyMayor = grupo === "MAYOR";
@@ -286,7 +295,7 @@ function CalendarScreen() {
       setFestivos(rFestivos.ok ? rFestivos.festivos : []);
       setFestivosError(!rFestivos.ok);
       setEstadoError(!rEstado.ok);
-      if (rEstado.ok) { setEstado(rEstado.estado); setSinResponsable(rEstado.sinResponsable === true); if (app.actualizaResponsable) app.actualizaResponsable(rEstado.responsableId); } // en error se conserva el último estado conocido; estadoError ya bloquea la edición
+      if (rEstado.ok) { setEstado(rEstado.estado); setSinResponsable(rEstado.sinResponsable === true); setContajeConfigurado(rEstado.contajeConfigurado === true); if (app.actualizaResponsable) app.actualizaResponsable(rEstado.responsableId); } // en error se conserva el último estado conocido; estadoError ya bloquea la edición
       else showToast("Error comprobando el estado del cuadrante: " + rEstado.error, "err");
       setPendientes({});
       undoStackRef.current = [];
@@ -295,6 +304,7 @@ function CalendarScreen() {
       setEquidadPorConfirmar(null);
       setCierresError(null);
       setAvisoDescanso(null); // el aviso es de una celda concreta: al cambiar de mes deja de aplicar
+      setContajeAviso(null);
       app.setLoading(false);
       setCargando(false);
     })();
@@ -667,15 +677,36 @@ function CalendarScreen() {
     setCambiandoEstado(true);
     const r = await app.api.publicarCuadrante(anio, mes);
     setCambiandoEstado(false);
-    if (r.ok) { setEstado(r.estado); showToast("Cuadrante PUBLICADO ✓"); }
+    if (r.ok) {
+      setEstado(r.estado);
+      showToast("Cuadrante PUBLICADO ✓");
+      // El volcado al Excel nunca bloquea la publicación (V-65): lo que haya pasado se cuenta aparte.
+      setContajeAviso(avisoContaje(r.contajeExcel, { trasPublicar: true }));
+    }
     else showToast("Error publicando: " + r.error, "err");
+  };
+
+  // «Volcar al contaje» (V-65): reintenta un volcado que falló o recoge cambios que no pasan por
+  // publicar (fechas de un residente, respuestas de tercer puesto). No cambia el estado del mes.
+  const volcarContaje = async () => {
+    setVolcando(true);
+    const r = await app.api.volcarContaje(anio, mes);
+    setVolcando(false);
+    const aviso = avisoContaje(r);
+    setContajeAviso(aviso);
+    if (aviso && aviso.tipo === "ok") showToast("Contaje volcado al Excel ✓");
   };
 
   const despublicar = async () => {
     setCambiandoEstado(true);
     const r = await app.api.despublicarCuadrante(anio, mes);
     setCambiandoEstado(false);
-    if (r.ok) { setEstado(r.estado); showToast("Cuadrante despublicado — vuelve a VALIDADO"); }
+    if (r.ok) {
+      setEstado(r.estado);
+      showToast("Cuadrante despublicado — vuelve a VALIDADO");
+      // Sustituye al aviso del último volcado: remitía a «Volcar al contaje», que ya no se ve.
+      setContajeAviso(avisoDespublicado(contajeConfigurado));
+    }
     else showToast("Error despublicando: " + r.error, "err");
   };
 
@@ -773,7 +804,23 @@ function CalendarScreen() {
               {cambiandoEstado ? "Despublicando…" : "↩️ Despublicar"}
             </button>
           )}
+          {/* Solo en un mes publicado: el Excel cuenta solo meses PUBLICADOS (V-65), y es desde
+              uno de ellos desde donde se repara un volcado que falló al publicar. */}
+          {puedeMoverCiclo && contajeConfigurado && estado === "PUBLICADO" && (
+            <button style={pillBtn(COLOR.turquoise)} onClick={volcarContaje} disabled={busy} title="Vuelve a escribir el contaje del curso en el Excel del servicio">
+              {volcando ? "Volcando…" : "📊 Volcar al contaje"}
+            </button>
+          )}
         </div>
+        {contajeAviso && (
+          <div role="status" style={{
+            fontSize: 12, borderRadius: 6, padding: "6px 10px", marginBottom: 10, lineHeight: 1.5,
+            color: contajeAviso.tipo === "error" ? COLOR.red : contajeAviso.tipo === "ok" ? COLOR.green : COLOR.grayDarker,
+            background: contajeAviso.tipo === "error" ? COLOR.redLight : contajeAviso.tipo === "ok" ? COLOR.greenLight : COLOR.gray,
+          }}>
+            📊 {contajeAviso.texto}
+          </div>
+        )}
         {cargando && (
           <div role="status" style={{ fontSize: 13, color: COLOR.blueDark, background: COLOR.bluePale, borderRadius: 6, padding: "8px 10px", marginBottom: 10, lineHeight: 1.5 }}>
             ⏳ Cargando el cuadrante de {nombreMesDe(anio, mes)}… puede tardar unos segundos si hace rato

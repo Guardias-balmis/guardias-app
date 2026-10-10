@@ -4,7 +4,7 @@
 // (c) equidad ≤1 entre voluntarios al cierre del año de residencia; (d) prioridad mochila.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs } from "../thirdpost.js";
+import { validateThirdPost, thirdPostHistoryStart, thirdPostVolunteersFromPrefs, thirdPostVolunteersInCourse } from "../thirdpost.js";
 
 const R = (id, fechaInicio, fechaFin) => ({ id, fechaInicio, fechaFin });
 const p3 = (residenteId, fecha) => ({ residenteId, fecha, codigo: "3P" });
@@ -401,4 +401,18 @@ test("INV-8e: un aviso por cada 3P del mes mientras el hueco siga abierto", () =
   const asig = mesCubierto(["2026-09-20"]).concat([g("r3-ana", "2026-09-20")]);
   const v = validateThirdPost(ctx8([...asig, p3("r2-carla", "2026-09-12"), p3("r2-carla", "2026-09-13")]));
   assert.equal(cobertura8(v).length, 2);
+});
+
+// ── Voluntario «en el curso» (hoja Tercer Puesto del contaje, V-65) ──
+// El Excel del servicio pregunta «¿es voluntario?» una vez por curso (jun-may), no por mes ni por
+// año de residencia: basta un «sí» en algún mes del curso.
+test("thirdPostVolunteersInCourse: un «sí» en cualquier mes del curso cuenta; uno de otro curso no", () => {
+  const prefs = [
+    pref("ana", 2026, 6, false), pref("ana", 2027, 5, true), // mayo de 2027 sigue siendo el curso 2026
+    pref("bea", 2026, 5, true),                              // mayo de 2026 es el curso 2025
+    pref("bea", 2026, 9, false),
+  ];
+  assert.deepEqual([...thirdPostVolunteersInCourse(prefs, 2026)].sort(), ["ana"]);
+  assert.deepEqual([...thirdPostVolunteersInCourse(prefs, 2025)].sort(), ["bea"]);
+  assert.equal(thirdPostVolunteersInCourse(undefined, 2026).size, 0);
 });

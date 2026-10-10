@@ -14,7 +14,7 @@
 // voluntario»). Entran en `EQUITY_INVARIANTS` de cuadrante.js, así que validar con avisos de
 // INV-8 sigue exigiendo la confirmación explícita de la UI.
 
-import { weekday, compareISO, addDays, addYears, datesOfMonth, toISO, daysInMonth } from "./calendar.js";
+import { weekday, compareISO, addDays, addYears, datesOfMonth, toISO, daysInMonth, academicYearOf } from "./calendar.js";
 import { levelOn, periodsOfResident, periodOn, closingPeriodOn } from "./residents.js";
 
 const aviso = (detalle, extra = {}) => ({ invariante: "INV-8", severidad: "aviso", detalle, ...extra });
@@ -64,6 +64,23 @@ export function thirdPostVolunteersFromPrefs(preferencias, residentes, mes, anio
     if (dijoSi) voluntarios.push({ residenteId: id, desde: anioResidencia.start });
   }
   return { periodos, voluntarios, delMes };
+}
+
+/**
+ * Quién dijo «sí» al tercer puesto en ALGÚN mes del curso académico `curso` (jun-may), como un
+ * `Set` de ids. Lo usa la hoja «Tercer Puesto» del contaje del servicio (decisión V-65), que
+ * pregunta «¿es voluntario?» una vez por curso. NO sirve para INV-8: el ciclo L-D y la equidad
+ * entre voluntarios se cuentan por año de residencia (C-4), que empieza en el aniversario y no en
+ * junio — para eso está `thirdPostVolunteersFromPrefs`. Vive aquí, y no en quien escribe la hoja,
+ * para que «quién es voluntario» se lea de las preferencias en un solo módulo.
+ *
+ * @param {{residenteId:string, anio:number, mes:number, tercerPuesto?:boolean}[]} preferencias
+ * @param {number} curso  año en que empieza el curso (jun-2026 … may-2027 → 2026)
+ * @returns {Set<string>}
+ */
+export function thirdPostVolunteersInCourse(preferencias, curso) {
+  const delCurso = (p) => academicYearOf(toISO(p.anio, p.mes, 1)) === curso;
+  return new Set((preferencias || []).filter((p) => p.tercerPuesto === true && delCurso(p)).map((p) => p.residenteId));
 }
 
 const inMonth = (fecha, mes, anio) => Number(fecha.slice(0, 4)) === anio && Number(fecha.slice(5, 7)) === mes;

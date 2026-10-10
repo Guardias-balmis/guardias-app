@@ -24,6 +24,23 @@ mano, cada vez que algo llega de verdad a producción.
 
 **Pendiente de desplegar (V-64, límite de tiempo del generador con IA, 2026-10-08):** `server-lib.gs` **y `Code.gs`** (`deps_()` gana `relojMs`); `domain.gs` no cambia (el de la versión 21 vale). Sin el `Code.gs` nuevo el servidor funciona igual que antes, sin límite. Con los dos, una generación que no cabe en los 6 minutos de Apps Script contesta «se acabó el tiempo…» con `TIEMPO_AGOTADO` en la hoja `generaciones`, en vez de un error de CORS en el navegador. Para comprobarlo: generar un mes; si tarda, el resultado tiene que ser un mensaje en la tarjeta, nunca «No llegó la respuesta del servidor»; y en *Ejecuciones* del editor ninguna ejecución de `doPost` debe acabar en «Se ha superado el tiempo máximo de ejecución».
 
+**Pendiente de desplegar (V-65, contaje oficial en el Excel del servicio, 2026-10-08):** los tres, `domain.gs` + `server-lib.gs` + `Code.gs` (`deps_()` gana el puerto `contaje`, con su adaptador `contaje_()`/`aplicarContajeOp_`). Sin la propiedad `CONTAJE_SPREADSHEET_ID` todo funciona exactamente igual que antes: publicar no abre ningún otro fichero y no se ve el botón «Volcar al contaje». Pasos, en este orden:
+
+1. **Convertir el Excel**, con `docenciarxalicante@gmail.com`: Drive → abrir el `.xlsx` del contaje → *Archivo → Guardar como Hojas de cálculo de Google*. La Hoja nueva es de quien pulsa el botón, así que tiene que ser esa cuenta. Copia su id (de la URL) y renombra el `.xlsx` como «(original, no usar)»: es la copia de seguridad, porque la app reorganiza la Hoja la primera vez que escribe.
+2. **Permiso:** la cuenta que despliega el script («Ejecutar como: yo») tiene que poder **editar** la Hoja. Si no es `docenciarxalicante@gmail.com`, compártesela como editora. Sin ese permiso la app publica igual y el aviso dice «omitido» con el motivo.
+3. **Pegar los tres `.gs`**, ejecutar `doGet` en el editor (debe acabar en «Ejecución completada»; autoriza si lo pide) y *Editar implementación → Nueva versión* en la misma implementación.
+4. **Propiedad:** *Configuración del proyecto → Propiedades del script* → `CONTAJE_SPREADSHEET_ID` = el id del paso 1.
+5. **Comprobar:** en un mes PUBLICADO, quien tiene el permiso del ciclo pulsa «📊 Volcar al contaje» (o publica un mes). Tiene que salir en verde «Contaje escrito en el Excel del servicio: 2026-27 (…)». En la Hoja: las cuatro originales pasan a «Plantilla · …» ocultas, desaparece `__DATA__`, aparecen «Cuadrante Mensual 2026-27», «Resumen Anual 2026-27», «Contaje Trimestral 2026-27» y «Tercer Puesto 2026-27» protegidas «con advertencia», Instrucciones explica el flujo de la app e Imaginaria remite a la app. Volcar otra vez no debe cambiar nada salvo la fecha del sello. Y, porque el doble de los tests no puede emularlo, mira expresamente:
+   - **a la primera:** el primer volcado tiene que salir verde sin reintentos. Si sale rojo con algo de «merged cell» o «freeze», copia el mensaje y avisa: la preparación deshace las combinadas que cruzan las dos primeras columnas antes de fijarlas, y eso es lo primero que habría que revisar.
+   - **combinadas y fijación:** en «Cuadrante Mensual 2026-27» quedan fijadas las filas 1-7 y las columnas A-B; en «Contaje Trimestral 2026-27», las filas 1-4 y A-B, con cada trimestre combinado sobre sus siete columnas.
+   - **copia de la plantilla:** en «Tercer Puesto 2026-27» la columna M (id) está oculta y la pestaña sale protegida «con advertencia» con «Obs.» (L) libre.
+   - **tiempo:** el aviso verde lleva entre paréntesis lo que ha tardado el volcado (va con el script lock cogido y las demás escrituras lo esperan 30 s). Anota el del primero (con la preparación) y el de publicar junio, que vuelca dos cursos; si alguno pasa de ~15 s, avisa.
+   - **sin permiso** (solo si la cuenta del script no es la propietaria de la Hoja): déjala un momento como lectora y vuelca: publicar tiene que seguir funcionando y el aviso decir «no se ha escrito… no puede editar la hoja». Si en vez de eso sale en rojo «no se pudo escribir», Sheets aplaza la sonda de `abrir()` y el fallo llega dentro del volcado: la publicación no se ve afectada, pero avisa para cambiar la sonda.
+   - Por último, quita la propiedad un momento y comprueba que publicar sigue funcionando sin aviso, y vuelve a ponerla.
+6. **Compartir** la Hoja con tutoría como lectora.
+
+Si el aviso dice que una hoja «no tiene la forma esperada», alguien ha movido cabeceras de esa pestaña: la app no escribe nada hasta que se dejan como estaban (o se borra esa pestaña del curso, y la app la vuelve a crear desde su plantilla). Lo que no se ha podido probar sin una cuenta de Google es el adaptador contra Sheets de verdad (copiar hojas ocultas, combinadas, protecciones y la comprobación de permiso de edición); los tests y el dev-server usan el doble de `server/contaje-memoria.mjs`, que sí lanza como Sheets al fijar o combinar partiendo una combinada. Despublicar un mes no escribe en la Hoja, pero el contaje se recalcula entero con los meses PUBLICADOS de cada volcado: mientras un mes siga despublicado, el siguiente volcado de su curso (publicar otro mes, o «Volcar al contaje») lo quita del contaje, y vuelve al republicarlo. La pantalla lo avisa al despublicar.
+
 Antes de anotar una fila nueva, comprueba que la implementación es la MISMA de siempre (la URL
 `/exec` no ha cambiado): si cambió, se creó una implementación nueva en vez de una versión, y el
 cliente está hablando con un backend que ya no es este (DR-4).
@@ -75,6 +92,11 @@ cliente está hablando con un backend que ya no es este (DR-4).
    exacto de la propiedad que falta, sin gastar ningún intento. **Si algún día Google retira ese modelo**, la respuesta será un HTTP 404
    con el mensaje de Google: se arregla poniendo un id vigente en `GEMINI_MODEL`, sin tocar código
    ni volver a desplegar — que es justo para lo que existe esa propiedad.
+
+   **Contaje oficial en el Excel del servicio (decisión V-65), opcional:** `CONTAJE_SPREADSHEET_ID`
+   = el id de la Hoja de Google del contaje (el Excel del Drive convertido; cómo, en el bloque
+   «Pendiente de desplegar (V-65…)» de arriba). Sin ella, publicar no abre ningún otro fichero y
+   responde «omitido»; con ella, cada publicación vuelca el contaje del curso a esa Hoja.
 
 5. **Desplegar** → *Nueva implementación* → tipo *Aplicación web*:
    - **Ejecutar como: yo** (la cuenta del servicio).

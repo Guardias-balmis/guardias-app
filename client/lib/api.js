@@ -297,5 +297,11 @@ export function makeApi(execUrl, { fetchImpl = fetch, getSession, onSessionInval
     marcarValidado: (anio, mes) => authed("marcarValidado", { anio, mes }),
     publicarCuadrante: (anio, mes) => authed("publicarCuadrante", { anio, mes }),
     despublicarCuadrante: (anio, mes) => authed("despublicarCuadrante", { anio, mes }),
+    /**
+     * Vuelca el contaje al Excel del servicio (decisión V-65) sin publicar: repara un volcado que
+     * falló o recoge cambios que no pasan por publicar. Escritura: fuera de REINTENTABLES y de
+     * LOTEABLES. Sin la propiedad en el servidor responde `{ok:false, omitido:true, error}`.
+     */
+    volcarContaje: (anio, mes) => authed("volcarContaje", { anio, mes }),
   };
 }
